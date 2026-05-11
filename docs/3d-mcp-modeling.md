@@ -218,12 +218,58 @@ A aprovação por etapa é granular: você pode aprovar `blender.create_mesh_pri
 `blender.apply_boolean`, por exemplo. O executor pula etapas rejeitadas e marca o plano como
 `running` se ainda houver etapas pendentes ou `failed` se alguma etapa explodir.
 
+## Transporte MCP: in-process vs stdio
+
+O `LocalMCPClient` agora suporta dois modos de transporte, selecionados pela
+variável `TRUTHS_FORGE_MCP_TRANSPORT`:
+
+- **`in_process`** (default): o cliente chama `BlenderAdapter.execute` diretamente
+  no mesmo processo. Zero overhead, fácil de depurar, cobertura padrão dos testes.
+- **`stdio`**: o backend faz `subprocess.Popen` do servidor MCP correspondente
+  (`python -m app.modeling.mcp_servers.blender_server` / `fusion_server`) e fala
+  JSON-RPC 2.0 line-delimited pelos pipes do processo. Cada servidor é
+  persistente (uma instância por software, reutilizada ao longo da vida do
+  backend) e tem cleanup via `atexit`.
+
+Trocar de modo não exige mudança no `ModelingService` — só na variável de
+ambiente. Os adapters internos (`BlenderAdapter`, lógica do `project_store`)
+ficam em um único lugar; o servidor stdio apenas reusa o adapter por dentro do
+loop JSON-RPC.
+
+### Por que existir o transporte stdio
+
+Hoje o ganho prático é isolamento e portabilidade futura:
+
+1. Permite mover o `blender_mcp` para a máquina do Blender (laptop de modelagem)
+   quando isso fizer sentido, mantendo o backend rodando em outro host.
+2. Limita o blast radius — uma falha no adapter Blender não derruba o backend
+   inteiro, só o subprocess.
+3. Encaixa-se no protocolo MCP da Anthropic se quisermos plugar um SDK oficial
+   mais tarde sem refactor de domínio.
+
+`project_store.*` permanece in-process mesmo em modo stdio: ele vive dentro do
+backend e não precisa atravessar a borda.
+
+### Wire format
+
+JSON-RPC 2.0 com framing por linha — cada mensagem é um JSON terminado em `\n`.
+Métodos expostos:
+
+- `tools/list` → `{"server": "<name>", "tools": [...]}`
+- `tools/call` → recebe `{"name": "...", "arguments": {...}, "_meta": {...}}` e
+  devolve o output do adapter (ou envelope `error_code` quando algo falha).
+- `status` → status do adapter por trás do servidor.
+- `shutdown` → encerra o loop graciosamente.
+
+Erros seguem códigos JSON-RPC: `PARSE_ERROR`, `METHOD_NOT_FOUND`,
+`INVALID_PARAMS`, `INTERNAL_ERROR`, mais o range customizado `-32001`
+(`TOOL_NOT_FOUND`) e `-32002` (`TOOL_EXECUTION_FAILED`).
+
 ## Próximos incrementos
 
 1. Tools tier 2: `apply_subdivision`, `apply_solidify`, `assign_material`, `measure_object`,
    `repair_non_manifold`, `icosphere`, `torus`.
 2. Implementar `fusion_mcp` real por add-in persistente do Fusion 360.
-3. Extração dos adapters para servidores MCP `stdio` reais.
 
 ## Limite de segurança
 

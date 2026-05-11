@@ -59,6 +59,9 @@ class Settings(BaseModel):
     modeling_subprocess_timeout_seconds: int = Field(
         default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MODELING_TIMEOUT_SECONDS", "90"))
     )
+    modeling_mcp_transport: str = Field(
+        default_factory=lambda: os.getenv("TRUTHS_FORGE_MCP_TRANSPORT", "in_process").lower()
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",
