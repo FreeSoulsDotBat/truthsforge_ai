@@ -18,6 +18,10 @@ from app.core.contracts import (
     ModelingPlanCreate,
     ModelingPlanStatus,
     ModelingPlanStep,
+    ModelingPrintabilityIssue,
+    ModelingPrintabilityReport,
+    ModelingPrintabilityRequest,
+    ModelingRiskLevel,
     ModelingSession,
     ModelingSessionStart,
     ModelingSnapshot,
@@ -25,6 +29,7 @@ from app.core.contracts import (
     ModelingSnapshotFile,
     ModelingSnapshotRestore,
     ModelingSnapshotRestoreResult,
+    ModelingSoftware,
     ModelingStepStatus,
     ModelingToolCall,
     ModelingToolCallStatus,
@@ -449,6 +454,90 @@ class ModelingService:
         if not hasattr(self.store, "list_modeling_tool_calls"):
             return []
         return self.store.list_modeling_tool_calls(plan_id=plan_id, step_id=step_id, limit=limit)
+
+    def run_printability(self, payload: ModelingPrintabilityRequest) -> ModelingPrintabilityReport:
+        step = ModelingPlanStep(
+            seq=1,
+            title="Validar printability",
+            software=ModelingSoftware.blender,
+            tool_name="blender.validate_printability",
+            risk_level=ModelingRiskLevel.low,
+            approval_required=False,
+            input_json={
+                "checks": payload.checks,
+                "printer_profile": payload.printer_profile,
+                "file_id": payload.file_id,
+            },
+        )
+        output = self.mcp_client.execute_step(
+            step,
+            plan_id=payload.plan_id,
+            project_id=payload.project_id,
+        )
+
+        report = self._printability_report_from_output(payload, output)
+        if hasattr(self.store, "add_modeling_printability_report"):
+            self.store.add_modeling_printability_report(report)
+        self.store.add_audit_event(
+            AuditEvent(
+                event_type="modeling.printability_validated",
+                metadata={
+                    "report_id": report.id,
+                    "plan_id": payload.plan_id,
+                    "file_id": payload.file_id,
+                    "transport": str(output.get("transport") or "mock"),
+                    "issue_count": len(report.issues),
+                    "risk_score": report.risk_score,
+                },
+            ),
+        )
+        return report
+
+    def list_printability_reports(
+        self, *, plan_id: str | None = None, file_id: str | None = None
+    ) -> list[ModelingPrintabilityReport]:
+        if not hasattr(self.store, "list_modeling_printability_reports"):
+            return []
+        return self.store.list_modeling_printability_reports(plan_id=plan_id, file_id=file_id)
+
+    @staticmethod
+    def _printability_report_from_output(
+        payload: ModelingPrintabilityRequest, output: dict[str, Any]
+    ) -> ModelingPrintabilityReport:
+        result = output.get("result") if isinstance(output.get("result"), dict) else {}
+        is_real_run = output.get("transport") == "stdio" and output.get("ok")
+        if is_real_run and result:
+            raw_issues = result.get("issues") or []
+            issues = [
+                ModelingPrintabilityIssue(**item) for item in raw_issues if isinstance(item, dict)
+            ]
+            return ModelingPrintabilityReport(
+                project_id=payload.project_id,
+                plan_id=payload.plan_id,
+                step_id=payload.step_id,
+                file_id=payload.file_id,
+                checks_executed=list(result.get("checks_executed") or payload.checks),
+                issues=issues,
+                metrics=dict(result.get("metrics") or {}),
+                risk_score=float(result.get("risk_score") or 0.0),
+                summary=str(result.get("message") or "Printability validada."),
+                report_json=result,
+            )
+        return ModelingPrintabilityReport(
+            project_id=payload.project_id,
+            plan_id=payload.plan_id,
+            step_id=payload.step_id,
+            file_id=payload.file_id,
+            checks_executed=list(payload.checks),
+            issues=[],
+            metrics={},
+            risk_score=0.0,
+            summary=(
+                "Blender não está conectado; relatório de printability é placeholder. "
+                "Configure TRUTHS_FORGE_BLENDER_EXECUTABLE para validar de verdade."
+            ),
+            report_json=output,
+        )
 
     def _dispatch_step(self, step: ModelingPlanStep, *, plan: ModelingPlan) -> dict[str, Any]:
         """Route a step to the right local handler.

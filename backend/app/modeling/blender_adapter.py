@@ -14,7 +14,12 @@ from app.modeling.workspace import safe_segment, workspace_dir
 BLENDER_TOOLS = [
     "blender.create_mesh_primitive",
     "blender.apply_bevel",
+    "blender.apply_boolean",
+    "blender.validate_mesh",
+    "blender.validate_printability",
     "blender.export_stl",
+    "blender.export_obj",
+    "blender.export_3mf",
 ]
 
 

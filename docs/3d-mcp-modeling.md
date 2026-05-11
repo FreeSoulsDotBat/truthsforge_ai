@@ -31,11 +31,21 @@ Variáveis:
 
 O workspace fica em `.local/modeling/workspaces/<project>/<plan>`. O runner atual só aceita ferramentas allowlistadas:
 
-- `blender.create_mesh_primitive`
-- `blender.apply_bevel`
-- `blender.export_stl`
+- `blender.create_mesh_primitive` — primitivos `cube`, `cylinder`, `uv_sphere`, `plane`, `cone`
+  com `dimensions_mm` e `location` opcional.
+- `blender.apply_bevel` — bevel uniforme em todos os meshes da cena.
+- `blender.apply_boolean` — `union`, `difference`, `intersect` entre dois objetos; remove o objeto
+  auxiliar por padrão (`delete_other`). Classificada como HIGH_RISK pela política, exige
+  aprovação humana.
+- `blender.validate_mesh` — checks rápidos (non-manifold, loose verts, loose parts); read-only.
+- `blender.validate_printability` — relatório completo via `bmesh` (read-only). Veja seção
+  Printability abaixo.
+- `blender.export_stl`, `blender.export_obj`, `blender.export_3mf` — exporta a cena para
+  `.local/modeling/workspaces/.../exports/`.
 
-Isso é proposital: a LLM cria intenção e plano, mas não injeta Python livre no Blender.
+Isso é proposital: a LLM cria intenção e plano, mas não injeta Python livre no Blender. Tools
+read-only (validates) são auto-executadas mesmo em modo `approval_required`; tools destrutivas
+como `apply_boolean` permanecem em HIGH_RISK e exigem aprovação humana explícita.
 
 ## Endpoints
 
@@ -53,6 +63,11 @@ Isso é proposital: a LLM cria intenção e plano, mas não injeta Python livre 
 - `POST /api/3d/snapshots/{snapshot_id}/restore`: restaura o snapshot sobre o workspace original e
   devolve `ModelingSnapshotRestoreResult` (`snapshot`, `auto_snapshot`, `restored_file_count`).
 - `GET /api/3d/tool-calls`: lista tool calls auditadas, com filtros opcionais `plan_id` e `step_id`.
+- `POST /api/3d/validate/printability`: roda o relatório de printability sobre o workspace
+  referenciado por `plan_id` e devolve `ModelingPrintabilityReport`. Quando o Blender real não
+  está conectado, devolve um relatório placeholder identificado pelo `summary`.
+- `GET /api/3d/printability-reports`: lista relatórios persistidos, com filtros opcionais
+  `plan_id` e `file_id`.
 
 ## Snapshots e rollback
 
@@ -109,20 +124,45 @@ mesmo schema na falha do `project_store.create_snapshot`. O envelope é o caminh
 para tool calls — `host_details` carrega contexto estruturado (software, workspace_dir,
 returncode, stdout/stderr tail, timeout configurado).
 
+## Printability via bmesh
+
+A tool `blender.validate_printability` roda dentro do runner Blender em background e usa
+`bmesh` para checks geométricos:
+
+| Check | O que faz |
+|---|---|
+| `non_manifold` | conta arestas não-manifold por objeto (issue `error`) |
+| `loose_parts` | conta ilhas desconectadas e vértices soltos (issue `warning`) |
+| `volume` | sinaliza volume não-positivo, sugerindo malha aberta (issue `warning`) |
+| `normals` | heurística baseada em centróide para estimar faces invertidas (issue `warning`) |
+| `overhang_approx` | faces com normal abaixo de 45° em relação ao plano (issue `info`) |
+| `thickness_approx` | faces com área absurdamente pequena (issue `info`) |
+| `bounding_box` | dimensões em mm |
+
+O `risk_score` (0–1) agrega severidades com pesos: `error=0.5`, `warning=0.2`, `info=0.05`,
+saturado em 1.0. Cada execução vira um `ModelingPrintabilityReport` persistido em
+`modeling_printability_reports`, com `metrics` por objeto e a lista completa de `issues`.
+
+A documentação da arquitetura proposta separa três níveis de printability — geométrica (MVP),
+intermediária (overhang/orientação/encaixes) e avançada (slicer, material, warping). Este PR
+entrega o nível geométrico inteiro; os demais ficam para PRs futuros.
+
 ## Novas tabelas
 
 - `modeling_tool_calls`: trilha completa de tool calls (Postgres + dev store).
-- `modeling_printability_reports`: reservada para o PR de printability.
+- `modeling_printability_reports`: relatórios geométricos do `blender.validate_printability`.
 - `modeling_model_versions`: reservada para versões nomeadas de modelos derivados.
 
 ## Próximos incrementos
 
-1. Expandir `blender_mcp` para mais operações controladas: boolean, curvas, materiais e câmera.
-2. Validador de printability rodando dentro do runner Blender (bmesh).
-3. Trocar planner heurístico por Responses API com Structured Outputs (`strict: true`).
-4. Implementar `fusion_mcp` real por add-in persistente do Fusion 360.
-5. UI estendida com painel de plano, aprovação por etapa, snapshots e tool calls.
-6. Extração dos adapters para servidores MCP `stdio` reais.
+1. Trocar planner heurístico por Responses API com Structured Outputs (`strict: true`),
+   incluindo as novas tools no toolset.
+2. Tools tier 2: `apply_subdivision`, `apply_solidify`, `assign_material`, `measure_object`,
+   `repair_non_manifold`, `icosphere`, `torus`.
+3. Implementar `fusion_mcp` real por add-in persistente do Fusion 360.
+4. UI estendida com painel de plano, aprovação por etapa, snapshots, tool calls e relatórios
+   de printability.
+5. Extração dos adapters para servidores MCP `stdio` reais.
 
 ## Limite de segurança
 

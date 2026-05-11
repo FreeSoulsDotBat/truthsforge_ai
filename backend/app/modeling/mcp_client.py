@@ -23,6 +23,7 @@ class LocalMCPClient:
                 "fusion.create_sketch",
                 "fusion.extrude_profile",
                 "fusion.validate_dimensions",
+                "fusion.validate_printability",
             ],
         }
 

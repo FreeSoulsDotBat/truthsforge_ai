@@ -9,6 +9,17 @@ from app.modeling.blender_adapter import BlenderAdapter
 from app.modeling.workspace import workspace_dir
 from app.storage.store import get_store
 
+EXPECTED_BLENDER_TOOLS = {
+    "blender.create_mesh_primitive",
+    "blender.apply_bevel",
+    "blender.apply_boolean",
+    "blender.validate_mesh",
+    "blender.validate_printability",
+    "blender.export_stl",
+    "blender.export_obj",
+    "blender.export_3mf",
+}
+
 
 def test_modeling_capabilities_are_exposed() -> None:
     client = TestClient(app)
@@ -18,8 +29,9 @@ def test_modeling_capabilities_are_exposed() -> None:
     payload = response.json()
     assert payload["mode"] == "local_mcp"
     adapter_tools = {adapter["software"]: adapter["tools"] for adapter in payload["adapters"]}
-    assert "blender.create_mesh_primitive" in adapter_tools["blender"]
+    assert EXPECTED_BLENDER_TOOLS.issubset(set(adapter_tools["blender"]))
     assert "fusion.create_sketch" in adapter_tools["fusion"]
+    assert "fusion.validate_printability" in adapter_tools["fusion"]
 
 
 def test_modeling_plan_requires_approval_and_can_execute_after_approval() -> None:
@@ -346,3 +358,131 @@ def test_modeling_failure_is_logged_with_error_envelope_fields(monkeypatch) -> N
     assert any(item["error_code"] == "blender.simulated_failure" for item in failed)
     assert any(item["retryable"] is True for item in failed)
     assert any(item["safe_to_retry_after_snapshot_restore"] is True for item in failed)
+
+
+def test_modeling_validate_printability_falls_back_to_mock_report(monkeypatch) -> None:
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/3d/validate/printability",
+        json={
+            "plan_id": "m3d_plan_does_not_exist",
+            "checks": ["non_manifold", "volume", "non_manifold"],
+            "printer_profile": "bambu_x1c_pla",
+        },
+    )
+
+    assert response.status_code == 200
+    report = response.json()
+    assert report["id"].startswith("m3d_print_report_")
+    assert report["risk_score"] == 0.0
+    assert report["issues"] == []
+    assert report["checks_executed"] == ["non_manifold", "volume"]
+    assert "Blender não está conectado" in report["summary"]
+
+    listed = client.get(f"/api/3d/printability-reports?plan_id={report['plan_id']}").json()
+    assert any(item["id"] == report["id"] for item in listed)
+
+
+def test_modeling_validate_printability_parses_real_runner_output(monkeypatch) -> None:
+    from app.api.routes import modeling as modeling_route
+    from app.modeling import service as service_module
+
+    class FakeStdioClient:
+        def capabilities(self):  # pragma: no cover
+            return {}
+
+        def is_connected(self, software):  # pragma: no cover
+            return True
+
+        def transport(self, software):  # pragma: no cover
+            return "stdio"
+
+        def adapter_status(self, software):  # pragma: no cover
+            return "available"
+
+        def detail(self, software):  # pragma: no cover
+            return ""
+
+        def execute_step(self, step, *, plan_id=None, project_id=None):
+            return {
+                "ok": True,
+                "mcp_server": "blender_mcp",
+                "transport": "stdio",
+                "tool_name": step.tool_name,
+                "software": step.software.value,
+                "result": {
+                    "message": "Printability validada em 1 objeto.",
+                    "objects_inspected": 1,
+                    "checks_executed": ["non_manifold", "volume"],
+                    "issues": [
+                        {
+                            "check": "non_manifold",
+                            "severity": "error",
+                            "message": "3 aresta(s) não-manifold em Cube.",
+                            "detail": {"object": "Cube", "edge_count": 3},
+                        }
+                    ],
+                    "metrics": {"Cube": {"volume_mm3": 8000.0}},
+                    "risk_score": 0.5,
+                },
+            }
+
+    fake_service = service_module.ModelingService(store=get_store(), mcp_client=FakeStdioClient())
+    monkeypatch.setattr(modeling_route, "get_modeling_service", lambda store: fake_service)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/3d/validate/printability",
+        json={"plan_id": "m3d_plan_fake", "checks": ["non_manifold", "volume"]},
+    )
+    assert response.status_code == 200
+    report = response.json()
+    assert report["risk_score"] == 0.5
+    assert len(report["issues"]) == 1
+    assert report["issues"][0]["check"] == "non_manifold"
+    assert report["issues"][0]["severity"] == "error"
+    assert report["metrics"]["Cube"]["volume_mm3"] == 8000.0
+    assert report["checks_executed"] == ["non_manifold", "volume"]
+
+
+def test_modeling_policy_skips_approval_for_read_only_tools() -> None:
+    from app.core.contracts import (
+        ModelingExecutionMode,
+        ModelingPlan,
+        ModelingPlanStep,
+        ModelingRiskLevel,
+        ModelingSoftware,
+    )
+    from app.modeling.policy import apply_modeling_policy
+
+    plan = ModelingPlan(
+        prompt="auditoria",
+        software_choice=ModelingSoftware.blender,
+        mode=ModelingExecutionMode.approval_required,
+        steps=[
+            ModelingPlanStep(
+                seq=1,
+                title="Validar printability",
+                software=ModelingSoftware.blender,
+                tool_name="blender.validate_printability",
+                risk_level=ModelingRiskLevel.medium,
+                approval_required=True,
+            ),
+            ModelingPlanStep(
+                seq=2,
+                title="Boolean union",
+                software=ModelingSoftware.blender,
+                tool_name="blender.apply_boolean",
+                risk_level=ModelingRiskLevel.low,
+                approval_required=False,
+            ),
+        ],
+    )
+
+    enforced = apply_modeling_policy(plan)
+    by_tool = {step.tool_name: step for step in enforced.steps}
+    assert by_tool["blender.validate_printability"].approval_required is False
+    # apply_boolean é HIGH_RISK e deve forçar approval mesmo com risk_level low.
+    assert by_tool["blender.apply_boolean"].approval_required is True
