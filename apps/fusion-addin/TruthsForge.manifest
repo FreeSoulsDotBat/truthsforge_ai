@@ -1,0 +1,13 @@
+{
+  "autodeskProduct": "Fusion360",
+  "type": "addin",
+  "id": "truths_forge.modeling.bridge",
+  "author": "Truth's Forge AI",
+  "description": {
+    "default": "Loopback bridge between the Truth's Forge backend and Fusion 360. Listens on 127.0.0.1 with an ephemeral token and dispatches modeling tool calls on the Fusion main thread."
+  },
+  "version": "0.1.0",
+  "runOnStartup": true,
+  "supportedOS": "windows|mac",
+  "editEnabled": true
+}

@@ -6,6 +6,8 @@ from typing import Any
 from app.core.config import settings
 from app.core.contracts import ModelingPlanStep, ModelingSoftware
 from app.modeling.blender_adapter import BLENDER_TOOLS, BlenderAdapter
+from app.modeling.fusion_adapter import FUSION_TOOLS as FUSION_ADAPTER_TOOLS
+from app.modeling.fusion_adapter import FusionDesktopAdapter
 from app.modeling.stdio_client import (
     StdioMCPClient,
     StdioServerError,
@@ -15,12 +17,7 @@ from app.modeling.stdio_client import (
 
 logger = logging.getLogger(__name__)
 
-FUSION_TOOLS = [
-    "fusion.create_sketch",
-    "fusion.extrude_profile",
-    "fusion.validate_dimensions",
-    "fusion.validate_printability",
-]
+FUSION_TOOLS = list(FUSION_ADAPTER_TOOLS)
 
 
 class LocalMCPClient:
@@ -47,8 +44,10 @@ class LocalMCPClient:
         transport_mode: str | None = None,
         blender_stdio: StdioMCPClient | None = None,
         fusion_stdio: StdioMCPClient | None = None,
+        fusion_adapter: FusionDesktopAdapter | None = None,
     ) -> None:
         self.blender_adapter = blender_adapter or BlenderAdapter()
+        self.fusion_adapter = fusion_adapter or FusionDesktopAdapter()
         mode = (transport_mode or settings.modeling_mcp_transport or "in_process").lower()
         self.transport_mode = mode if mode in {"in_process", "stdio"} else "in_process"
         self._blender_stdio = blender_stdio
@@ -82,6 +81,8 @@ class LocalMCPClient:
     def is_connected(self, software: ModelingSoftware) -> bool:
         if software == ModelingSoftware.blender:
             return self.blender_adapter.status().connected
+        if software == ModelingSoftware.fusion:
+            return self.fusion_adapter.status().connected
         return False
 
     def transport(self, software: ModelingSoftware) -> str:
@@ -89,17 +90,23 @@ class LocalMCPClient:
             return "stdio"
         if software == ModelingSoftware.blender:
             return self.blender_adapter.status().transport
+        if software == ModelingSoftware.fusion:
+            return self.fusion_adapter.status().transport
         return "mock"
 
     def adapter_status(self, software: ModelingSoftware) -> str:
         if software == ModelingSoftware.blender:
             return self.blender_adapter.status().status
+        if software == ModelingSoftware.fusion:
+            return self.fusion_adapter.status().status
         return "adapter_mock"
 
     def detail(self, software: ModelingSoftware) -> str:
         if software == ModelingSoftware.blender:
             return self.blender_adapter.status().detail
-        return "Adapter Fusion 360 ainda não conectado; chamadas ficam simuladas e auditadas."
+        if software == ModelingSoftware.fusion:
+            return self.fusion_adapter.status().detail
+        return "Adapter ainda não conectado; chamadas ficam simuladas e auditadas."
 
     # ------------------------------------------------------------------ execute
 
@@ -125,6 +132,8 @@ class LocalMCPClient:
     ) -> dict[str, Any]:
         if step.tool_name.startswith("blender.") and self.blender_adapter.is_available():
             return self.blender_adapter.execute(step, plan_id=plan_id, project_id=project_id)
+        if step.tool_name.startswith("fusion.") and self.fusion_adapter.is_available():
+            return self.fusion_adapter.execute(step, plan_id=plan_id, project_id=project_id)
 
         server = "project_store_mcp"
         if step.tool_name.startswith("blender."):
