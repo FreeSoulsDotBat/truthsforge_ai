@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import hashlib
+import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from app.core.contracts import (
     ModelingApprovalRequest,
     ModelingCapabilities,
     ModelingCapability,
+    ModelingErrorEnvelope,
     ModelingExecutionResult,
     ModelingPlan,
     ModelingPlanCreate,
@@ -20,7 +22,12 @@ from app.core.contracts import (
     ModelingSessionStart,
     ModelingSnapshot,
     ModelingSnapshotCreate,
+    ModelingSnapshotFile,
+    ModelingSnapshotRestore,
+    ModelingSnapshotRestoreResult,
     ModelingStepStatus,
+    ModelingToolCall,
+    ModelingToolCallStatus,
     PlatformFile,
     PlatformFileCreate,
     now_utc,
@@ -29,6 +36,15 @@ from app.files.library import content_type_for_name, safe_filename
 from app.modeling.mcp_client import LocalMCPClient
 from app.modeling.planner import create_structured_plan
 from app.modeling.policy import apply_modeling_policy
+from app.modeling.workspace import (
+    copy_into_snapshot,
+    is_inside,
+    restore_from_snapshot,
+    safe_segment,
+    sha256_file,
+    snapshots_root,
+    workspace_dir,
+)
 
 ARTIFACT_CONTENT_TYPES = {
     ".3mf": "model/3mf",
@@ -36,6 +52,43 @@ ARTIFACT_CONTENT_TYPES = {
     ".obj": "model/obj",
     ".stl": "model/stl",
 }
+
+
+def _envelope_into_output(
+    envelope: ModelingErrorEnvelope, *, base: dict[str, Any]
+) -> dict[str, Any]:
+    """Spread a typed error envelope into a tool output dict.
+
+    Keeps a single source of truth for error fields (``error_code``,
+    ``retryable``, ``safe_to_retry_after_snapshot_restore``, ``host_details``)
+    while still returning a serializable dict to fit the existing dict-based
+    tool call contract.
+    """
+    return {**base, **envelope.model_dump(), "message": envelope.message}
+
+
+def _envelope_from_output(output: dict[str, Any]) -> ModelingErrorEnvelope | None:
+    """Reconstruct an envelope from a tool output dict, if one is present.
+
+    Returns ``None`` when the output does not carry the typed envelope fields.
+    """
+    error_code = output.get("error_code")
+    if not error_code:
+        return None
+    try:
+        return ModelingErrorEnvelope(
+            error_code=str(error_code),
+            message=str(output.get("message") or output.get("error") or ""),
+            retryable=bool(output.get("retryable", False)),
+            safe_to_retry_after_snapshot_restore=bool(
+                output.get("safe_to_retry_after_snapshot_restore", False)
+            ),
+            host_details=(
+                output["host_details"] if isinstance(output.get("host_details"), dict) else {}
+            ),
+        )
+    except Exception:  # pragma: no cover - defensive against malformed output
+        return None
 
 
 class ModelingService:
@@ -176,6 +229,7 @@ class ModelingService:
         executed_step_ids: list[str] = []
         blocked_step_ids: list[str] = []
         events: list[str] = []
+        tool_call_ids: list[str] = []
         next_steps = []
         for step in plan.steps:
             if step.error:
@@ -186,15 +240,22 @@ class ModelingService:
                 blocked_step_ids.append(step.id)
                 next_steps.append(step)
                 continue
-            output = self.mcp_client.execute_step(
-                step,
-                plan_id=plan.id,
-                project_id=plan.project_id,
-            )
+
+            started_at = time.perf_counter()
+            output = self._dispatch_step(step, plan=plan)
+            duration_ms = int((time.perf_counter() - started_at) * 1000)
             output = self._register_generated_artifacts(output, plan=plan, step=step)
+
+            tool_call = self._record_tool_call(
+                plan=plan, step=step, output=output, duration_ms=duration_ms
+            )
+            if tool_call is not None:
+                tool_call_ids.append(tool_call.id)
+
             executed_step_ids.append(step.id)
             event_verb = "executado" if output.get("transport") != "mock" else "preparado"
             events.append(f"{step.seq}. {step.tool_name} {event_verb} via {output['mcp_server']}")
+
             if output.get("ok") is False:
                 blocked_step_ids.append(step.id)
                 next_steps.append(
@@ -235,6 +296,7 @@ class ModelingService:
                     "plan_id": updated.id,
                     "executed_step_ids": executed_step_ids,
                     "blocked_step_ids": blocked_step_ids,
+                    "tool_call_ids": tool_call_ids,
                 },
             ),
         )
@@ -243,32 +305,248 @@ class ModelingService:
             executed_step_ids=executed_step_ids,
             blocked_step_ids=blocked_step_ids,
             events=events,
+            tool_call_ids=tool_call_ids,
         )
 
     def create_snapshot(self, payload: ModelingSnapshotCreate) -> ModelingSnapshot:
         settings.ensure_local_dirs()
-        snapshot_dir = settings.data_dir / "modeling" / "snapshots"
-        snapshot_dir.mkdir(parents=True, exist_ok=True)
-        fingerprint = hashlib.sha256(
-            f"{payload.project_id}|{payload.plan_id}|{payload.label}|{now_utc().isoformat()}".encode()
-        ).hexdigest()
-        manifest = {
-            "sha256": fingerprint,
-            "path": str(snapshot_dir / f"{fingerprint[:16]}.json"),
-            "note": (
-                "Manifesto lógico inicial; artefatos reais entram quando "
-                "adapters MCP estiverem conectados."
-            ),
-        }
         snapshot = ModelingSnapshot(
             project_id=payload.project_id,
             plan_id=payload.plan_id,
+            step_id=payload.step_id,
+            parent_snapshot_id=payload.parent_snapshot_id,
             label=payload.label,
             reason=payload.reason,
-            manifest=manifest,
+        )
+        workspace = workspace_dir(payload.project_id, payload.plan_id)
+        snapshot_dir = snapshots_root() / safe_segment(snapshot.id, "snapshot")
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        files_dir = snapshot_dir / "files"
+
+        snapshot_files: list[ModelingSnapshotFile] = []
+        if workspace.is_dir():
+            copied = copy_into_snapshot(workspace, files_dir)
+            for path in copied:
+                relative = path.relative_to(files_dir).as_posix()
+                snapshot_files.append(
+                    ModelingSnapshotFile(
+                        relative_path=relative,
+                        sha256=sha256_file(path),
+                        size_bytes=path.stat().st_size,
+                    )
+                )
+
+        manifest = {
+            "id": snapshot.id,
+            "project_id": payload.project_id,
+            "plan_id": payload.plan_id,
+            "step_id": payload.step_id,
+            "parent_snapshot_id": payload.parent_snapshot_id,
+            "label": payload.label,
+            "reason": payload.reason,
+            "workspace_path": str(workspace),
+            "storage_path": str(snapshot_dir),
+            "created_at": snapshot.created_at.isoformat(),
+            "files": [item.model_dump() for item in snapshot_files],
+        }
+        manifest_path = snapshot_dir / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+        snapshot = snapshot.model_copy(
+            update={
+                "workspace_path": str(workspace),
+                "storage_path": str(snapshot_dir),
+                "files": snapshot_files,
+                "manifest": manifest,
+            }
         )
         self.store.upsert_modeling_snapshot(snapshot)
+        self.store.add_audit_event(
+            AuditEvent(
+                event_type="modeling.snapshot_created",
+                metadata={
+                    "snapshot_id": snapshot.id,
+                    "plan_id": payload.plan_id,
+                    "step_id": payload.step_id,
+                    "parent_snapshot_id": payload.parent_snapshot_id,
+                    "file_count": len(snapshot_files),
+                },
+            ),
+        )
         return snapshot
+
+    def restore_snapshot(
+        self,
+        snapshot_id: str,
+        payload: ModelingSnapshotRestore | None = None,
+    ) -> ModelingSnapshotRestoreResult:
+        if not hasattr(self.store, "get_modeling_snapshot"):
+            raise RuntimeError("Backend store não implementa get_modeling_snapshot.")
+        request = payload or ModelingSnapshotRestore()
+        snapshot = self.store.get_modeling_snapshot(snapshot_id)
+        if snapshot is None:
+            raise KeyError(snapshot_id)
+        if not snapshot.storage_path or not snapshot.workspace_path:
+            raise ValueError(
+                "Snapshot sem storage_path/workspace_path; "
+                "não há conteúdo persistido para restaurar."
+            )
+
+        storage = Path(snapshot.storage_path)
+        workspace = Path(snapshot.workspace_path)
+        modeling_root = settings.modeling_dir
+        if not is_inside(storage, modeling_root) or not is_inside(workspace, modeling_root):
+            raise ValueError("Snapshot fora do diretório de modelagem; restauração bloqueada.")
+
+        auto_snapshot: ModelingSnapshot | None = None
+        if not request.force and workspace.is_dir() and any(workspace.iterdir()):
+            auto_snapshot = self.create_snapshot(
+                ModelingSnapshotCreate(
+                    project_id=snapshot.project_id,
+                    plan_id=snapshot.plan_id,
+                    parent_snapshot_id=snapshot.id,
+                    label=f"auto: pré-restore de {snapshot.id}",
+                    reason=(
+                        request.reason or f"Backup automático antes de restaurar {snapshot.id}."
+                    ),
+                )
+            )
+
+        files_dir = storage / "files"
+        restored_paths = restore_from_snapshot(files_dir, workspace)
+        timestamp = now_utc()
+        updated = snapshot.model_copy(update={"restored_at": timestamp})
+        self.store.upsert_modeling_snapshot(updated)
+        self.store.add_audit_event(
+            AuditEvent(
+                event_type="modeling.snapshot_restored",
+                metadata={
+                    "snapshot_id": updated.id,
+                    "plan_id": updated.plan_id,
+                    "step_id": updated.step_id,
+                    "file_count": len(restored_paths),
+                    "reason": request.reason,
+                    "force": request.force,
+                    "auto_snapshot_id": auto_snapshot.id if auto_snapshot else None,
+                },
+            ),
+        )
+        return ModelingSnapshotRestoreResult(
+            snapshot=updated,
+            auto_snapshot=auto_snapshot,
+            restored_file_count=len(restored_paths),
+        )
+
+    def list_tool_calls(
+        self,
+        *,
+        plan_id: str | None = None,
+        step_id: str | None = None,
+        limit: int = 200,
+    ) -> list[ModelingToolCall]:
+        if not hasattr(self.store, "list_modeling_tool_calls"):
+            return []
+        return self.store.list_modeling_tool_calls(plan_id=plan_id, step_id=step_id, limit=limit)
+
+    def _dispatch_step(self, step: ModelingPlanStep, *, plan: ModelingPlan) -> dict[str, Any]:
+        """Route a step to the right local handler.
+
+        ``project_store.*`` tools are handled inline by the service because the
+        project store lives in the same process. Everything else goes through
+        the MCP client boundary, which delegates to the adapter or falls back
+        to mock.
+        """
+        if step.tool_name == "project_store.create_snapshot":
+            return self._run_project_store_snapshot(step, plan=plan)
+        return self.mcp_client.execute_step(
+            step,
+            plan_id=plan.id,
+            project_id=plan.project_id,
+        )
+
+    def _run_project_store_snapshot(
+        self, step: ModelingPlanStep, *, plan: ModelingPlan
+    ) -> dict[str, Any]:
+        try:
+            snapshot = self.create_snapshot(
+                ModelingSnapshotCreate(
+                    project_id=plan.project_id,
+                    plan_id=plan.id,
+                    step_id=step.id,
+                    label=str(step.input_json.get("label") or f"Plan {plan.id} step {step.seq}"),
+                    reason=str(step.input_json.get("reason") or "before_modeling"),
+                )
+            )
+        except Exception as exc:  # pragma: no cover - safety net
+            envelope = ModelingErrorEnvelope(
+                error_code="project_store.snapshot_failed",
+                message=f"Falha ao criar snapshot: {exc}",
+                retryable=False,
+                safe_to_retry_after_snapshot_restore=False,
+                host_details={"plan_id": plan.id, "step_id": step.id},
+            )
+            return _envelope_into_output(
+                envelope,
+                base={
+                    "ok": False,
+                    "mcp_server": "project_store_mcp",
+                    "transport": "local",
+                    "tool_name": step.tool_name,
+                    "software": step.software.value,
+                    "input": step.input_json,
+                },
+            )
+        return {
+            "ok": True,
+            "mcp_server": "project_store_mcp",
+            "transport": "local",
+            "tool_name": step.tool_name,
+            "software": step.software.value,
+            "message": f"Snapshot {snapshot.id} criado ({len(snapshot.files)} arquivo(s)).",
+            "input": step.input_json,
+            "snapshot_id": snapshot.id,
+            "artifact_paths": [],
+        }
+
+    def _record_tool_call(
+        self,
+        *,
+        plan: ModelingPlan,
+        step: ModelingPlanStep,
+        output: dict[str, Any],
+        duration_ms: int,
+    ) -> ModelingToolCall | None:
+        if not hasattr(self.store, "add_modeling_tool_call"):
+            return None
+        ok = output.get("ok") is not False
+        status = ModelingToolCallStatus.ok if ok else ModelingToolCallStatus.error
+        artifact_paths = [
+            value for value in output.get("artifact_paths", []) if isinstance(value, str) and value
+        ]
+        envelope = _envelope_from_output(output) if not ok else None
+        record = ModelingToolCall(
+            plan_id=plan.id,
+            step_id=step.id,
+            seq=step.seq,
+            mcp_server=str(output.get("mcp_server") or "unknown_mcp"),
+            tool_name=step.tool_name,
+            software=step.software,
+            transport=output.get("transport") or "mock",
+            status=status,
+            request_json=step.input_json,
+            response_json=output,
+            error_code=envelope.error_code if envelope else None,
+            error_message=envelope.message if envelope else None,
+            retryable=envelope.retryable if envelope else False,
+            safe_to_retry_after_snapshot_restore=(
+                envelope.safe_to_retry_after_snapshot_restore if envelope else False
+            ),
+            duration_ms=duration_ms,
+            artifact_paths=artifact_paths,
+        )
+        return self.store.add_modeling_tool_call(record)
 
     def _get_plan_or_raise(self, plan_id: str) -> ModelingPlan:
         plan = self.store.get_modeling_plan(plan_id)
@@ -311,7 +589,7 @@ class ModelingService:
                     content_type=self._artifact_content_type(path),
                     size_bytes=path.stat().st_size,
                     storage_path=storage_path,
-                    checksum_sha256=self._sha256_file(path),
+                    checksum_sha256=sha256_file(path),
                     source="generated",
                     tags=["3d", "modeling", step.software.value],
                     metadata={
@@ -345,14 +623,6 @@ class ModelingService:
             path.suffix.lower(),
             content_type_for_name(path.name) or "application/octet-stream",
         )
-
-    @staticmethod
-    def _sha256_file(path: Path) -> str:
-        checksum = hashlib.sha256()
-        with path.open("rb") as handle:
-            while chunk := handle.read(1024 * 1024):
-                checksum.update(chunk)
-        return checksum.hexdigest()
 
 
 def get_modeling_service(store: Any) -> ModelingService:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -9,18 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
-from app.core.contracts import ModelingPlanStep
+from app.core.contracts import ModelingErrorEnvelope, ModelingPlanStep
+from app.modeling.workspace import safe_segment, workspace_dir
 
 BLENDER_TOOLS = [
     "blender.create_mesh_primitive",
     "blender.apply_bevel",
     "blender.export_stl",
 ]
-
-
-def _safe_segment(value: str | None, fallback: str) -> str:
-    candidate = re.sub(r"[^a-zA-Z0-9_.-]+", "_", value or "").strip("._")
-    return candidate[:96] or fallback
 
 
 def _tail(value: str, limit: int = 4000) -> str:
@@ -94,18 +89,19 @@ class BlenderAdapter:
         if step.tool_name not in self.tools:
             raise ValueError(f"Ferramenta Blender não permitida: {step.tool_name}")
 
-        workspace_dir = self._workspace_dir(plan_id=plan_id, project_id=project_id)
-        workspace_dir.mkdir(parents=True, exist_ok=True)
-        exports_dir = workspace_dir / "exports"
+        workspace = workspace_dir(project_id, plan_id)
+        workspace.mkdir(parents=True, exist_ok=True)
+        exports_dir = workspace / "exports"
         exports_dir.mkdir(parents=True, exist_ok=True)
         runner_path = Path(__file__).with_name("blender_runner.py")
-        result_path = workspace_dir / f"{step.seq:02d}-{_safe_segment(step.tool_name, 'step')}.json"
-        job_path = workspace_dir / f"{step.seq:02d}-{_safe_segment(step.id, 'job')}.job.json"
-        blend_path = workspace_dir / "workspace.blend"
+        slot = f"{step.seq:02d}-{safe_segment(step.tool_name, 'step')}"
+        result_path = workspace / f"{slot}.result.json"
+        job_path = workspace / f"{step.seq:02d}-{safe_segment(step.id, 'job')}.job.json"
+        blend_path = workspace / "workspace.blend"
         job = {
             "tool_name": step.tool_name,
             "input_json": step.input_json,
-            "workspace_dir": str(workspace_dir),
+            "workspace_dir": str(workspace),
             "exports_dir": str(exports_dir),
             "blend_path": str(blend_path),
             "result_path": str(result_path),
@@ -123,7 +119,7 @@ class BlenderAdapter:
         try:
             completed = subprocess.run(
                 command,
-                cwd=str(workspace_dir),
+                cwd=str(workspace),
                 capture_output=True,
                 check=False,
                 shell=False,
@@ -131,37 +127,63 @@ class BlenderAdapter:
                 timeout=self.timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
-            return {
-                "ok": False,
-                "mcp_server": "blender_mcp",
-                "transport": "stdio",
-                "tool_name": step.tool_name,
-                "software": step.software.value,
-                "message": "Execução do Blender excedeu o timeout configurado.",
-                "error": str(exc),
-                "input": step.input_json,
-                "workspace_dir": str(workspace_dir),
-            }
+            envelope = ModelingErrorEnvelope(
+                error_code="blender.timeout",
+                message="Execução do Blender excedeu o timeout configurado.",
+                retryable=True,
+                safe_to_retry_after_snapshot_restore=True,
+                host_details={
+                    "software": step.software.value,
+                    "workspace_dir": str(workspace),
+                    "timeout_seconds": self.timeout_seconds,
+                    "error": str(exc),
+                },
+            )
+            return self._envelope_output(step, envelope, workspace=workspace)
 
         result = self._read_result(result_path)
         ok = bool(result.get("ok")) and completed.returncode == 0
-        message = result.get("message") or (
-            "Etapa Blender executada." if ok else "Blender retornou erro na etapa."
-        )
         artifact_paths = [
             str(Path(path))
             for path in result.get("artifact_paths", [])
             if isinstance(path, str) and path
         ]
+        if not ok:
+            envelope = ModelingErrorEnvelope(
+                error_code=str(result.get("error_code") or "blender.runner_failed"),
+                message=str(result.get("message") or "Blender retornou erro na etapa."),
+                retryable=bool(result.get("retryable", False)),
+                safe_to_retry_after_snapshot_restore=bool(
+                    result.get("safe_to_retry_after_snapshot_restore", True)
+                ),
+                host_details={
+                    "software": step.software.value,
+                    "workspace_dir": str(workspace),
+                    "returncode": completed.returncode,
+                    "stdout_tail": _tail(completed.stdout or ""),
+                    "stderr_tail": _tail(completed.stderr or ""),
+                },
+            )
+            return self._envelope_output(
+                step,
+                envelope,
+                workspace=workspace,
+                extra={
+                    "input": step.input_json,
+                    "blend_path": result.get("blend_path") or str(blend_path),
+                    "artifact_paths": artifact_paths,
+                    "result": result,
+                },
+            )
         return {
-            "ok": ok,
+            "ok": True,
             "mcp_server": "blender_mcp",
             "transport": "stdio",
             "tool_name": step.tool_name,
             "software": step.software.value,
-            "message": message,
+            "message": result.get("message") or "Etapa Blender executada.",
             "input": step.input_json,
-            "workspace_dir": str(workspace_dir),
+            "workspace_dir": str(workspace),
             "blend_path": result.get("blend_path") or str(blend_path),
             "artifact_paths": artifact_paths,
             "returncode": completed.returncode,
@@ -169,6 +191,27 @@ class BlenderAdapter:
             "stderr_tail": _tail(completed.stderr or ""),
             "result": result,
         }
+
+    @staticmethod
+    def _envelope_output(
+        step: ModelingPlanStep,
+        envelope: ModelingErrorEnvelope,
+        *,
+        workspace: Path,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        base: dict[str, Any] = {
+            "ok": False,
+            "mcp_server": "blender_mcp",
+            "transport": "stdio",
+            "tool_name": step.tool_name,
+            "software": step.software.value,
+            "input": step.input_json,
+            "workspace_dir": str(workspace),
+        }
+        if extra:
+            base.update(extra)
+        return {**base, **envelope.model_dump(), "message": envelope.message}
 
     def _resolve_executable(self) -> Path | None:
         configured = (self._configured_executable or "").strip()
@@ -180,14 +223,6 @@ class BlenderAdapter:
             return Path(found) if found else None
         found = shutil.which("blender") or shutil.which("blender.exe")
         return Path(found) if found else None
-
-    def _workspace_dir(self, *, plan_id: str | None, project_id: str | None) -> Path:
-        return (
-            settings.modeling_dir
-            / "workspaces"
-            / _safe_segment(project_id, "project_general")
-            / _safe_segment(plan_id, "ad_hoc")
-        )
 
     @staticmethod
     def _read_result(result_path: Path) -> dict[str, Any]:
