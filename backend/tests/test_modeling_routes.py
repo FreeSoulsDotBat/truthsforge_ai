@@ -13,6 +13,11 @@ EXPECTED_BLENDER_TOOLS = {
     "blender.create_mesh_primitive",
     "blender.apply_bevel",
     "blender.apply_boolean",
+    "blender.apply_subdivision",
+    "blender.apply_solidify",
+    "blender.assign_material",
+    "blender.measure_object",
+    "blender.repair_non_manifold",
     "blender.validate_mesh",
     "blender.validate_printability",
     "blender.export_stl",
@@ -486,3 +491,54 @@ def test_modeling_policy_skips_approval_for_read_only_tools() -> None:
     assert by_tool["blender.validate_printability"].approval_required is False
     # apply_boolean é HIGH_RISK e deve forçar approval mesmo com risk_level low.
     assert by_tool["blender.apply_boolean"].approval_required is True
+
+
+def test_modeling_policy_classifies_tier2_tools_correctly() -> None:
+    from app.core.contracts import (
+        ModelingExecutionMode,
+        ModelingPlan,
+        ModelingPlanStep,
+        ModelingRiskLevel,
+        ModelingSoftware,
+    )
+    from app.modeling.policy import apply_modeling_policy
+
+    plan = ModelingPlan(
+        prompt="tier 2",
+        software_choice=ModelingSoftware.blender,
+        mode=ModelingExecutionMode.approval_required,
+        steps=[
+            ModelingPlanStep(
+                seq=1,
+                title="medir",
+                software=ModelingSoftware.blender,
+                tool_name="blender.measure_object",
+                risk_level=ModelingRiskLevel.medium,
+                approval_required=True,
+            ),
+            ModelingPlanStep(
+                seq=2,
+                title="reparar",
+                software=ModelingSoftware.blender,
+                tool_name="blender.repair_non_manifold",
+                risk_level=ModelingRiskLevel.low,
+                approval_required=False,
+            ),
+            ModelingPlanStep(
+                seq=3,
+                title="subdivision",
+                software=ModelingSoftware.blender,
+                tool_name="blender.apply_subdivision",
+                risk_level=ModelingRiskLevel.low,
+                approval_required=False,
+            ),
+        ],
+    )
+    enforced = apply_modeling_policy(plan)
+    by_tool = {step.tool_name: step for step in enforced.steps}
+    # measure_object é read-only → auto-execução
+    assert by_tool["blender.measure_object"].approval_required is False
+    # repair_non_manifold é HIGH_RISK → approval mesmo com risk_level low
+    assert by_tool["blender.repair_non_manifold"].approval_required is True
+    # apply_subdivision: low risk, não está em HIGH_RISK nem READ_ONLY → segue como declarado (False)
+    assert by_tool["blender.apply_subdivision"].approval_required is False
