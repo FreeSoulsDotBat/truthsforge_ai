@@ -1,4 +1,6 @@
 import {
+  Activity,
+  Archive,
   Bot,
   ExternalLink,
   FileText,
@@ -12,7 +14,9 @@ import {
   RefreshCw,
   Save,
   Settings2,
+  ShieldCheck,
   Trash2,
+  Undo2,
   Users
 } from "lucide-react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
@@ -49,7 +53,11 @@ import type {
   ModelingCapabilities,
   ModelingExecutionMode,
   ModelingPlan,
+  ModelingPlanStep,
+  ModelingPrintabilityReport,
+  ModelingSnapshot,
   ModelingSoftware,
+  ModelingToolCall,
   PlatformFile,
   PlatformFileUpdate,
   ProjectFolder,
@@ -785,6 +793,39 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
     [plans, selectedPlanId]
   );
 
+  const planScopedKey = selectedPlan?.id ?? "__none";
+  const snapshotsQuery = useQuery({
+    queryKey: ["modeling-snapshots"],
+    queryFn: () => api.modelingSnapshots(),
+    staleTime: 10_000
+  });
+  const toolCallsQuery = useQuery({
+    queryKey: ["modeling-tool-calls", planScopedKey],
+    queryFn: () =>
+      selectedPlan
+        ? api.modelingToolCalls({ plan_id: selectedPlan.id, limit: 50 })
+        : Promise.resolve<ModelingToolCall[]>([]),
+    enabled: !!selectedPlan,
+    staleTime: 5_000
+  });
+  const printabilityQuery = useQuery({
+    queryKey: ["modeling-printability", planScopedKey],
+    queryFn: () =>
+      selectedPlan
+        ? api.modelingPrintabilityReports({ plan_id: selectedPlan.id })
+        : Promise.resolve<ModelingPrintabilityReport[]>([]),
+    enabled: !!selectedPlan,
+    staleTime: 10_000
+  });
+
+  const snapshotsForPlan = useMemo<ModelingSnapshot[]>(() => {
+    const list = snapshotsQuery.data ?? [];
+    if (!selectedPlan) return [];
+    return list.filter((snapshot) => snapshot.plan_id === selectedPlan.id);
+  }, [snapshotsQuery.data, selectedPlan]);
+  const toolCalls = toolCallsQuery.data ?? [];
+  const printabilityReports = printabilityQuery.data ?? [];
+
   async function createPlan() {
     if (!prompt.trim()) return;
     setIsBusy(true);
@@ -857,6 +898,88 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
       setStatus(`Sessão ${software} registrada. Instale o adapter desktop para execução real.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Falha ao iniciar sessão 3D.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function decideStep(stepId: string, decision: "approve" | "reject") {
+    if (!selectedPlan) return;
+    setIsBusy(true);
+    setStatus(decision === "approve" ? "Aprovando etapa..." : "Rejeitando etapa...");
+    try {
+      const plan = await api.decideModelingStep(stepId, {
+        decision,
+        reason: decision === "approve" ? "Aprovado pela UI do módulo 3D." : "Rejeitado pela UI do módulo 3D."
+      });
+      setSelectedPlanId(plan.id);
+      await modelingQuery.refetch();
+      setStatus(decision === "approve" ? "Etapa aprovada." : "Etapa rejeitada.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Falha ao decidir etapa.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function createManualSnapshot() {
+    if (!selectedPlan) return;
+    setIsBusy(true);
+    setStatus("Criando snapshot do workspace...");
+    try {
+      const snapshot = await api.createModelingSnapshot({
+        project_id: selectedPlan.project_id ?? null,
+        plan_id: selectedPlan.id,
+        label: `Manual ${new Date().toLocaleTimeString("pt-BR", { hour12: false })}`,
+        reason: "snapshot manual via UI 3D"
+      });
+      await snapshotsQuery.refetch();
+      setStatus(`Snapshot ${snapshot.id} criado (${snapshot.files.length} arquivo(s)).`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Falha ao criar snapshot.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function restoreSnapshot(snapshotId: string) {
+    if (!selectedPlan) return;
+    const confirmed = window.confirm(
+      "Restaurar o snapshot vai sobrescrever o workspace atual. " +
+        "Um auto-snapshot do estado atual será criado antes. Deseja continuar?"
+    );
+    if (!confirmed) return;
+    setIsBusy(true);
+    setStatus("Restaurando snapshot...");
+    try {
+      const result = await api.restoreModelingSnapshot(snapshotId, {
+        reason: "restore via UI 3D"
+      });
+      await snapshotsQuery.refetch();
+      const autoSuffix = result.auto_snapshot ? ` Estado anterior salvo como ${result.auto_snapshot.id}.` : "";
+      setStatus(`Snapshot ${result.snapshot.id} restaurado (${result.restored_file_count} arquivo(s)).${autoSuffix}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Falha ao restaurar snapshot.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function runPrintability() {
+    if (!selectedPlan) return;
+    setIsBusy(true);
+    setStatus("Rodando validação de printability...");
+    try {
+      const report = await api.validateModelingPrintability({
+        project_id: selectedPlan.project_id ?? null,
+        plan_id: selectedPlan.id
+      });
+      await printabilityQuery.refetch();
+      setStatus(
+        `Relatório ${report.id} gerado: ${report.issues.length} aviso(s), risco ${(report.risk_score * 100).toFixed(0)}%.`
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Falha ao validar printability.");
     } finally {
       setIsBusy(false);
     }
@@ -955,37 +1078,36 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
                 <div>
                   <PanelTitle icon={<Settings2 size={18} />} title="Plano selecionado" />
                   <p className="mt-2 text-xs text-forge-muted">{selectedPlan.rationale}</p>
+                  {selectedPlan.fallback_reason && (
+                    <p className="mt-1 text-xs text-forge-amber">Fallback heurístico: {selectedPlan.fallback_reason}</p>
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Badge>{selectedPlan.software_choice}</Badge>
                   <Badge>{Math.round(selectedPlan.confidence * 100)}%</Badge>
                   <Badge>{selectedPlan.status}</Badge>
+                  {selectedPlan.planner_source && (
+                    <Badge>{selectedPlan.planner_source === "llm" ? "planner: IA" : "planner: heurístico"}</Badge>
+                  )}
                 </div>
               </div>
               <div className="mt-4 space-y-2">
                 {selectedPlan.steps.map((step) => (
-                  <div key={step.id} className="rounded-md border border-forge-line bg-[#0e0f0e] p-3 text-sm">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h4 className="font-semibold">
-                          {step.seq}. {step.title}
-                        </h4>
-                        <p className="mt-1 text-xs text-forge-muted">{step.tool_name}</p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Badge>{step.risk_level}</Badge>
-                        <Badge>{step.approval_required ? "aprovação" : "auto"}</Badge>
-                        <Badge>{step.status}</Badge>
-                      </div>
-                    </div>
-                    {typeof step.output_json.message === "string" && (
-                      <p className="mt-2 text-xs text-forge-muted">{step.output_json.message}</p>
-                    )}
-                    {step.error && <p className="mt-2 text-xs text-forge-red">{step.error}</p>}
-                  </div>
+                  <ModelingStepCard
+                    key={step.id}
+                    step={step}
+                    isBusy={isBusy}
+                    onDecide={(decision) => void decideStep(step.id, decision)}
+                  />
                 ))}
               </div>
               <div className="mt-4 flex flex-wrap justify-end gap-2">
+                <Button className="h-9" disabled={isBusy || !selectedPlan} onClick={() => void createManualSnapshot()}>
+                  <Archive size={16} /> Snapshot manual
+                </Button>
+                <Button className="h-9" disabled={isBusy || !selectedPlan} onClick={() => void runPrintability()}>
+                  <ShieldCheck size={16} /> Validar printability
+                </Button>
                 <Button
                   className="h-9"
                   disabled={isBusy || selectedPlan.status === "completed"}
@@ -1054,9 +1176,153 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
               {!plans.length && <EmptyPanel text="Nenhum plano 3D criado ainda." />}
             </div>
           </div>
+
+          {selectedPlan && (
+            <div className="rounded-md border border-forge-line bg-[#141615] p-3">
+              <PanelTitle icon={<Archive size={18} />} title="Snapshots do plano" />
+              <div className="mt-3 space-y-2">
+                {snapshotsForPlan.length === 0 && <EmptyPanel text="Nenhum snapshot deste plano ainda." />}
+                {snapshotsForPlan.map((snapshot) => (
+                  <div key={snapshot.id} className="rounded-md border border-forge-line bg-[#0e0f0e] p-3 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="line-clamp-1 font-semibold">{snapshot.label}</span>
+                      <Badge>{snapshot.files.length} arq</Badge>
+                    </div>
+                    {snapshot.reason && <p className="mt-1 line-clamp-2 text-forge-muted">{snapshot.reason}</p>}
+                    {snapshot.restored_at && (
+                      <p className="mt-1 text-forge-amber">
+                        Restaurado em {new Date(snapshot.restored_at).toLocaleString("pt-BR")}
+                      </p>
+                    )}
+                    <div className="mt-2 flex justify-end">
+                      <Button
+                        className="h-8 px-2 text-[11px]"
+                        disabled={isBusy || !snapshot.storage_path}
+                        onClick={() => void restoreSnapshot(snapshot.id)}
+                      >
+                        <Undo2 size={14} /> Restaurar
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {selectedPlan && (
+            <div className="rounded-md border border-forge-line bg-[#141615] p-3">
+              <PanelTitle icon={<Activity size={18} />} title="Tool calls" />
+              <div className="mt-3 space-y-2">
+                {toolCalls.length === 0 && <EmptyPanel text="Nenhuma tool call executada para este plano." />}
+                {toolCalls.slice(0, 12).map((call) => (
+                  <div key={call.id} className="rounded-md border border-forge-line bg-[#0e0f0e] p-3 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="line-clamp-1 font-semibold">{call.tool_name}</span>
+                      <Badge>{call.status}</Badge>
+                    </div>
+                    <p className="mt-1 text-forge-muted">
+                      {call.mcp_server} · {call.transport}
+                      {typeof call.duration_ms === "number" ? ` · ${call.duration_ms} ms` : ""}
+                    </p>
+                    {call.status === "error" && (
+                      <p className="mt-1 text-forge-red">
+                        {call.error_code ?? "erro"}: {call.error_message ?? ""}
+                        {call.retryable && " · retryable"}
+                      </p>
+                    )}
+                    {call.artifact_paths.length > 0 && (
+                      <p className="mt-1 line-clamp-1 text-forge-muted">Artefatos: {call.artifact_paths.length}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {selectedPlan && (
+            <div className="rounded-md border border-forge-line bg-[#141615] p-3">
+              <PanelTitle icon={<ShieldCheck size={18} />} title="Printability" />
+              <div className="mt-3 space-y-2">
+                {printabilityReports.length === 0 && (
+                  <EmptyPanel text="Nenhum relatório de printability ainda. Clique em 'Validar printability'." />
+                )}
+                {printabilityReports.slice(0, 6).map((report) => (
+                  <div key={report.id} className="rounded-md border border-forge-line bg-[#0e0f0e] p-3 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="line-clamp-1 font-semibold">{report.issues.length} aviso(s)</span>
+                      <Badge>risco {(report.risk_score * 100).toFixed(0)}%</Badge>
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-forge-muted">{report.summary}</p>
+                    {report.issues.length > 0 && (
+                      <ul className="mt-2 space-y-1">
+                        {report.issues.slice(0, 4).map((issue, index) => (
+                          <li
+                            key={`${report.id}-${index}`}
+                            className={[
+                              "rounded border border-forge-line bg-[#141615] p-2",
+                              issue.severity === "error" ? "text-forge-red" : "text-forge-muted"
+                            ].join(" ")}
+                          >
+                            <span className="font-semibold">[{issue.severity}]</span> {issue.check}: {issue.message}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </aside>
       </div>
     </section>
+  );
+}
+
+function ModelingStepCard({
+  step,
+  isBusy,
+  onDecide
+}: {
+  step: ModelingPlanStep;
+  isBusy: boolean;
+  onDecide: (decision: "approve" | "reject") => void;
+}) {
+  const awaitingApproval = step.approval_required && step.status === "waiting_approval";
+  return (
+    <div className="rounded-md border border-forge-line bg-[#0e0f0e] p-3 text-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h4 className="font-semibold">
+            {step.seq}. {step.title}
+          </h4>
+          <p className="mt-1 text-xs text-forge-muted">{step.tool_name}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge>{step.risk_level}</Badge>
+          <Badge>{step.approval_required ? "aprovação" : "auto"}</Badge>
+          <Badge>{step.status}</Badge>
+        </div>
+      </div>
+      {typeof step.output_json.message === "string" && (
+        <p className="mt-2 text-xs text-forge-muted">{step.output_json.message}</p>
+      )}
+      {step.error && <p className="mt-2 text-xs text-forge-red">{step.error}</p>}
+      {awaitingApproval && (
+        <div className="mt-3 flex flex-wrap justify-end gap-2">
+          <Button className="h-8 px-2 text-[11px]" disabled={isBusy} onClick={() => onDecide("reject")}>
+            Rejeitar etapa
+          </Button>
+          <Button
+            className="h-8 border-forge-amber/60 bg-[#24211b] px-2 text-[11px]"
+            disabled={isBusy}
+            onClick={() => onDecide("approve")}
+          >
+            Aprovar etapa
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 

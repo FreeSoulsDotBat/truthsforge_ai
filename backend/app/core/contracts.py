@@ -666,6 +666,11 @@ class ModelingPlanStep(BaseModel):
     completed_at: datetime | None = None
 
 
+class ModelingPlannerSource(StrEnum):
+    llm = "llm"
+    heuristic = "heuristic"
+
+
 class ModelingPlan(BaseModel):
     id: str = Field(default_factory=lambda: new_id("m3d_plan"))
     project_id: str | None = None
@@ -681,6 +686,8 @@ class ModelingPlan(BaseModel):
     risks: list[str] = Field(default_factory=list)
     knowledge_base_ids: list[str] = Field(default_factory=list)
     steps: list[ModelingPlanStep] = Field(default_factory=list)
+    planner_source: ModelingPlannerSource | None = None
+    fallback_reason: str | None = None
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
 

@@ -282,3 +282,58 @@ def test_create_heuristic_plan_still_available_as_alias() -> None:
     heuristic = create_heuristic_plan(payload)
     assert plan.software_choice == heuristic.software_choice
     assert len(plan.steps) == len(heuristic.steps) == 4
+
+
+def test_plan_records_planner_source_and_fallback_reason(monkeypatch) -> None:
+    """create_plan persists planner_source on the plan itself so the UI can render it."""
+    from app.api.routes import modeling as modeling_route
+
+    failing_gateway = _FakeGateway(exc=ProviderExecutionError("teste de fallback"))
+    service = ModelingService(store=get_store(), gateway=failing_gateway)
+    monkeypatch.setattr(modeling_route, "get_modeling_service", lambda store: service)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/3d/plans",
+        json={"prompt": "crie um cubo", "mode": "approval_required"},
+    )
+    assert response.status_code == 200
+    plan = response.json()
+    assert plan["planner_source"] == "heuristic"
+    assert "teste de fallback" in (plan.get("fallback_reason") or "")
+
+
+def test_plan_records_llm_source_when_gateway_succeeds(monkeypatch) -> None:
+    from app.api.routes import modeling as modeling_route
+
+    gateway = _FakeGateway(
+        response={
+            "software_choice": "fusion",
+            "confidence": 0.8,
+            "rationale": "ok",
+            "assumptions": [],
+            "risks": [],
+            "steps": [
+                {
+                    "seq": 1,
+                    "title": "Snapshot",
+                    "tool_name": "project_store.create_snapshot",
+                    "risk_level": "low",
+                    "approval_required": False,
+                    "input_json": "{}",
+                }
+            ],
+        }
+    )
+    service = ModelingService(store=get_store(), gateway=gateway)
+    monkeypatch.setattr(modeling_route, "get_modeling_service", lambda store: service)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/3d/plans",
+        json={"prompt": "peça paramétrica", "mode": "approval_required"},
+    )
+    assert response.status_code == 200
+    plan = response.json()
+    assert plan["planner_source"] == "llm"
+    assert plan["fallback_reason"] is None

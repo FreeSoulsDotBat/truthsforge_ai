@@ -20,6 +20,7 @@ from app.core.contracts import (
     ModelingExecutionResult,
     ModelingPlan,
     ModelingPlanCreate,
+    ModelingPlannerSource,
     ModelingPlanStatus,
     ModelingPlanStep,
     ModelingPrintabilityIssue,
@@ -162,6 +163,9 @@ class ModelingService:
 
     def create_plan(self, payload: ModelingPlanCreate) -> ModelingPlan:
         plan, source, fallback_reason = self._build_plan(payload)
+        plan = plan.model_copy(
+            update={"planner_source": source, "fallback_reason": fallback_reason}
+        )
         plan = apply_modeling_policy(plan)
         self.store.upsert_modeling_plan(plan)
         metadata: dict[str, Any] = {
@@ -169,7 +173,7 @@ class ModelingService:
             "software": plan.software_choice.value,
             "step_count": len(plan.steps),
             "mode": plan.mode.value,
-            "planner_source": source,
+            "planner_source": source.value,
         }
         if fallback_reason:
             metadata["fallback_reason"] = fallback_reason
@@ -178,10 +182,16 @@ class ModelingService:
         )
         return plan
 
-    def _build_plan(self, payload: ModelingPlanCreate) -> tuple[ModelingPlan, str, str | None]:
+    def _build_plan(
+        self, payload: ModelingPlanCreate
+    ) -> tuple[ModelingPlan, ModelingPlannerSource, str | None]:
         model = self._resolve_planner_model()
         if model is None:
-            return create_heuristic_plan(payload), "heuristic", "planner_model_unavailable"
+            return (
+                create_heuristic_plan(payload),
+                ModelingPlannerSource.heuristic,
+                "planner_model_unavailable",
+            )
         try:
             knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
             plan = create_llm_plan(
@@ -190,10 +200,10 @@ class ModelingService:
                 model=model,
                 knowledge_bases=knowledge_bases,
             )
-            return plan, "llm", None
+            return plan, ModelingPlannerSource.llm, None
         except Exception as exc:  # noqa: BLE001 - fallback is intentional
             logger.warning("Planner LLM falhou (%s); usando fallback heurístico.", exc)
-            return create_heuristic_plan(payload), "heuristic", str(exc)
+            return create_heuristic_plan(payload), ModelingPlannerSource.heuristic, str(exc)
 
     def _resolve_planner_model(self) -> ModelConfig | None:
         if not hasattr(self.store, "list_models"):
