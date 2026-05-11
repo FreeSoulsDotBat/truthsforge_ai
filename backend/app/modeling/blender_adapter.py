@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -10,17 +9,13 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.contracts import ModelingPlanStep
+from app.modeling.workspace import safe_segment, workspace_dir
 
 BLENDER_TOOLS = [
     "blender.create_mesh_primitive",
     "blender.apply_bevel",
     "blender.export_stl",
 ]
-
-
-def _safe_segment(value: str | None, fallback: str) -> str:
-    candidate = re.sub(r"[^a-zA-Z0-9_.-]+", "_", value or "").strip("._")
-    return candidate[:96] or fallback
 
 
 def _tail(value: str, limit: int = 4000) -> str:
@@ -94,18 +89,18 @@ class BlenderAdapter:
         if step.tool_name not in self.tools:
             raise ValueError(f"Ferramenta Blender não permitida: {step.tool_name}")
 
-        workspace_dir = self._workspace_dir(plan_id=plan_id, project_id=project_id)
-        workspace_dir.mkdir(parents=True, exist_ok=True)
-        exports_dir = workspace_dir / "exports"
+        workspace = workspace_dir(project_id, plan_id)
+        workspace.mkdir(parents=True, exist_ok=True)
+        exports_dir = workspace / "exports"
         exports_dir.mkdir(parents=True, exist_ok=True)
         runner_path = Path(__file__).with_name("blender_runner.py")
-        result_path = workspace_dir / f"{step.seq:02d}-{_safe_segment(step.tool_name, 'step')}.json"
-        job_path = workspace_dir / f"{step.seq:02d}-{_safe_segment(step.id, 'job')}.job.json"
-        blend_path = workspace_dir / "workspace.blend"
+        result_path = workspace / f"{step.seq:02d}-{safe_segment(step.tool_name, 'step')}.json"
+        job_path = workspace / f"{step.seq:02d}-{safe_segment(step.id, 'job')}.job.json"
+        blend_path = workspace / "workspace.blend"
         job = {
             "tool_name": step.tool_name,
             "input_json": step.input_json,
-            "workspace_dir": str(workspace_dir),
+            "workspace_dir": str(workspace),
             "exports_dir": str(exports_dir),
             "blend_path": str(blend_path),
             "result_path": str(result_path),
@@ -123,7 +118,7 @@ class BlenderAdapter:
         try:
             completed = subprocess.run(
                 command,
-                cwd=str(workspace_dir),
+                cwd=str(workspace),
                 capture_output=True,
                 check=False,
                 shell=False,
@@ -139,8 +134,11 @@ class BlenderAdapter:
                 "software": step.software.value,
                 "message": "Execução do Blender excedeu o timeout configurado.",
                 "error": str(exc),
+                "error_code": "blender.timeout",
+                "retryable": True,
+                "safe_to_retry_after_snapshot_restore": True,
                 "input": step.input_json,
-                "workspace_dir": str(workspace_dir),
+                "workspace_dir": str(workspace),
             }
 
         result = self._read_result(result_path)
@@ -153,7 +151,7 @@ class BlenderAdapter:
             for path in result.get("artifact_paths", [])
             if isinstance(path, str) and path
         ]
-        return {
+        output: dict[str, Any] = {
             "ok": ok,
             "mcp_server": "blender_mcp",
             "transport": "stdio",
@@ -161,7 +159,7 @@ class BlenderAdapter:
             "software": step.software.value,
             "message": message,
             "input": step.input_json,
-            "workspace_dir": str(workspace_dir),
+            "workspace_dir": str(workspace),
             "blend_path": result.get("blend_path") or str(blend_path),
             "artifact_paths": artifact_paths,
             "returncode": completed.returncode,
@@ -169,6 +167,13 @@ class BlenderAdapter:
             "stderr_tail": _tail(completed.stderr or ""),
             "result": result,
         }
+        if not ok:
+            output["error_code"] = result.get("error_code") or "blender.runner_failed"
+            output["retryable"] = bool(result.get("retryable", False))
+            output["safe_to_retry_after_snapshot_restore"] = bool(
+                result.get("safe_to_retry_after_snapshot_restore", True)
+            )
+        return output
 
     def _resolve_executable(self) -> Path | None:
         configured = (self._configured_executable or "").strip()
@@ -180,14 +185,6 @@ class BlenderAdapter:
             return Path(found) if found else None
         found = shutil.which("blender") or shutil.which("blender.exe")
         return Path(found) if found else None
-
-    def _workspace_dir(self, *, plan_id: str | None, project_id: str | None) -> Path:
-        return (
-            settings.modeling_dir
-            / "workspaces"
-            / _safe_segment(project_id, "project_general")
-            / _safe_segment(plan_id, "ad_hoc")
-        )
 
     @staticmethod
     def _read_result(result_path: Path) -> dict[str, Any]:

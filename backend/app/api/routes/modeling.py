@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.core.contracts import (
     ModelingApprovalRequest,
@@ -12,6 +12,8 @@ from app.core.contracts import (
     ModelingSessionStart,
     ModelingSnapshot,
     ModelingSnapshotCreate,
+    ModelingSnapshotRestore,
+    ModelingToolCall,
 )
 from app.modeling.service import get_modeling_service
 from app.storage.store import get_store
@@ -111,3 +113,35 @@ def list_snapshots() -> list[ModelingSnapshot]:
 @router.post("/snapshots", response_model=ModelingSnapshot)
 def create_snapshot(payload: ModelingSnapshotCreate) -> ModelingSnapshot:
     return _service().create_snapshot(payload)
+
+
+@router.get("/snapshots/{snapshot_id}", response_model=ModelingSnapshot)
+def get_snapshot(snapshot_id: str) -> ModelingSnapshot:
+    store = get_store()
+    if not hasattr(store, "get_modeling_snapshot"):
+        raise HTTPException(status_code=501, detail="Snapshot 3D não suportado neste backend.")
+    snapshot = store.get_modeling_snapshot(snapshot_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Snapshot 3D não encontrado.")
+    return snapshot
+
+
+@router.post("/snapshots/{snapshot_id}/restore", response_model=ModelingSnapshot)
+def restore_snapshot(
+    snapshot_id: str, payload: ModelingSnapshotRestore | None = None
+) -> ModelingSnapshot:
+    try:
+        return _service().restore_snapshot(snapshot_id, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Snapshot 3D não encontrado.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/tool-calls", response_model=list[ModelingToolCall])
+def list_tool_calls(
+    plan_id: str | None = Query(default=None),
+    step_id: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> list[ModelingToolCall]:
+    return _service().list_tool_calls(plan_id=plan_id, step_id=step_id, limit=limit)

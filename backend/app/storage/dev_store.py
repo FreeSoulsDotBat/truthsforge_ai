@@ -36,9 +36,12 @@ from app.core.contracts import (
     KnowledgeCategoryUpdate,
     ModelCapability,
     ModelConfig,
+    ModelingModelVersion,
     ModelingPlan,
+    ModelingPrintabilityReport,
     ModelingSession,
     ModelingSnapshot,
+    ModelingToolCall,
     ModelUpsert,
     PermissionMode,
     PermissionPolicy,
@@ -253,6 +256,9 @@ def default_seed_data() -> dict[str, Any]:
         "modeling_sessions": [],
         "modeling_plans": [],
         "modeling_snapshots": [],
+        "modeling_tool_calls": [],
+        "modeling_printability_reports": [],
+        "modeling_model_versions": [],
         "audit_events": [],
         "cost_policy": _dump_model(cost_policy),
     }
@@ -362,6 +368,9 @@ class DevStore:
         self._ensure_key("modeling_sessions", [])
         self._ensure_key("modeling_plans", [])
         self._ensure_key("modeling_snapshots", [])
+        self._ensure_key("modeling_tool_calls", [])
+        self._ensure_key("modeling_printability_reports", [])
+        self._ensure_key("modeling_model_versions", [])
 
         changed = False
         general_project = self._general_project()
@@ -1388,6 +1397,87 @@ class DevStore:
                 self._data["modeling_snapshots"].append(payload)
             self._write()
             return snapshot
+
+    def get_modeling_snapshot(self, snapshot_id: str) -> ModelingSnapshot | None:
+        self._ensure_key("modeling_snapshots", [])
+        return next(
+            (
+                ModelingSnapshot(**item)
+                for item in self._data["modeling_snapshots"]
+                if item["id"] == snapshot_id
+            ),
+            None,
+        )
+
+    def list_modeling_tool_calls(
+        self,
+        *,
+        plan_id: str | None = None,
+        step_id: str | None = None,
+        limit: int = 200,
+    ) -> list[ModelingToolCall]:
+        self._ensure_key("modeling_tool_calls", [])
+        records = sorted(
+            self._list("modeling_tool_calls", ModelingToolCall),
+            key=lambda item: item.created_at,
+            reverse=True,
+        )
+        if plan_id:
+            records = [item for item in records if item.plan_id == plan_id]
+        if step_id:
+            records = [item for item in records if item.step_id == step_id]
+        return records[:limit]
+
+    def add_modeling_tool_call(self, record: ModelingToolCall) -> ModelingToolCall:
+        with self._lock:
+            self._ensure_key("modeling_tool_calls", [])
+            self._data["modeling_tool_calls"].append(_dump_model(record))
+            self._write()
+            return record
+
+    def list_modeling_printability_reports(
+        self, *, plan_id: str | None = None, file_id: str | None = None
+    ) -> list[ModelingPrintabilityReport]:
+        self._ensure_key("modeling_printability_reports", [])
+        reports = sorted(
+            self._list("modeling_printability_reports", ModelingPrintabilityReport),
+            key=lambda item: item.created_at,
+            reverse=True,
+        )
+        if plan_id:
+            reports = [item for item in reports if item.plan_id == plan_id]
+        if file_id:
+            reports = [item for item in reports if item.file_id == file_id]
+        return reports
+
+    def add_modeling_printability_report(
+        self, report: ModelingPrintabilityReport
+    ) -> ModelingPrintabilityReport:
+        with self._lock:
+            self._ensure_key("modeling_printability_reports", [])
+            self._data["modeling_printability_reports"].append(_dump_model(report))
+            self._write()
+            return report
+
+    def list_modeling_model_versions(
+        self, *, project_id: str | None = None
+    ) -> list[ModelingModelVersion]:
+        self._ensure_key("modeling_model_versions", [])
+        versions = sorted(
+            self._list("modeling_model_versions", ModelingModelVersion),
+            key=lambda item: item.created_at,
+            reverse=True,
+        )
+        if project_id:
+            versions = [item for item in versions if item.project_id == project_id]
+        return versions
+
+    def add_modeling_model_version(self, version: ModelingModelVersion) -> ModelingModelVersion:
+        with self._lock:
+            self._ensure_key("modeling_model_versions", [])
+            self._data["modeling_model_versions"].append(_dump_model(version))
+            self._write()
+            return version
 
     def list_import_jobs(self) -> list[ChatGPTImportJob]:
         self._ensure_key("import_jobs", [])

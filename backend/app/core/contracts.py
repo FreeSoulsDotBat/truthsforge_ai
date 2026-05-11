@@ -706,21 +706,112 @@ class ModelingApprovalRequest(BaseModel):
     reason: str = ""
 
 
+class ModelingSnapshotFile(BaseModel):
+    relative_path: str
+    sha256: str
+    size_bytes: int = 0
+
+
 class ModelingSnapshot(BaseModel):
     id: str = Field(default_factory=lambda: new_id("m3d_snapshot"))
     project_id: str | None = None
     plan_id: str | None = None
+    step_id: str | None = None
+    parent_snapshot_id: str | None = None
     label: str
     reason: str = ""
+    workspace_path: str | None = None
+    storage_path: str | None = None
+    files: list[ModelingSnapshotFile] = Field(default_factory=list)
     manifest: dict[str, Any] = Field(default_factory=dict)
+    restored_at: datetime | None = None
     created_at: datetime = Field(default_factory=now_utc)
 
 
 class ModelingSnapshotCreate(BaseModel):
     project_id: str | None = None
     plan_id: str | None = None
+    step_id: str | None = None
+    parent_snapshot_id: str | None = None
     label: str = "Snapshot 3D"
     reason: str = ""
+
+
+class ModelingSnapshotRestore(BaseModel):
+    reason: str = ""
+
+
+class ModelingToolCallStatus(StrEnum):
+    ok = "ok"
+    error = "error"
+    blocked = "blocked"
+
+
+class ModelingToolCall(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("m3d_toolcall"))
+    plan_id: str
+    step_id: str
+    seq: int = 0
+    mcp_server: str
+    tool_name: str
+    software: ModelingSoftware
+    transport: Literal["stdio", "http", "mock"] = "mock"
+    status: ModelingToolCallStatus = ModelingToolCallStatus.ok
+    request_json: dict[str, Any] = Field(default_factory=dict)
+    response_json: dict[str, Any] = Field(default_factory=dict)
+    error_code: str | None = None
+    error_message: str | None = None
+    retryable: bool = False
+    safe_to_retry_after_snapshot_restore: bool = False
+    duration_ms: int | None = None
+    artifact_paths: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=now_utc)
+
+
+class ModelingPrintabilityIssue(BaseModel):
+    check: str
+    severity: Literal["info", "warning", "error"] = "info"
+    message: str = ""
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelingPrintabilityReport(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("m3d_print_report"))
+    project_id: str | None = None
+    plan_id: str | None = None
+    step_id: str | None = None
+    file_id: str | None = None
+    checks_executed: list[str] = Field(default_factory=list)
+    issues: list[ModelingPrintabilityIssue] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    risk_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    summary: str = ""
+    report_json: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=now_utc)
+
+
+class ModelingModelVersion(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("m3d_version"))
+    project_id: str | None = None
+    plan_id: str | None = None
+    step_id: str | None = None
+    parent_version_id: str | None = None
+    software: ModelingSoftware
+    source_file_id: str | None = None
+    snapshot_id: str | None = None
+    label: str
+    notes: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=now_utc)
+
+
+class ModelingErrorEnvelope(BaseModel):
+    status: Literal["error"] = "error"
+    error_code: str
+    message: str
+    retryable: bool = False
+    safe_to_retry_after_snapshot_restore: bool = False
+    host_details: dict[str, Any] = Field(default_factory=dict)
 
 
 class ModelingExecutionResult(BaseModel):
@@ -728,6 +819,7 @@ class ModelingExecutionResult(BaseModel):
     executed_step_ids: list[str] = Field(default_factory=list)
     blocked_step_ids: list[str] = Field(default_factory=list)
     events: list[str] = Field(default_factory=list)
+    tool_call_ids: list[str] = Field(default_factory=list)
 
 
 class Document(BaseModel):

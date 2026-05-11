@@ -36,9 +36,12 @@ from app.core.contracts import (
     KnowledgeCategoryCreate,
     KnowledgeCategoryUpdate,
     ModelConfig,
+    ModelingModelVersion,
     ModelingPlan,
+    ModelingPrintabilityReport,
     ModelingSession,
     ModelingSnapshot,
+    ModelingToolCall,
     ModelUpsert,
     PermissionPolicy,
     PlatformFile,
@@ -228,6 +231,43 @@ class PostgresStore:
               payload JSONB NOT NULL,
               created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS modeling_tool_calls (
+              id TEXT PRIMARY KEY,
+              payload JSONB NOT NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_modeling_tool_calls_plan
+            ON modeling_tool_calls ((payload->>'plan_id'))
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_modeling_tool_calls_step
+            ON modeling_tool_calls ((payload->>'step_id'))
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS modeling_printability_reports (
+              id TEXT PRIMARY KEY,
+              payload JSONB NOT NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_modeling_print_reports_plan
+            ON modeling_printability_reports ((payload->>'plan_id'))
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS modeling_model_versions (
+              id TEXT PRIMARY KEY,
+              payload JSONB NOT NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_modeling_versions_project
+            ON modeling_model_versions ((payload->>'project_id'))
             """,
             """
             CREATE TABLE IF NOT EXISTS cost_policy (
@@ -1345,6 +1385,112 @@ class PostgresStore:
             "modeling_snapshots", _dump_model(snapshot), timestamp_column="created_at"
         )
         return snapshot
+
+    def get_modeling_snapshot(self, snapshot_id: str) -> ModelingSnapshot | None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT payload FROM modeling_snapshots WHERE id = %s", (snapshot_id,))
+                row = cur.fetchone()
+        return ModelingSnapshot(**row["payload"]) if row else None
+
+    def list_modeling_tool_calls(
+        self,
+        *,
+        plan_id: str | None = None,
+        step_id: str | None = None,
+        limit: int = 200,
+    ) -> list[ModelingToolCall]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if plan_id:
+            clauses.append("payload->>'plan_id' = %s")
+            params.append(plan_id)
+        if step_id:
+            clauses.append("payload->>'step_id' = %s")
+            params.append(step_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT payload FROM modeling_tool_calls
+                    {where}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                return [ModelingToolCall(**row["payload"]) for row in cur.fetchall()]
+
+    def add_modeling_tool_call(self, record: ModelingToolCall) -> ModelingToolCall:
+        self._upsert_payload(
+            "modeling_tool_calls", _dump_model(record), timestamp_column="created_at"
+        )
+        return record
+
+    def list_modeling_printability_reports(
+        self, *, plan_id: str | None = None, file_id: str | None = None
+    ) -> list[ModelingPrintabilityReport]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if plan_id:
+            clauses.append("payload->>'plan_id' = %s")
+            params.append(plan_id)
+        if file_id:
+            clauses.append("payload->>'file_id' = %s")
+            params.append(file_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT payload FROM modeling_printability_reports
+                    {where}
+                    ORDER BY created_at DESC
+                    """,
+                    tuple(params),
+                )
+                return [ModelingPrintabilityReport(**row["payload"]) for row in cur.fetchall()]
+
+    def add_modeling_printability_report(
+        self, report: ModelingPrintabilityReport
+    ) -> ModelingPrintabilityReport:
+        self._upsert_payload(
+            "modeling_printability_reports",
+            _dump_model(report),
+            timestamp_column="created_at",
+        )
+        return report
+
+    def list_modeling_model_versions(
+        self, *, project_id: str | None = None
+    ) -> list[ModelingModelVersion]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if project_id:
+            clauses.append("payload->>'project_id' = %s")
+            params.append(project_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT payload FROM modeling_model_versions
+                    {where}
+                    ORDER BY created_at DESC
+                    """,
+                    tuple(params),
+                )
+                return [ModelingModelVersion(**row["payload"]) for row in cur.fetchall()]
+
+    def add_modeling_model_version(self, version: ModelingModelVersion) -> ModelingModelVersion:
+        self._upsert_payload(
+            "modeling_model_versions",
+            _dump_model(version),
+            timestamp_column="created_at",
+        )
+        return version
 
     def list_import_jobs(self) -> list[ChatGPTImportJob]:
         return self._list("import_jobs", ChatGPTImportJob)
