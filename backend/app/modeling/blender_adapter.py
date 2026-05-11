@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
-from app.core.contracts import ModelingPlanStep
+from app.core.contracts import ModelingErrorEnvelope, ModelingPlanStep
 from app.modeling.workspace import safe_segment, workspace_dir
 
 BLENDER_TOOLS = [
@@ -126,38 +126,61 @@ class BlenderAdapter:
                 timeout=self.timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
-            return {
-                "ok": False,
-                "mcp_server": "blender_mcp",
-                "transport": "stdio",
-                "tool_name": step.tool_name,
-                "software": step.software.value,
-                "message": "Execução do Blender excedeu o timeout configurado.",
-                "error": str(exc),
-                "error_code": "blender.timeout",
-                "retryable": True,
-                "safe_to_retry_after_snapshot_restore": True,
-                "input": step.input_json,
-                "workspace_dir": str(workspace),
-            }
+            envelope = ModelingErrorEnvelope(
+                error_code="blender.timeout",
+                message="Execução do Blender excedeu o timeout configurado.",
+                retryable=True,
+                safe_to_retry_after_snapshot_restore=True,
+                host_details={
+                    "software": step.software.value,
+                    "workspace_dir": str(workspace),
+                    "timeout_seconds": self.timeout_seconds,
+                    "error": str(exc),
+                },
+            )
+            return self._envelope_output(step, envelope, workspace=workspace)
 
         result = self._read_result(result_path)
         ok = bool(result.get("ok")) and completed.returncode == 0
-        message = result.get("message") or (
-            "Etapa Blender executada." if ok else "Blender retornou erro na etapa."
-        )
         artifact_paths = [
             str(Path(path))
             for path in result.get("artifact_paths", [])
             if isinstance(path, str) and path
         ]
-        output: dict[str, Any] = {
-            "ok": ok,
+        if not ok:
+            envelope = ModelingErrorEnvelope(
+                error_code=str(result.get("error_code") or "blender.runner_failed"),
+                message=str(result.get("message") or "Blender retornou erro na etapa."),
+                retryable=bool(result.get("retryable", False)),
+                safe_to_retry_after_snapshot_restore=bool(
+                    result.get("safe_to_retry_after_snapshot_restore", True)
+                ),
+                host_details={
+                    "software": step.software.value,
+                    "workspace_dir": str(workspace),
+                    "returncode": completed.returncode,
+                    "stdout_tail": _tail(completed.stdout or ""),
+                    "stderr_tail": _tail(completed.stderr or ""),
+                },
+            )
+            return self._envelope_output(
+                step,
+                envelope,
+                workspace=workspace,
+                extra={
+                    "input": step.input_json,
+                    "blend_path": result.get("blend_path") or str(blend_path),
+                    "artifact_paths": artifact_paths,
+                    "result": result,
+                },
+            )
+        return {
+            "ok": True,
             "mcp_server": "blender_mcp",
             "transport": "stdio",
             "tool_name": step.tool_name,
             "software": step.software.value,
-            "message": message,
+            "message": result.get("message") or "Etapa Blender executada.",
             "input": step.input_json,
             "workspace_dir": str(workspace),
             "blend_path": result.get("blend_path") or str(blend_path),
@@ -167,13 +190,27 @@ class BlenderAdapter:
             "stderr_tail": _tail(completed.stderr or ""),
             "result": result,
         }
-        if not ok:
-            output["error_code"] = result.get("error_code") or "blender.runner_failed"
-            output["retryable"] = bool(result.get("retryable", False))
-            output["safe_to_retry_after_snapshot_restore"] = bool(
-                result.get("safe_to_retry_after_snapshot_restore", True)
-            )
-        return output
+
+    @staticmethod
+    def _envelope_output(
+        step: ModelingPlanStep,
+        envelope: ModelingErrorEnvelope,
+        *,
+        workspace: Path,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        base: dict[str, Any] = {
+            "ok": False,
+            "mcp_server": "blender_mcp",
+            "transport": "stdio",
+            "tool_name": step.tool_name,
+            "software": step.software.value,
+            "input": step.input_json,
+            "workspace_dir": str(workspace),
+        }
+        if extra:
+            base.update(extra)
+        return {**base, **envelope.model_dump(), "message": envelope.message}
 
     def _resolve_executable(self) -> Path | None:
         configured = (self._configured_executable or "").strip()

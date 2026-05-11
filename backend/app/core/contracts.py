@@ -613,7 +613,7 @@ class ProjectFolderDeleteResult(BaseModel):
 class ModelingCapability(BaseModel):
     software: ModelingSoftware
     connected: bool = False
-    transport: Literal["stdio", "http", "mock"] = "mock"
+    transport: Literal["stdio", "http", "mock", "local"] = "mock"
     tools: list[str] = Field(default_factory=list)
     status: str = "adapter_mock"
     detail: str = ""
@@ -739,6 +739,7 @@ class ModelingSnapshotCreate(BaseModel):
 
 class ModelingSnapshotRestore(BaseModel):
     reason: str = ""
+    force: bool = False
 
 
 class ModelingToolCallStatus(StrEnum):
@@ -755,7 +756,7 @@ class ModelingToolCall(BaseModel):
     mcp_server: str
     tool_name: str
     software: ModelingSoftware
-    transport: Literal["stdio", "http", "mock"] = "mock"
+    transport: Literal["stdio", "http", "mock", "local"] = "mock"
     status: ModelingToolCallStatus = ModelingToolCallStatus.ok
     request_json: dict[str, Any] = Field(default_factory=dict)
     response_json: dict[str, Any] = Field(default_factory=dict)
@@ -812,6 +813,12 @@ class ModelingErrorEnvelope(BaseModel):
     retryable: bool = False
     safe_to_retry_after_snapshot_restore: bool = False
     host_details: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelingSnapshotRestoreResult(BaseModel):
+    snapshot: ModelingSnapshot
+    auto_snapshot: ModelingSnapshot | None = None
+    restored_file_count: int = 0
 
 
 class ModelingExecutionResult(BaseModel):

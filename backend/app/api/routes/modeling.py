@@ -13,6 +13,7 @@ from app.core.contracts import (
     ModelingSnapshot,
     ModelingSnapshotCreate,
     ModelingSnapshotRestore,
+    ModelingSnapshotRestoreResult,
     ModelingToolCall,
 )
 from app.modeling.service import get_modeling_service
@@ -126,10 +127,10 @@ def get_snapshot(snapshot_id: str) -> ModelingSnapshot:
     return snapshot
 
 
-@router.post("/snapshots/{snapshot_id}/restore", response_model=ModelingSnapshot)
+@router.post("/snapshots/{snapshot_id}/restore", response_model=ModelingSnapshotRestoreResult)
 def restore_snapshot(
     snapshot_id: str, payload: ModelingSnapshotRestore | None = None
-) -> ModelingSnapshot:
+) -> ModelingSnapshotRestoreResult:
     try:
         return _service().restore_snapshot(snapshot_id, payload)
     except KeyError as exc:

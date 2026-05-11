@@ -12,6 +12,7 @@ from app.core.contracts import (
     ModelingApprovalRequest,
     ModelingCapabilities,
     ModelingCapability,
+    ModelingErrorEnvelope,
     ModelingExecutionResult,
     ModelingPlan,
     ModelingPlanCreate,
@@ -23,6 +24,7 @@ from app.core.contracts import (
     ModelingSnapshotCreate,
     ModelingSnapshotFile,
     ModelingSnapshotRestore,
+    ModelingSnapshotRestoreResult,
     ModelingStepStatus,
     ModelingToolCall,
     ModelingToolCallStatus,
@@ -50,6 +52,43 @@ ARTIFACT_CONTENT_TYPES = {
     ".obj": "model/obj",
     ".stl": "model/stl",
 }
+
+
+def _envelope_into_output(
+    envelope: ModelingErrorEnvelope, *, base: dict[str, Any]
+) -> dict[str, Any]:
+    """Spread a typed error envelope into a tool output dict.
+
+    Keeps a single source of truth for error fields (``error_code``,
+    ``retryable``, ``safe_to_retry_after_snapshot_restore``, ``host_details``)
+    while still returning a serializable dict to fit the existing dict-based
+    tool call contract.
+    """
+    return {**base, **envelope.model_dump(), "message": envelope.message}
+
+
+def _envelope_from_output(output: dict[str, Any]) -> ModelingErrorEnvelope | None:
+    """Reconstruct an envelope from a tool output dict, if one is present.
+
+    Returns ``None`` when the output does not carry the typed envelope fields.
+    """
+    error_code = output.get("error_code")
+    if not error_code:
+        return None
+    try:
+        return ModelingErrorEnvelope(
+            error_code=str(error_code),
+            message=str(output.get("message") or output.get("error") or ""),
+            retryable=bool(output.get("retryable", False)),
+            safe_to_retry_after_snapshot_restore=bool(
+                output.get("safe_to_retry_after_snapshot_restore", False)
+            ),
+            host_details=(
+                output["host_details"] if isinstance(output.get("host_details"), dict) else {}
+            ),
+        )
+    except Exception:  # pragma: no cover - defensive against malformed output
+        return None
 
 
 class ModelingService:
@@ -203,11 +242,7 @@ class ModelingService:
                 continue
 
             started_at = time.perf_counter()
-            output = self.mcp_client.execute_step(
-                step,
-                plan_id=plan.id,
-                project_id=plan.project_id,
-            )
+            output = self._dispatch_step(step, plan=plan)
             duration_ms = int((time.perf_counter() - started_at) * 1000)
             output = self._register_generated_artifacts(output, plan=plan, step=step)
 
@@ -343,10 +378,13 @@ class ModelingService:
         return snapshot
 
     def restore_snapshot(
-        self, snapshot_id: str, payload: ModelingSnapshotRestore | None = None
-    ) -> ModelingSnapshot:
+        self,
+        snapshot_id: str,
+        payload: ModelingSnapshotRestore | None = None,
+    ) -> ModelingSnapshotRestoreResult:
         if not hasattr(self.store, "get_modeling_snapshot"):
             raise RuntimeError("Backend store não implementa get_modeling_snapshot.")
+        request = payload or ModelingSnapshotRestore()
         snapshot = self.store.get_modeling_snapshot(snapshot_id)
         if snapshot is None:
             raise KeyError(snapshot_id)
@@ -362,6 +400,20 @@ class ModelingService:
         if not is_inside(storage, modeling_root) or not is_inside(workspace, modeling_root):
             raise ValueError("Snapshot fora do diretório de modelagem; restauração bloqueada.")
 
+        auto_snapshot: ModelingSnapshot | None = None
+        if not request.force and workspace.is_dir() and any(workspace.iterdir()):
+            auto_snapshot = self.create_snapshot(
+                ModelingSnapshotCreate(
+                    project_id=snapshot.project_id,
+                    plan_id=snapshot.plan_id,
+                    parent_snapshot_id=snapshot.id,
+                    label=f"auto: pré-restore de {snapshot.id}",
+                    reason=(
+                        request.reason or f"Backup automático antes de restaurar {snapshot.id}."
+                    ),
+                )
+            )
+
         files_dir = storage / "files"
         restored_paths = restore_from_snapshot(files_dir, workspace)
         timestamp = now_utc()
@@ -375,11 +427,17 @@ class ModelingService:
                     "plan_id": updated.plan_id,
                     "step_id": updated.step_id,
                     "file_count": len(restored_paths),
-                    "reason": (payload.reason if payload else ""),
+                    "reason": request.reason,
+                    "force": request.force,
+                    "auto_snapshot_id": auto_snapshot.id if auto_snapshot else None,
                 },
             ),
         )
-        return updated
+        return ModelingSnapshotRestoreResult(
+            snapshot=updated,
+            auto_snapshot=auto_snapshot,
+            restored_file_count=len(restored_paths),
+        )
 
     def list_tool_calls(
         self,
@@ -391,6 +449,66 @@ class ModelingService:
         if not hasattr(self.store, "list_modeling_tool_calls"):
             return []
         return self.store.list_modeling_tool_calls(plan_id=plan_id, step_id=step_id, limit=limit)
+
+    def _dispatch_step(self, step: ModelingPlanStep, *, plan: ModelingPlan) -> dict[str, Any]:
+        """Route a step to the right local handler.
+
+        ``project_store.*`` tools are handled inline by the service because the
+        project store lives in the same process. Everything else goes through
+        the MCP client boundary, which delegates to the adapter or falls back
+        to mock.
+        """
+        if step.tool_name == "project_store.create_snapshot":
+            return self._run_project_store_snapshot(step, plan=plan)
+        return self.mcp_client.execute_step(
+            step,
+            plan_id=plan.id,
+            project_id=plan.project_id,
+        )
+
+    def _run_project_store_snapshot(
+        self, step: ModelingPlanStep, *, plan: ModelingPlan
+    ) -> dict[str, Any]:
+        try:
+            snapshot = self.create_snapshot(
+                ModelingSnapshotCreate(
+                    project_id=plan.project_id,
+                    plan_id=plan.id,
+                    step_id=step.id,
+                    label=str(step.input_json.get("label") or f"Plan {plan.id} step {step.seq}"),
+                    reason=str(step.input_json.get("reason") or "before_modeling"),
+                )
+            )
+        except Exception as exc:  # pragma: no cover - safety net
+            envelope = ModelingErrorEnvelope(
+                error_code="project_store.snapshot_failed",
+                message=f"Falha ao criar snapshot: {exc}",
+                retryable=False,
+                safe_to_retry_after_snapshot_restore=False,
+                host_details={"plan_id": plan.id, "step_id": step.id},
+            )
+            return _envelope_into_output(
+                envelope,
+                base={
+                    "ok": False,
+                    "mcp_server": "project_store_mcp",
+                    "transport": "local",
+                    "tool_name": step.tool_name,
+                    "software": step.software.value,
+                    "input": step.input_json,
+                },
+            )
+        return {
+            "ok": True,
+            "mcp_server": "project_store_mcp",
+            "transport": "local",
+            "tool_name": step.tool_name,
+            "software": step.software.value,
+            "message": f"Snapshot {snapshot.id} criado ({len(snapshot.files)} arquivo(s)).",
+            "input": step.input_json,
+            "snapshot_id": snapshot.id,
+            "artifact_paths": [],
+        }
 
     def _record_tool_call(
         self,
@@ -407,6 +525,7 @@ class ModelingService:
         artifact_paths = [
             value for value in output.get("artifact_paths", []) if isinstance(value, str) and value
         ]
+        envelope = _envelope_from_output(output) if not ok else None
         record = ModelingToolCall(
             plan_id=plan.id,
             step_id=step.id,
@@ -418,16 +537,12 @@ class ModelingService:
             status=status,
             request_json=step.input_json,
             response_json=output,
-            error_code=output.get("error_code") if not ok else None,
-            error_message=(
-                str(output.get("message") or output.get("error") or "") if not ok else None
+            error_code=envelope.error_code if envelope else None,
+            error_message=envelope.message if envelope else None,
+            retryable=envelope.retryable if envelope else False,
+            safe_to_retry_after_snapshot_restore=(
+                envelope.safe_to_retry_after_snapshot_restore if envelope else False
             ),
-            retryable=bool(output.get("retryable", False)) if not ok else False,
-            safe_to_retry_after_snapshot_restore=bool(
-                output.get("safe_to_retry_after_snapshot_restore", False)
-            )
-            if not ok
-            else False,
             duration_ms=duration_ms,
             artifact_paths=artifact_paths,
         )

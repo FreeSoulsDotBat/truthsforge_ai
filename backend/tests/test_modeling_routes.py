@@ -54,10 +54,12 @@ def test_modeling_plan_requires_approval_and_can_execute_after_approval() -> Non
     execution_payload = executed.json()
     assert execution_payload["plan"]["status"] == "completed"
     assert len(execution_payload["executed_step_ids"]) == len(plan["steps"])
-    assert all(
-        step["output_json"].get("transport") == "mock"
-        for step in execution_payload["plan"]["steps"]
-    )
+    for step in execution_payload["plan"]["steps"]:
+        if step["tool_name"] == "project_store.create_snapshot":
+            assert step["output_json"]["transport"] == "local"
+            assert step["output_json"]["snapshot_id"].startswith("m3d_snapshot_")
+        else:
+            assert step["output_json"]["transport"] == "mock"
 
 
 def test_blender_plan_uses_mcp_boundary_without_desktop_adapter(monkeypatch) -> None:
@@ -155,9 +157,75 @@ def test_modeling_snapshot_copies_and_restores_workspace_files(monkeypatch, tmp_
         json={"reason": "rollback teste"},
     )
     assert restored.status_code == 200
-    assert restored.json()["restored_at"]
+    payload = restored.json()
+    assert payload["snapshot"]["restored_at"]
+    assert payload["restored_file_count"] >= 2
+    auto = payload["auto_snapshot"]
+    assert auto is not None, "Auto-snapshot pré-restore deve ser criado por padrão."
+    assert auto["label"].startswith("auto: pré-restore")
+    assert auto["parent_snapshot_id"] == snapshot["id"]
+    # The auto-snapshot captured the mutated workspace state so we can undo
+    # the undo if needed.
+    auto_blend_capture = next(
+        item for item in auto["files"] if item["relative_path"] == "workspace.blend"
+    )
+    assert auto_blend_capture["size_bytes"] == len(b"mutated-blend-bytes")
     assert blend_path.read_bytes() == b"original-blend-bytes"
     assert stl_path.read_bytes() == b"solid mesh original"
+
+
+def test_modeling_snapshot_restore_force_skips_auto_snapshot(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    project_id = "prj_snap_force"
+    plan_id = "m3d_plan_snap_force"
+    workspace = workspace_dir(project_id, plan_id)
+    workspace.mkdir(parents=True, exist_ok=True)
+    blend_path = workspace / "workspace.blend"
+    blend_path.write_bytes(b"original")
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/3d/snapshots",
+        json={"project_id": project_id, "plan_id": plan_id, "label": "snap"},
+    )
+    snapshot = created.json()
+    blend_path.write_bytes(b"mutated")
+
+    restored = client.post(
+        f"/api/3d/snapshots/{snapshot['id']}/restore",
+        json={"force": True, "reason": "ignorar auto-snapshot"},
+    )
+    assert restored.status_code == 200
+    body = restored.json()
+    assert body["auto_snapshot"] is None
+    assert blend_path.read_bytes() == b"original"
+
+
+def test_modeling_snapshot_restore_rejects_path_outside_modeling_dir(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    project_id = "prj_snap_escape"
+    plan_id = "m3d_plan_snap_escape"
+    workspace = workspace_dir(project_id, plan_id)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "workspace.blend").write_bytes(b"x")
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/3d/snapshots",
+        json={"project_id": project_id, "plan_id": plan_id, "label": "snap"},
+    )
+    snapshot_id = created.json()["id"]
+
+    from app.storage.store import get_store
+
+    store = get_store()
+    persisted = store.get_modeling_snapshot(snapshot_id)
+    # Tamper the stored workspace_path to point outside the modeling jail.
+    tampered = persisted.model_copy(update={"workspace_path": str(tmp_path / "elsewhere")})
+    store.upsert_modeling_snapshot(tampered)
+
+    rejected = client.post(f"/api/3d/snapshots/{snapshot_id}/restore", json={})
+    assert rejected.status_code == 400
 
 
 def test_modeling_tool_calls_persisted_during_execution() -> None:
