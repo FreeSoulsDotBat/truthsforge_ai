@@ -791,6 +791,31 @@ class ModelingPrintabilityReport(BaseModel):
     created_at: datetime = Field(default_factory=now_utc)
 
 
+PRINTABILITY_CHECK_DEFAULTS = (
+    "bounding_box",
+    "volume",
+    "normals",
+    "non_manifold",
+    "loose_parts",
+    "thickness_approx",
+    "overhang_approx",
+)
+
+
+class ModelingPrintabilityRequest(BaseModel):
+    project_id: str | None = None
+    plan_id: str | None = None
+    step_id: str | None = None
+    file_id: str | None = None
+    checks: list[str] = Field(default_factory=lambda: list(PRINTABILITY_CHECK_DEFAULTS))
+    printer_profile: str | None = None
+
+    @model_validator(mode="after")
+    def dedupe_checks(self) -> ModelingPrintabilityRequest:
+        self.checks = list(dict.fromkeys(self.checks))
+        return self
+
+
 class ModelingModelVersion(BaseModel):
     id: str = Field(default_factory=lambda: new_id("m3d_version"))
     project_id: str | None = None

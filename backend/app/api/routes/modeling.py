@@ -8,6 +8,8 @@ from app.core.contracts import (
     ModelingExecutionResult,
     ModelingPlan,
     ModelingPlanCreate,
+    ModelingPrintabilityReport,
+    ModelingPrintabilityRequest,
     ModelingSession,
     ModelingSessionStart,
     ModelingSnapshot,
@@ -146,3 +148,16 @@ def list_tool_calls(
     limit: int = Query(default=200, ge=1, le=1000),
 ) -> list[ModelingToolCall]:
     return _service().list_tool_calls(plan_id=plan_id, step_id=step_id, limit=limit)
+
+
+@router.post("/validate/printability", response_model=ModelingPrintabilityReport)
+def validate_printability(payload: ModelingPrintabilityRequest) -> ModelingPrintabilityReport:
+    return _service().run_printability(payload)
+
+
+@router.get("/printability-reports", response_model=list[ModelingPrintabilityReport])
+def list_printability_reports(
+    plan_id: str | None = Query(default=None),
+    file_id: str | None = Query(default=None),
+) -> list[ModelingPrintabilityReport]:
+    return _service().list_printability_reports(plan_id=plan_id, file_id=file_id)
