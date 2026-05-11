@@ -74,6 +74,22 @@ class LLMProvider(ABC):
             f"Deep Research não implementado para {self.provider.value}."
         )
 
+    async def generate_structured(
+        self,
+        model: ModelConfig,
+        messages: list[dict[str, str]],
+        schema_name: str,
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Single-shot call returning a JSON object that satisfies the schema.
+
+        Default implementation rejects the call. Providers must opt-in by
+        overriding this method.
+        """
+        raise ProviderConfigurationError(
+            f"Saída estruturada não implementada para {self.provider.value}."
+        )
+
 
 class DevLLMProvider(LLMProvider):
     provider = ProviderName.openai
@@ -89,6 +105,23 @@ class DevLLMProvider(LLMProvider):
             yield reasoning_summary_event("Resumo oficial indisponível no provider dev.")
         for token in f"JUDITE dev recebeu: {last_message}".split(" "):
             yield token_event(token + " ")
+
+    async def generate_structured(
+        self,
+        model: ModelConfig,
+        messages: list[dict[str, str]],
+        schema_name: str,
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return a marker dict so callers know to use their heuristic fallback.
+
+        We do not synthesize a fake plan here because that would mask real
+        failures during development. The contract is: dev provider declares
+        the call unavailable; the caller chooses the fallback strategy.
+        """
+        raise ProviderConfigurationError(
+            "Saída estruturada não disponível no provider dev; usando fallback heurístico."
+        )
 
 
 class BaseRemoteProvider(LLMProvider):
@@ -412,6 +445,65 @@ class OpenAIProvider(BaseRemoteProvider):
             raise self._provider_error(exc) from exc
         except httpx.RequestError as exc:
             raise ProviderExecutionError(f"Falha de rede ao chamar OpenAI: {exc}") from exc
+
+    async def generate_structured(
+        self,
+        model: ModelConfig,
+        messages: list[dict[str, str]],
+        schema_name: str,
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        api_key = self.api_key()
+        provider_model_id = self.provider_model_id(model)
+        payload: dict[str, Any] = {
+            "model": provider_model_id,
+            "input": [
+                {"role": message["role"], "content": message["content"]}
+                for message in messages
+                if message["role"] in {"system", "user", "assistant"}
+            ],
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": schema_name,
+                    "schema": schema,
+                    "strict": True,
+                }
+            },
+        }
+        if model.max_output_tokens:
+            payload["max_output_tokens"] = model.max_output_tokens
+        if model.temperature is not None:
+            payload["temperature"] = model.temperature
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/responses",
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise self._provider_error(exc) from exc
+        except httpx.RequestError as exc:
+            raise ProviderExecutionError(
+                f"Falha de rede ao gerar saída estruturada com OpenAI: {exc}"
+            ) from exc
+
+        text = self._extract_response_text(data)
+        if not text:
+            raise ProviderExecutionError("Resposta estruturada da OpenAI veio vazia.")
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ProviderExecutionError(
+                f"Resposta estruturada da OpenAI não é JSON válido: {exc}"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ProviderExecutionError("Saída estruturada precisa ser um objeto JSON na raiz.")
+        return parsed
 
     async def list_models(self) -> list[ProviderModel]:
         headers = {"Authorization": f"Bearer {self.api_key()}"}
