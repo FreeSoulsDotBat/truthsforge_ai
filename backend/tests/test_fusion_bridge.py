@@ -298,3 +298,123 @@ def test_local_mcp_client_routes_in_process_fusion_through_adapter(monkeypatch, 
 def _close_lingering_sockets():
     # Defensive: ensure tests don't leave loopback ports open across the suite.
     yield
+
+
+def test_adapter_host_override_via_env(monkeypatch, tmp_path) -> None:
+    discovery = _write_discovery(tmp_path, 65000, "tok")
+    monkeypatch.setenv("TRUTHS_FORGE_FUSION_BRIDGE_HOST", "host.docker.internal")
+    adapter = FusionDesktopAdapter(discovery_path=discovery)
+    parsed = adapter._read_discovery()  # type: ignore[attr-defined]
+    assert parsed is not None
+    assert parsed.host == "host.docker.internal"
+
+
+def test_adapter_host_override_via_constructor_takes_precedence(monkeypatch, tmp_path) -> None:
+    discovery = _write_discovery(tmp_path, 65000, "tok")
+    monkeypatch.setenv("TRUTHS_FORGE_FUSION_BRIDGE_HOST", "ignored.example.com")
+    adapter = FusionDesktopAdapter(discovery_path=discovery, host_override="explicit.host")
+    parsed = adapter._read_discovery()  # type: ignore[attr-defined]
+    assert parsed is not None
+    assert parsed.host == "explicit.host"
+
+
+def test_adapter_status_uses_cache_within_ttl(tmp_path) -> None:
+    probe_count = {"n": 0}
+
+    def status_handler(_params: dict[str, Any]) -> dict[str, Any]:
+        probe_count["n"] += 1
+        return {}
+
+    server, token, port = _spawn_fake_addin({"status": status_handler})
+    try:
+        discovery = _write_discovery(tmp_path, port, token)
+        adapter = FusionDesktopAdapter(
+            discovery_path=discovery,
+            timeout_seconds=2.0,
+            status_cache_seconds=10.0,
+        )
+        first = adapter.status()
+        second = adapter.status()
+        assert first.connected is True
+        assert second.connected is True
+        assert probe_count["n"] == 1
+        adapter.invalidate_status_cache()
+        adapter.status()
+        assert probe_count["n"] == 2
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_adapter_records_consecutive_failures_and_enters_backoff(tmp_path) -> None:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        dead_port = sock.getsockname()[1]
+    discovery = _write_discovery(tmp_path, dead_port, "tok")
+    adapter = FusionDesktopAdapter(
+        discovery_path=discovery,
+        timeout_seconds=0.5,
+        status_cache_seconds=0.0,
+    )
+    statuses = [adapter.status() for _ in range(adapter.BACKOFF_THRESHOLD)]
+    assert all(s.status == "adapter_offline" for s in statuses)
+    assert statuses[-1].consecutive_failures == adapter.BACKOFF_THRESHOLD
+    backoff_status = adapter.status()
+    assert backoff_status.status == "adapter_backoff"
+    assert backoff_status.consecutive_failures >= adapter.BACKOFF_THRESHOLD
+
+
+def test_adapter_recovers_after_addin_restart(tmp_path) -> None:
+    server, token, port = _spawn_fake_addin({"status": lambda _params: {}})
+    try:
+        discovery = _write_discovery(tmp_path, port, token)
+        adapter = FusionDesktopAdapter(
+            discovery_path=discovery,
+            timeout_seconds=2.0,
+            status_cache_seconds=0.0,
+        )
+        adapter._record_failure("simulated outage 1")  # type: ignore[attr-defined]
+        adapter._record_failure("simulated outage 2")  # type: ignore[attr-defined]
+        status = adapter.status()
+        assert status.connected is True
+        assert status.consecutive_failures == 0
+        assert status.last_error_at is None
+        assert status.last_error_message is None
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_adapter_execute_failure_invalidates_status_cache(tmp_path) -> None:
+    import time as _time
+
+    from app.modeling.fusion_adapter import FusionAdapterStatus
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        dead_port = sock.getsockname()[1]
+    discovery = _write_discovery(tmp_path, dead_port, "tok")
+    adapter = FusionDesktopAdapter(
+        discovery_path=discovery,
+        timeout_seconds=0.5,
+        status_cache_seconds=999.0,
+    )
+    # Forge a "stale connected" cached status so we can prove invalidate_status_cache
+    # really kicks in when execute() fails.
+    adapter._cached_status = FusionAdapterStatus(  # type: ignore[attr-defined]
+        connected=True,
+        transport="loopback",
+        status="available",
+        detail="forjado",
+        discovery_path=str(discovery),
+        addin_pid=999,
+    )
+    adapter._cached_status_expires_at = _time.monotonic() + 999  # type: ignore[attr-defined]
+
+    out = adapter.execute(_step())
+    assert out["ok"] is False
+    assert out["error_code"] == "fusion.bridge_error"
+
+    status = adapter.status()
+    assert status.connected is False
+    assert status.consecutive_failures >= 1

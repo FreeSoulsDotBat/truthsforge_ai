@@ -22,14 +22,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import socket
 import threading
+import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
-from app.core.contracts import ModelingPlanStep, ModelingSoftware
+from app.core.contracts import ModelingPlanStep, ModelingSoftware, now_utc
 from app.modeling.mcp_servers.protocol import (
     build_request,
     decode_message,
@@ -75,6 +78,10 @@ class FusionAdapterStatus:
     detail: str
     discovery_path: str | None = None
     addin_pid: int | None = None
+    consecutive_failures: int = 0
+    last_error_at: datetime | None = None
+    last_error_message: str | None = None
+    effective_host: str | None = None
 
 
 class FusionBridgeError(RuntimeError):
@@ -98,16 +105,34 @@ class FusionDesktopAdapter:
 
     tools = list(FUSION_TOOLS)
 
+    # When more than this many consecutive failures pile up the probe goes into
+    # cooldown — we still surface a fresh status to callers, but cached.
+    BACKOFF_THRESHOLD = 3
+    BACKOFF_SECONDS = 5.0
+    STATUS_CACHE_SECONDS = 2.0
+
     def __init__(
         self,
         discovery_path: Path | None = None,
         *,
         timeout_seconds: float = 30.0,
+        host_override: str | None = None,
+        status_cache_seconds: float | None = None,
     ) -> None:
         self._configured_discovery_path = discovery_path
         self.timeout_seconds = timeout_seconds
+        self._configured_host_override = host_override
+        self._status_cache_seconds = (
+            status_cache_seconds if status_cache_seconds is not None else self.STATUS_CACHE_SECONDS
+        )
         self._lock = threading.Lock()
         self._next_request_id = 0
+        # Health tracking — written only under _lock.
+        self._consecutive_failures = 0
+        self._last_error_at: datetime | None = None
+        self._last_error_message: str | None = None
+        self._cached_status: FusionAdapterStatus | None = None
+        self._cached_status_expires_at = 0.0
 
     # ----------------------------------------------------------- discovery
 
@@ -116,6 +141,19 @@ class FusionDesktopAdapter:
         if self._configured_discovery_path is not None:
             return self._configured_discovery_path
         return settings.state_dir / "fusion-bridge.json"
+
+    def _host_override(self) -> str | None:
+        """Pick the runtime host override.
+
+        Priority: constructor arg > env var. Returning ``None`` means "use the
+        host that the add-in wrote into the discovery file". Useful when the
+        backend runs inside a container and needs to redirect 127.0.0.1 to
+        ``host.docker.internal`` (or any other reachable host).
+        """
+        if self._configured_host_override is not None:
+            return self._configured_host_override
+        env_override = os.environ.get("TRUTHS_FORGE_FUSION_BRIDGE_HOST", "").strip()
+        return env_override or None
 
     def _read_discovery(self) -> FusionBridgeDiscovery | None:
         path = self.discovery_path
@@ -127,19 +165,56 @@ class FusionDesktopAdapter:
             return None
         if not isinstance(raw, dict):
             return None
-        host = str(raw.get("host") or "127.0.0.1")
+        host = self._host_override() or str(raw.get("host") or "127.0.0.1")
         port = int(raw.get("port") or 0)
         token = str(raw.get("token") or "")
         if not port or not token:
             return None
         return FusionBridgeDiscovery(host=host, port=port, token=token, pid=raw.get("pid"))
 
+    # ----------------------------------------------- health-check accounting
+
+    def _record_failure(self, message: str) -> None:
+        with self._lock:
+            self._consecutive_failures += 1
+            self._last_error_at = now_utc()
+            self._last_error_message = message
+
+    def _record_success(self) -> None:
+        with self._lock:
+            self._consecutive_failures = 0
+            self._last_error_at = None
+            self._last_error_message = None
+
+    def _in_backoff(self) -> bool:
+        with self._lock:
+            if self._consecutive_failures < self.BACKOFF_THRESHOLD:
+                return False
+            if self._last_error_at is None:
+                return False
+            elapsed = (now_utc() - self._last_error_at).total_seconds()
+            return elapsed < self.BACKOFF_SECONDS
+
+    def _snapshot_health(self) -> tuple[int, datetime | None, str | None]:
+        with self._lock:
+            return (
+                self._consecutive_failures,
+                self._last_error_at,
+                self._last_error_message,
+            )
+
     # -------------------------------------------------------------- status
 
     def status(self) -> FusionAdapterStatus:
+        now_monotonic = time.monotonic()
+        cached = self._cached_status
+        if cached is not None and now_monotonic < self._cached_status_expires_at:
+            return cached
+
         discovery = self._read_discovery()
         if discovery is None:
-            return FusionAdapterStatus(
+            failures, last_at, last_msg = self._snapshot_health()
+            status = FusionAdapterStatus(
                 connected=False,
                 transport="mock",
                 status="adapter_mock",
@@ -148,30 +223,79 @@ class FusionDesktopAdapter:
                     "Abra o Fusion e ative o add-in 'Truth's Forge' para conectar."
                 ),
                 discovery_path=str(self.discovery_path),
+                consecutive_failures=failures,
+                last_error_at=last_at,
+                last_error_message=last_msg,
+                effective_host=self._host_override(),
             )
+            self._cache_status(status, ttl_seconds=self._status_cache_seconds)
+            return status
+
+        if self._in_backoff():
+            failures, last_at, last_msg = self._snapshot_health()
+            status = FusionAdapterStatus(
+                connected=False,
+                transport="mock",
+                status="adapter_backoff",
+                detail=(
+                    f"Add-in falhou {failures} vez(es) em sequência; "
+                    f"probing em backoff por {self.BACKOFF_SECONDS:.0f}s."
+                ),
+                discovery_path=str(self.discovery_path),
+                addin_pid=discovery.pid,
+                consecutive_failures=failures,
+                last_error_at=last_at,
+                last_error_message=last_msg,
+                effective_host=discovery.host,
+            )
+            self._cache_status(status, ttl_seconds=self._status_cache_seconds)
+            return status
+
         try:
-            # Reuse the auth handshake as a liveness probe.
             self._call(discovery, PROTOCOL_STATUS, params=None)
         except FusionBridgeError as exc:
-            return FusionAdapterStatus(
+            self._record_failure(str(exc))
+            failures, last_at, last_msg = self._snapshot_health()
+            status = FusionAdapterStatus(
                 connected=False,
                 transport="mock",
                 status="adapter_offline",
                 detail=f"Add-in do Fusion 360 não respondeu: {exc}",
                 discovery_path=str(self.discovery_path),
                 addin_pid=discovery.pid,
+                consecutive_failures=failures,
+                last_error_at=last_at,
+                last_error_message=last_msg,
+                effective_host=discovery.host,
             )
-        return FusionAdapterStatus(
+            self._cache_status(status, ttl_seconds=self._status_cache_seconds)
+            return status
+
+        self._record_success()
+        status = FusionAdapterStatus(
             connected=True,
             transport="loopback",
             status="available",
             detail="Add-in do Fusion 360 conectado via loopback autenticado.",
             discovery_path=str(self.discovery_path),
             addin_pid=discovery.pid,
+            consecutive_failures=0,
+            effective_host=discovery.host,
         )
+        self._cache_status(status, ttl_seconds=self._status_cache_seconds)
+        return status
 
     def is_available(self) -> bool:
         return self.status().connected
+
+    def _cache_status(self, status: FusionAdapterStatus, *, ttl_seconds: float) -> None:
+        self._cached_status = status
+        self._cached_status_expires_at = time.monotonic() + max(ttl_seconds, 0.0)
+
+    def invalidate_status_cache(self) -> None:
+        """Force the next ``status()`` call to re-probe the add-in."""
+        self._cached_status = None
+        self._cached_status_expires_at = 0.0
 
     # -------------------------------------------------------------- execute
 
@@ -217,6 +341,8 @@ class FusionDesktopAdapter:
         try:
             result = self._call(discovery, PROTOCOL_TOOLS_CALL, params=params)
         except FusionBridgeError as exc:
+            self._record_failure(str(exc))
+            self.invalidate_status_cache()
             return self._error_envelope(
                 step,
                 error_code="fusion.bridge_error",
@@ -231,6 +357,7 @@ class FusionDesktopAdapter:
                 message="Add-in devolveu payload sem ser objeto JSON.",
                 retryable=False,
             )
+        self._record_success()
         return result
 
     # ----------------------------------------------------------- networking
