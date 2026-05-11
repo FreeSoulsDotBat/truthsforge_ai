@@ -94,7 +94,8 @@ class BlenderAdapter:
         exports_dir = workspace / "exports"
         exports_dir.mkdir(parents=True, exist_ok=True)
         runner_path = Path(__file__).with_name("blender_runner.py")
-        result_path = workspace / f"{step.seq:02d}-{safe_segment(step.tool_name, 'step')}.json"
+        slot = f"{step.seq:02d}-{safe_segment(step.tool_name, 'step')}"
+        result_path = workspace / f"{slot}.result.json"
         job_path = workspace / f"{step.seq:02d}-{safe_segment(step.id, 'job')}.job.json"
         blend_path = workspace / "workspace.blend"
         job = {

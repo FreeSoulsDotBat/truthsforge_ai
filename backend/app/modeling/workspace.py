@@ -35,7 +35,7 @@ def sha256_file(path: Path) -> str:
     return checksum.hexdigest()
 
 
-SNAPSHOT_EXCLUDED_SUFFIXES = (".job.json",)
+SNAPSHOT_EXCLUDED_SUFFIXES = (".job.json", ".result.json")
 SNAPSHOT_EXCLUDED_NAMES = {"manifest.json"}
 
 

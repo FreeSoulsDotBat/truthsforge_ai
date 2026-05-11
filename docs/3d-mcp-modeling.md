@@ -50,23 +50,45 @@ Isso é proposital: a LLM cria intenção e plano, mas não injeta Python livre 
 - `GET /api/3d/snapshots`: lista snapshots persistidos.
 - `POST /api/3d/snapshots`: cria snapshot real do workspace 3D (cópia + manifesto + hash).
 - `GET /api/3d/snapshots/{snapshot_id}`: retorna o snapshot com arquivos e manifesto.
-- `POST /api/3d/snapshots/{snapshot_id}/restore`: restaura o snapshot sobre o workspace original.
+- `POST /api/3d/snapshots/{snapshot_id}/restore`: restaura o snapshot sobre o workspace original e
+  devolve `ModelingSnapshotRestoreResult` (`snapshot`, `auto_snapshot`, `restored_file_count`).
 - `GET /api/3d/tool-calls`: lista tool calls auditadas, com filtros opcionais `plan_id` e `step_id`.
 
 ## Snapshots e rollback
 
 Snapshots são feitos por par `(project_id, plan_id)`. O serviço resolve o workspace canônico em
-`.local/modeling/workspaces/<project>/<plan>/` e copia todo o conteúdo relevante (exceto arquivos
-de job intermediários) para `.local/modeling/snapshots/<snapshot_id>/files/`, junto com um
-`manifest.json` contendo:
+`.local/modeling/workspaces/<project>/<plan>/` e copia todo o conteúdo relevante para
+`.local/modeling/snapshots/<snapshot_id>/files/`, junto com um `manifest.json` contendo:
 
 - `id`, `project_id`, `plan_id`, `step_id`, `parent_snapshot_id`, `label`, `reason`
 - `workspace_path` e `storage_path` absolutos
 - lista de arquivos capturados com `relative_path`, `sha256` e `size_bytes`
 
+Arquivos de scaffolding do runner Blender (`*.job.json`, `*.result.json`) e o próprio
+`manifest.json` ficam fora dos snapshots porque não fazem parte do estado canônico.
+
+O step inicial `project_store.create_snapshot` que o planner gera roda como tool real (não mock):
+durante a execução do plano, o executor intercepta e chama o serviço de snapshot diretamente,
+retornando `transport: "local"` e `snapshot_id` no `output_json` da etapa.
+
+### Rollback seguro
+
 Restaurar copia os arquivos do snapshot de volta ao `workspace_path` original (criando-o se
-preciso), sobrescrevendo o conteúdo atual. O snapshot ganha `restored_at` no banco e a operação
-é registrada como `modeling.snapshot_restored` na trilha de auditoria.
+preciso), sobrescrevendo o conteúdo atual. Por padrão, **antes** de qualquer escrita o serviço
+cria um snapshot automático do estado atual com `label="auto: pré-restore de <id>"` e
+`parent_snapshot_id` apontando para o snapshot sendo restaurado — assim "desfazer o desfazer"
+é só restaurar esse auto-snapshot.
+
+`POST /api/3d/snapshots/{id}/restore` aceita no corpo:
+
+- `reason` (opcional): registrado na auditoria e usado como `reason` do auto-snapshot.
+- `force: true`: pula o auto-snapshot pré-restore. Caminho explícito quando o chamador aceita
+  perder o estado atual.
+
+A resposta `ModelingSnapshotRestoreResult` traz `snapshot` (o restaurado, com `restored_at`),
+`auto_snapshot` (`null` quando `force=true` ou quando o workspace estava vazio) e
+`restored_file_count`. O snapshot original ganha `restored_at` no banco e a operação é registrada
+como `modeling.snapshot_restored` na trilha de auditoria, com `auto_snapshot_id` em metadata.
 
 A operação só roda dentro de `settings.modeling_dir`. Snapshots cujo `workspace_path` ou
 `storage_path` apontem para fora dessa raiz são rejeitados com `HTTP 400`.
@@ -82,8 +104,10 @@ Toda execução de etapa gera um `ModelingToolCall` persistido em `modeling_tool
 - Quando há falha: `error_code`, `error_message`, `retryable`,
   `safe_to_retry_after_snapshot_restore`
 
-O adapter Blender já emite `error_code` (`blender.timeout`, `blender.runner_failed`) e indica
-retentativa segura após restore para fluxos onde a corrupção do workspace é possível.
+O adapter Blender constrói `ModelingErrorEnvelope` em timeout e runner failed; o serviço usa o
+mesmo schema na falha do `project_store.create_snapshot`. O envelope é o caminho único de erro
+para tool calls — `host_details` carrega contexto estruturado (software, workspace_dir,
+returncode, stdout/stderr tail, timeout configurado).
 
 ## Novas tabelas
 

@@ -201,6 +201,26 @@ def test_modeling_snapshot_restore_force_skips_auto_snapshot(monkeypatch, tmp_pa
     assert blend_path.read_bytes() == b"original"
 
 
+def test_modeling_snapshot_excludes_runner_scaffolding(monkeypatch, tmp_path) -> None:
+    from app.modeling.workspace import iter_workspace_files
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    workspace = workspace_dir("prj_exclude", "m3d_plan_exclude")
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "workspace.blend").write_bytes(b"x")
+    (workspace / "01-blender.create_mesh_primitive.result.json").write_text("{}")
+    (workspace / "01-m3d_step_abc.job.json").write_text("{}")
+    (workspace / "exports").mkdir()
+    (workspace / "exports" / "preview.stl").write_bytes(b"y")
+
+    captured = {path.relative_to(workspace).as_posix() for path in iter_workspace_files(workspace)}
+
+    assert "workspace.blend" in captured
+    assert "exports/preview.stl" in captured
+    assert "01-blender.create_mesh_primitive.result.json" not in captured
+    assert "01-m3d_step_abc.job.json" not in captured
+
+
 def test_modeling_snapshot_restore_rejects_path_outside_modeling_dir(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     project_id = "prj_snap_escape"
