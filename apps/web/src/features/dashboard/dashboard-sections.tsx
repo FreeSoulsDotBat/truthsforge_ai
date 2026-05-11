@@ -28,6 +28,7 @@ import { AgentLLMNumberInput, AgentLLMSelect, Field, InfoTip, SubFieldLabel } fr
 import { EmptyPanel, InfoRow, PanelTitle, SearchIcon } from "../../components/app-panels";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { defaultLLMConfig, agentRequiredFieldsComplete } from "../agents/agent-domain";
 import {
   fileContentUrl,
@@ -795,8 +796,10 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
 
   const planScopedKey = selectedPlan?.id ?? "__none";
   const snapshotsQuery = useQuery({
-    queryKey: ["modeling-snapshots"],
-    queryFn: () => api.modelingSnapshots(),
+    queryKey: ["modeling-snapshots", planScopedKey],
+    queryFn: () =>
+      selectedPlan ? api.modelingSnapshots({ plan_id: selectedPlan.id }) : Promise.resolve<ModelingSnapshot[]>([]),
+    enabled: !!selectedPlan,
     staleTime: 10_000
   });
   const toolCallsQuery = useQuery({
@@ -818,13 +821,14 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
     staleTime: 10_000
   });
 
-  const snapshotsForPlan = useMemo<ModelingSnapshot[]>(() => {
-    const list = snapshotsQuery.data ?? [];
-    if (!selectedPlan) return [];
-    return list.filter((snapshot) => snapshot.plan_id === selectedPlan.id);
-  }, [snapshotsQuery.data, selectedPlan]);
+  const snapshotsForPlan = useMemo<ModelingSnapshot[]>(() => snapshotsQuery.data ?? [], [snapshotsQuery.data]);
   const toolCalls = toolCallsQuery.data ?? [];
   const printabilityReports = printabilityQuery.data ?? [];
+  const [pendingRestoreSnapshotId, setPendingRestoreSnapshotId] = useState<string | null>(null);
+  const pendingRestoreSnapshot = useMemo<ModelingSnapshot | null>(() => {
+    if (!pendingRestoreSnapshotId) return null;
+    return snapshotsForPlan.find((snap) => snap.id === pendingRestoreSnapshotId) ?? null;
+  }, [pendingRestoreSnapshotId, snapshotsForPlan]);
 
   async function createPlan() {
     if (!prompt.trim()) return;
@@ -942,13 +946,18 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
     }
   }
 
-  async function restoreSnapshot(snapshotId: string) {
+  function requestRestoreSnapshot(snapshotId: string) {
     if (!selectedPlan) return;
-    const confirmed = window.confirm(
-      "Restaurar o snapshot vai sobrescrever o workspace atual. " +
-        "Um auto-snapshot do estado atual será criado antes. Deseja continuar?"
-    );
-    if (!confirmed) return;
+    setPendingRestoreSnapshotId(snapshotId);
+  }
+
+  function cancelRestoreSnapshot() {
+    setPendingRestoreSnapshotId(null);
+  }
+
+  async function confirmRestoreSnapshot() {
+    if (!selectedPlan || !pendingRestoreSnapshotId) return;
+    const snapshotId = pendingRestoreSnapshotId;
     setIsBusy(true);
     setStatus("Restaurando snapshot...");
     try {
@@ -961,6 +970,7 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Falha ao restaurar snapshot.");
     } finally {
+      setPendingRestoreSnapshotId(null);
       setIsBusy(false);
     }
   }
@@ -1198,7 +1208,7 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
                       <Button
                         className="h-8 px-2 text-[11px]"
                         disabled={isBusy || !snapshot.storage_path}
-                        onClick={() => void restoreSnapshot(snapshot.id)}
+                        onClick={() => requestRestoreSnapshot(snapshot.id)}
                       >
                         <Undo2 size={14} /> Restaurar
                       </Button>
@@ -1275,6 +1285,25 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
           )}
         </aside>
       </div>
+      <ConfirmDialog
+        open={!!pendingRestoreSnapshot}
+        title="Restaurar snapshot?"
+        tone="danger"
+        confirmLabel="Restaurar"
+        cancelLabel="Cancelar"
+        busy={isBusy}
+        onConfirm={() => void confirmRestoreSnapshot()}
+        onCancel={cancelRestoreSnapshot}
+      >
+        Restaurar este snapshot vai sobrescrever o workspace atual. O serviço cria um auto-snapshot pré-restore antes da
+        escrita, então é possível desfazer depois.
+        {pendingRestoreSnapshot && (
+          <p className="mt-3 text-xs text-forge-muted">
+            Snapshot: <span className="text-forge-text">{pendingRestoreSnapshot.label}</span>
+            {pendingRestoreSnapshot.files.length > 0 && <> · {pendingRestoreSnapshot.files.length} arquivo(s)</>}
+          </p>
+        )}
+      </ConfirmDialog>
     </section>
   );
 }

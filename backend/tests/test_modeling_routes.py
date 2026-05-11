@@ -126,6 +126,51 @@ def test_modeling_snapshot_records_manifest() -> None:
     assert Path(payload["storage_path"], "manifest.json").is_file()
 
 
+def test_list_snapshots_supports_plan_id_filter(monkeypatch, tmp_path) -> None:
+    """GET /api/3d/snapshots?plan_id=... must filter server-side."""
+    import uuid
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    client = TestClient(app)
+
+    # Use unique plan/project IDs per run so the assertions hold even when
+    # the dev store accumulates snapshots from previous test runs.
+    suffix = uuid.uuid4().hex[:8]
+    plan_a = f"plan_filter_a_{suffix}"
+    plan_b = f"plan_filter_b_{suffix}"
+    project_a = f"prj_a_{suffix}"
+    project_b = f"prj_b_{suffix}"
+    bogus_plan = f"does_not_exist_{suffix}"
+
+    first = client.post(
+        "/api/3d/snapshots",
+        json={"plan_id": plan_a, "project_id": project_a, "label": "A"},
+    ).json()
+    second = client.post(
+        "/api/3d/snapshots",
+        json={"plan_id": plan_b, "project_id": project_b, "label": "B"},
+    ).json()
+
+    all_snapshots = client.get("/api/3d/snapshots").json()
+    ids = {item["id"] for item in all_snapshots}
+    assert {first["id"], second["id"]}.issubset(ids)
+
+    only_a = client.get(f"/api/3d/snapshots?plan_id={plan_a}").json()
+    assert {item["id"] for item in only_a} == {first["id"]}
+
+    only_b = client.get(f"/api/3d/snapshots?plan_id={plan_b}").json()
+    assert {item["id"] for item in only_b} == {second["id"]}
+
+    only_prj_a = client.get(f"/api/3d/snapshots?project_id={project_a}").json()
+    assert {item["id"] for item in only_prj_a} == {first["id"]}
+
+    combined = client.get(f"/api/3d/snapshots?plan_id={plan_a}&project_id={project_a}").json()
+    assert {item["id"] for item in combined} == {first["id"]}
+
+    no_match = client.get(f"/api/3d/snapshots?plan_id={bogus_plan}").json()
+    assert no_match == []
+
+
 def test_modeling_snapshot_copies_and_restores_workspace_files(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     project_id = "prj_snap_test"

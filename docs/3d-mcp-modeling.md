@@ -60,7 +60,8 @@ como `apply_boolean` permanecem em HIGH_RISK e exigem aprovação humana explíc
 - `POST /api/3d/plans/{plan_id}/approve`: aprova ou rejeita o plano inteiro.
 - `POST /api/3d/plans/{plan_id}/execute`: executa etapas aprovadas.
 - `POST /api/3d/steps/{step_id}/approve`: aprova ou rejeita uma etapa específica.
-- `GET /api/3d/snapshots`: lista snapshots persistidos.
+- `GET /api/3d/snapshots`: lista snapshots persistidos, com filtros opcionais
+  `plan_id` e `project_id` (filtragem server-side via JSONB).
 - `POST /api/3d/snapshots`: cria snapshot real do workspace 3D (cópia + manifesto + hash).
 - `GET /api/3d/snapshots/{snapshot_id}`: retorna o snapshot com arquivos e manifesto.
 - `POST /api/3d/snapshots/{snapshot_id}/restore`: restaura o snapshot sobre o workspace original e
@@ -217,6 +218,37 @@ A aba 3D do dashboard expõe o fluxo completo do módulo:
 A aprovação por etapa é granular: você pode aprovar `blender.create_mesh_primitive` e rejeitar
 `blender.apply_boolean`, por exemplo. O executor pula etapas rejeitadas e marca o plano como
 `running` se ainda houver etapas pendentes ou `failed` se alguma etapa explodir.
+
+### Modal de confirmação de restore
+
+O botão **Restaurar** abre o componente reutilizável `ConfirmDialog`
+(`apps/web/src/components/ui/ConfirmDialog.tsx`) em vez de chamar
+`window.confirm`. O dialog tem:
+
+- `role="alertdialog"` + `aria-modal="true"`, com `aria-labelledby` apontando
+  para o título e `aria-describedby` para o corpo.
+- Foco inicial vai para o botão de confirmação; `Tab`/`Shift+Tab` ciclam
+  entre Confirmar e Cancelar (focus trap mínimo, sem dependência externa).
+- `ESC` cancela; clique no backdrop também cancela.
+- `tone="danger"` pinta a borda em vermelho e o botão primário com fundo
+  diferenciado.
+- `busy` desabilita ambos os botões enquanto a ação está em curso.
+
+O componente é testado em `apps/web/src/components/ui/ConfirmDialog.test.tsx`
+com 10 cenários cobrindo render, focus, callbacks, ESC, backdrop e cycle de
+foco.
+
+### Filtro server-side de snapshots
+
+O painel "Snapshots do plano" agora consome `GET /api/3d/snapshots?plan_id=...`
+em vez de filtrar a lista completa client-side. Vantagens:
+
+- Backend retorna só o que importa para o plano selecionado; payload da UI
+  diminui linearmente com o número de planos no banco.
+- Filtro JSONB no Postgres (`payload->>'plan_id' = %s`) usa índices se
+  forem adicionados depois sem mudar interface.
+- Cache do `useQuery` é por `["modeling-snapshots", planId]` — trocar de
+  plano força refetch focado, sem trazer snapshots de outros planos.
 
 ## Transporte MCP: in-process vs stdio
 
