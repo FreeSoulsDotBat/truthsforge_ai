@@ -32,10 +32,15 @@ export interface ServerStatus {
   features: Record<string, boolean>;
 }
 
+export type ModelingTransport = "stdio" | "http" | "mock" | "local";
+export type ModelingPlannerSource = "llm" | "heuristic";
+export type ModelingToolCallStatus = "ok" | "error" | "blocked";
+export type ModelingPrintabilitySeverity = "info" | "warning" | "error";
+
 export interface ModelingCapability {
   software: ModelingSoftware;
   connected: boolean;
-  transport: "stdio" | "http" | "mock";
+  transport: ModelingTransport;
   tools: string[];
   status: string;
   detail: string;
@@ -97,6 +102,8 @@ export interface ModelingPlan {
   risks: string[];
   knowledge_base_ids: string[];
   steps: ModelingPlanStep[];
+  planner_source?: ModelingPlannerSource | null;
+  fallback_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -115,14 +122,98 @@ export interface ModelingApprovalRequest {
   reason?: string;
 }
 
+export interface ModelingSnapshotFile {
+  relative_path: string;
+  sha256: string;
+  size_bytes: number;
+}
+
 export interface ModelingSnapshot {
   id: string;
   project_id?: string | null;
   plan_id?: string | null;
+  step_id?: string | null;
+  parent_snapshot_id?: string | null;
   label: string;
   reason: string;
+  workspace_path?: string | null;
+  storage_path?: string | null;
+  files: ModelingSnapshotFile[];
   manifest: Record<string, unknown>;
+  restored_at?: string | null;
   created_at: string;
+}
+
+export interface ModelingSnapshotCreate {
+  project_id?: string | null;
+  plan_id?: string | null;
+  step_id?: string | null;
+  parent_snapshot_id?: string | null;
+  label?: string;
+  reason?: string;
+}
+
+export interface ModelingSnapshotRestore {
+  reason?: string;
+  force?: boolean;
+}
+
+export interface ModelingSnapshotRestoreResult {
+  snapshot: ModelingSnapshot;
+  auto_snapshot?: ModelingSnapshot | null;
+  restored_file_count: number;
+}
+
+export interface ModelingToolCall {
+  id: string;
+  plan_id: string;
+  step_id: string;
+  seq: number;
+  mcp_server: string;
+  tool_name: string;
+  software: ModelingSoftware;
+  transport: ModelingTransport;
+  status: ModelingToolCallStatus;
+  request_json: Record<string, unknown>;
+  response_json: Record<string, unknown>;
+  error_code?: string | null;
+  error_message?: string | null;
+  retryable: boolean;
+  safe_to_retry_after_snapshot_restore: boolean;
+  duration_ms?: number | null;
+  artifact_paths: string[];
+  created_at: string;
+}
+
+export interface ModelingPrintabilityIssue {
+  check: string;
+  severity: ModelingPrintabilitySeverity;
+  message: string;
+  detail: Record<string, unknown>;
+}
+
+export interface ModelingPrintabilityReport {
+  id: string;
+  project_id?: string | null;
+  plan_id?: string | null;
+  step_id?: string | null;
+  file_id?: string | null;
+  checks_executed: string[];
+  issues: ModelingPrintabilityIssue[];
+  metrics: Record<string, unknown>;
+  risk_score: number;
+  summary: string;
+  report_json: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ModelingPrintabilityRequest {
+  project_id?: string | null;
+  plan_id?: string | null;
+  step_id?: string | null;
+  file_id?: string | null;
+  checks?: string[];
+  printer_profile?: string | null;
 }
 
 export interface ModelingExecutionResult {
@@ -130,6 +221,7 @@ export interface ModelingExecutionResult {
   executed_step_ids: string[];
   blocked_step_ids: string[];
   events: string[];
+  tool_call_ids: string[];
 }
 
 export interface ModelConfig {

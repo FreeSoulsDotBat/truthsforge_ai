@@ -193,14 +193,37 @@ entrega o nível geométrico inteiro; os demais ficam para PRs futuros.
 - `modeling_printability_reports`: relatórios geométricos do `blender.validate_printability`.
 - `modeling_model_versions`: reservada para versões nomeadas de modelos derivados.
 
+## UI da aba 3D
+
+A aba 3D do dashboard expõe o fluxo completo do módulo:
+
+- **Header do plano** mostra software, confiança, status, e um badge `planner: IA`
+  ou `planner: heurístico`; quando há fallback, o `fallback_reason` aparece em âmbar.
+- **Cards de etapa** trazem botões "Aprovar etapa" e "Rejeitar etapa" quando a etapa está em
+  `waiting_approval`; chamam `POST /api/3d/steps/{id}/approve`.
+- **Botões do plano**: "Snapshot manual" (cria snapshot ad-hoc do workspace via
+  `POST /api/3d/snapshots`), "Validar printability" (roda relatório completo via
+  `POST /api/3d/validate/printability`), "Aprovar plano" (todas as etapas) e "Executar MCP".
+- **Painel "Snapshots do plano"** lista snapshots persistidos do plano selecionado com label,
+  arquivos, marcador de `restored_at`. O botão "Restaurar" exige confirmação porque, embora
+  o auto-snapshot pré-restore proteja o estado, a operação sobrescreve o workspace.
+- **Painel "Tool calls"** exibe as 12 chamadas mais recentes filtradas pelo plano selecionado,
+  com `tool_name`, server, transporte, duração; em erro destaca `error_code`/mensagem e marca
+  `retryable` quando aplicável.
+- **Painel "Printability"** mostra os 6 relatórios mais recentes do plano com `risk_score`,
+  contagem de issues por severidade e as 4 primeiras issues detalhadas (severidade `error`
+  pintada em vermelho).
+
+A aprovação por etapa é granular: você pode aprovar `blender.create_mesh_primitive` e rejeitar
+`blender.apply_boolean`, por exemplo. O executor pula etapas rejeitadas e marca o plano como
+`running` se ainda houver etapas pendentes ou `failed` se alguma etapa explodir.
+
 ## Próximos incrementos
 
-1. UI estendida com painel de plano, aprovação por etapa, snapshots, tool calls e relatórios
-   de printability.
-2. Tools tier 2: `apply_subdivision`, `apply_solidify`, `assign_material`, `measure_object`,
+1. Tools tier 2: `apply_subdivision`, `apply_solidify`, `assign_material`, `measure_object`,
    `repair_non_manifold`, `icosphere`, `torus`.
-3. Implementar `fusion_mcp` real por add-in persistente do Fusion 360.
-4. Extração dos adapters para servidores MCP `stdio` reais.
+2. Implementar `fusion_mcp` real por add-in persistente do Fusion 360.
+3. Extração dos adapters para servidores MCP `stdio` reais.
 
 ## Limite de segurança
 

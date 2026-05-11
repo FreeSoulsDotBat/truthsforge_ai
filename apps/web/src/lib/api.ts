@@ -24,9 +24,15 @@ import type {
   ModelingExecutionResult,
   ModelingPlan,
   ModelingPlanCreate,
+  ModelingPrintabilityReport,
+  ModelingPrintabilityRequest,
   ModelingSession,
   ModelingSessionStart,
   ModelingSnapshot,
+  ModelingSnapshotCreate,
+  ModelingSnapshotRestore,
+  ModelingSnapshotRestoreResult,
+  ModelingToolCall,
   ModelConfig,
   ModelUpsert,
   PlatformFile,
@@ -328,16 +334,38 @@ export const api = {
       method: "POST"
     }),
   modelingSnapshots: () => request<ModelingSnapshot[]>("/api/3d/snapshots"),
-  createModelingSnapshot: (payload: {
-    project_id?: string | null;
-    plan_id?: string | null;
-    label: string;
-    reason?: string;
-  }) =>
+  createModelingSnapshot: (payload: ModelingSnapshotCreate & { label: string }) =>
     request<ModelingSnapshot>("/api/3d/snapshots", {
       method: "POST",
       body: JSON.stringify(payload)
-    })
+    }),
+  restoreModelingSnapshot: (snapshotId: string, payload: ModelingSnapshotRestore = {}) =>
+    request<ModelingSnapshotRestoreResult>(`/api/3d/snapshots/${snapshotId}/restore`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  modelingToolCalls: (params: { plan_id?: string; step_id?: string; limit?: number } = {}) => {
+    const search = new URLSearchParams();
+    if (params.plan_id) search.set("plan_id", params.plan_id);
+    if (params.step_id) search.set("step_id", params.step_id);
+    if (params.limit) search.set("limit", String(params.limit));
+    const suffix = search.toString();
+    return request<ModelingToolCall[]>(suffix ? `/api/3d/tool-calls?${suffix}` : "/api/3d/tool-calls");
+  },
+  validateModelingPrintability: (payload: ModelingPrintabilityRequest) =>
+    request<ModelingPrintabilityReport>("/api/3d/validate/printability", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  modelingPrintabilityReports: (params: { plan_id?: string; file_id?: string } = {}) => {
+    const search = new URLSearchParams();
+    if (params.plan_id) search.set("plan_id", params.plan_id);
+    if (params.file_id) search.set("file_id", params.file_id);
+    const suffix = search.toString();
+    return request<ModelingPrintabilityReport[]>(
+      suffix ? `/api/3d/printability-reports?${suffix}` : "/api/3d/printability-reports"
+    );
+  }
 };
 
 export interface StreamChatPayload {
