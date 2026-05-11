@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Literal
+from typing import Any, Literal
 
 from app.core.contracts import ModelConfig, ProviderModel, ProviderName
 from app.llm_gateway.providers import (
@@ -52,3 +52,14 @@ class LLMGateway:
             max_tool_calls,
         ):
             yield token
+
+    async def generate_structured(
+        self,
+        model: ModelConfig,
+        messages: list[dict[str, str]],
+        schema_name: str,
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self.providers[model.provider].generate_structured(
+            model, messages, schema_name, schema
+        )

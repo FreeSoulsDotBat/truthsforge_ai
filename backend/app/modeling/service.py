@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,9 @@ from typing import Any
 from app.core.config import settings
 from app.core.contracts import (
     AuditEvent,
+    KnowledgeBase,
+    ModelCapability,
+    ModelConfig,
     ModelingApprovalDecision,
     ModelingApprovalRequest,
     ModelingCapabilities,
@@ -35,11 +39,13 @@ from app.core.contracts import (
     ModelingToolCallStatus,
     PlatformFile,
     PlatformFileCreate,
+    ProviderName,
     now_utc,
 )
 from app.files.library import content_type_for_name, safe_filename
+from app.llm_gateway.gateway import LLMGateway
 from app.modeling.mcp_client import LocalMCPClient
-from app.modeling.planner import create_structured_plan
+from app.modeling.planner import create_heuristic_plan, create_llm_plan
 from app.modeling.policy import apply_modeling_policy
 from app.modeling.workspace import (
     copy_into_snapshot,
@@ -50,6 +56,8 @@ from app.modeling.workspace import (
     snapshots_root,
     workspace_dir,
 )
+
+logger = logging.getLogger(__name__)
 
 ARTIFACT_CONTENT_TYPES = {
     ".3mf": "model/3mf",
@@ -97,9 +105,15 @@ def _envelope_from_output(output: dict[str, Any]) -> ModelingErrorEnvelope | Non
 
 
 class ModelingService:
-    def __init__(self, store: Any, mcp_client: LocalMCPClient | None = None) -> None:
+    def __init__(
+        self,
+        store: Any,
+        mcp_client: LocalMCPClient | None = None,
+        gateway: LLMGateway | None = None,
+    ) -> None:
         self.store = store
         self.mcp_client = mcp_client or LocalMCPClient()
+        self.gateway = gateway or LLMGateway()
 
     def capabilities(self) -> ModelingCapabilities:
         capabilities = self.mcp_client.capabilities()
@@ -147,20 +161,66 @@ class ModelingService:
         return session
 
     def create_plan(self, payload: ModelingPlanCreate) -> ModelingPlan:
-        plan = apply_modeling_policy(create_structured_plan(payload))
+        plan, source, fallback_reason = self._build_plan(payload)
+        plan = apply_modeling_policy(plan)
         self.store.upsert_modeling_plan(plan)
+        metadata: dict[str, Any] = {
+            "plan_id": plan.id,
+            "software": plan.software_choice.value,
+            "step_count": len(plan.steps),
+            "mode": plan.mode.value,
+            "planner_source": source,
+        }
+        if fallback_reason:
+            metadata["fallback_reason"] = fallback_reason
         self.store.add_audit_event(
-            AuditEvent(
-                event_type="modeling.plan_created",
-                metadata={
-                    "plan_id": plan.id,
-                    "software": plan.software_choice.value,
-                    "step_count": len(plan.steps),
-                    "mode": plan.mode.value,
-                },
-            ),
+            AuditEvent(event_type="modeling.plan_created", metadata=metadata),
         )
         return plan
+
+    def _build_plan(self, payload: ModelingPlanCreate) -> tuple[ModelingPlan, str, str | None]:
+        model = self._resolve_planner_model()
+        if model is None:
+            return create_heuristic_plan(payload), "heuristic", "planner_model_unavailable"
+        try:
+            knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
+            plan = create_llm_plan(
+                payload,
+                gateway=self.gateway,
+                model=model,
+                knowledge_bases=knowledge_bases,
+            )
+            return plan, "llm", None
+        except Exception as exc:  # noqa: BLE001 - fallback is intentional
+            logger.warning("Planner LLM falhou (%s); usando fallback heurístico.", exc)
+            return create_heuristic_plan(payload), "heuristic", str(exc)
+
+    def _resolve_planner_model(self) -> ModelConfig | None:
+        if not hasattr(self.store, "list_models"):
+            return None
+        models = [model for model in self.store.list_models() if model.enabled]
+        if not models:
+            return None
+        chat_models = [
+            model
+            for model in models
+            if ModelCapability.chat in model.capabilities and model.provider == ProviderName.openai
+        ]
+        if not chat_models:
+            return None
+        default = next((model for model in chat_models if model.default), None)
+        chosen = default or chat_models[0]
+        # When the model id is unresolved (no provider_model_id) and we're not in
+        # allow_dev_llm mode, surface that as "unavailable" so we fall back.
+        if not chosen.provider_model_id and not settings.allow_dev_llm:
+            return None
+        return chosen
+
+    def _resolve_knowledge_bases(self, knowledge_base_ids: list[str]) -> list[KnowledgeBase]:
+        if not knowledge_base_ids or not hasattr(self.store, "list_knowledge_bases"):
+            return []
+        known = {kb.id: kb for kb in self.store.list_knowledge_bases()}
+        return [known[item] for item in knowledge_base_ids if item in known]
 
     def approve_plan(self, plan_id: str, payload: ModelingApprovalRequest) -> ModelingPlan:
         plan = self._get_plan_or_raise(plan_id)
