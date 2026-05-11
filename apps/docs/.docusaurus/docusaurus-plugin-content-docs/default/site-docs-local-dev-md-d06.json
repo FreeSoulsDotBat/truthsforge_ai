@@ -1,0 +1,23 @@
+{
+  "id": "local-dev",
+  "title": "Desenvolvimento Local",
+  "description": "Preflight",
+  "source": "@site/../../docs/local-dev.md",
+  "sourceDirName": ".",
+  "slug": "/local-dev",
+  "permalink": "/docs/local-dev",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Bases de conhecimento",
+    "permalink": "/docs/knowledge-bases"
+  },
+  "next": {
+    "title": "MVP readiness",
+    "permalink": "/docs/mvp-readiness"
+  }
+}

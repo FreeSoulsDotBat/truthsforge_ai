@@ -1,0 +1,159 @@
+{
+  "updated_at": "2026-05-04",
+  "currency": "USD",
+  "unit": "1M tokens",
+  "entries": [
+    {
+      "provider": "openai",
+      "patterns": ["gpt-5.5*"],
+      "input_token_cost_per_million": 5.0,
+      "output_token_cost_per_million": 30.0,
+      "source": "https://openai.com/api/pricing/",
+      "note": "Standard processing, context under 270K."
+    },
+    {
+      "provider": "openai",
+      "patterns": ["gpt-5.4-mini*"],
+      "input_token_cost_per_million": 0.75,
+      "output_token_cost_per_million": 4.5,
+      "source": "https://openai.com/api/pricing/",
+      "note": "Standard processing, context under 270K."
+    },
+    {
+      "provider": "openai",
+      "patterns": ["gpt-5.4*"],
+      "input_token_cost_per_million": 2.5,
+      "output_token_cost_per_million": 15.0,
+      "source": "https://openai.com/api/pricing/",
+      "note": "Standard processing, context under 270K."
+    },
+    {
+      "provider": "openai",
+      "patterns": ["gpt-5-pro*"],
+      "input_token_cost_per_million": 15.0,
+      "output_token_cost_per_million": 120.0,
+      "source": "https://openai.com/api/pricing",
+      "note": "Legacy GPT-5 pro rate from OpenAI pricing page."
+    },
+    {
+      "provider": "openai",
+      "patterns": ["gpt-5-mini*"],
+      "input_token_cost_per_million": 0.25,
+      "output_token_cost_per_million": 2.0,
+      "source": "https://platform.openai.com/docs/models/gpt-5-mini",
+      "note": "Text token pricing."
+    },
+    {
+      "provider": "openai",
+      "patterns": ["gpt-5-nano*"],
+      "input_token_cost_per_million": 0.05,
+      "output_token_cost_per_million": 0.4,
+      "source": "https://openai.com/api/pricing",
+      "note": "Text token pricing."
+    },
+    {
+      "provider": "openai",
+      "patterns": ["gpt-5*"],
+      "input_token_cost_per_million": 1.25,
+      "output_token_cost_per_million": 10.0,
+      "source": "https://platform.openai.com/docs/models/gpt-5",
+      "note": "Text token pricing."
+    },
+    {
+      "provider": "openai",
+      "patterns": ["o4-mini-deep-research*"],
+      "input_token_cost_per_million": 2.0,
+      "output_token_cost_per_million": 8.0,
+      "source": "https://platform.openai.com/docs/models/o4-mini-deep-research",
+      "note": "Deep Research text token pricing; tool calls may have separate costs."
+    },
+    {
+      "provider": "openai",
+      "patterns": ["o4-mini*"],
+      "input_token_cost_per_million": 1.1,
+      "output_token_cost_per_million": 4.4,
+      "source": "https://platform.openai.com/docs/models/o4-mini",
+      "note": "Text token pricing."
+    },
+    {
+      "provider": "anthropic",
+      "patterns": ["claude-opus-4-7*", "claude-opus-4-6*", "claude-opus-4-5*"],
+      "input_token_cost_per_million": 5.0,
+      "output_token_cost_per_million": 25.0,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "note": "Base input/output token pricing; cache writes/hits have separate rates."
+    },
+    {
+      "provider": "anthropic",
+      "patterns": ["claude-opus-4-1*", "claude-opus-4-*"],
+      "input_token_cost_per_million": 15.0,
+      "output_token_cost_per_million": 75.0,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "note": "Base input/output token pricing; cache writes/hits have separate rates."
+    },
+    {
+      "provider": "anthropic",
+      "patterns": ["claude-sonnet-4-6*", "claude-sonnet-4-5*", "claude-sonnet-4-*", "claude-3-7-sonnet*", "claude-3-5-sonnet*"],
+      "input_token_cost_per_million": 3.0,
+      "output_token_cost_per_million": 15.0,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "note": "Base input/output token pricing; cache writes/hits have separate rates."
+    },
+    {
+      "provider": "anthropic",
+      "patterns": ["claude-haiku-4-5*"],
+      "input_token_cost_per_million": 1.0,
+      "output_token_cost_per_million": 5.0,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "note": "Base input/output token pricing; cache writes/hits have separate rates."
+    },
+    {
+      "provider": "anthropic",
+      "patterns": ["claude-3-5-haiku*"],
+      "input_token_cost_per_million": 0.8,
+      "output_token_cost_per_million": 4.0,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "note": "Base input/output token pricing; cache writes/hits have separate rates."
+    },
+    {
+      "provider": "anthropic",
+      "patterns": ["claude-3-haiku*"],
+      "input_token_cost_per_million": 0.25,
+      "output_token_cost_per_million": 1.25,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "note": "Base input/output token pricing; cache writes/hits have separate rates."
+    },
+    {
+      "provider": "google",
+      "patterns": ["gemini-2.5-pro*"],
+      "input_token_cost_per_million": 1.25,
+      "output_token_cost_per_million": 10.0,
+      "source": "https://ai.google.dev/pricing",
+      "note": "Paid tier standard pricing for prompts up to 200K tokens; larger prompts cost more."
+    },
+    {
+      "provider": "google",
+      "patterns": ["gemini-2.5-flash-lite*"],
+      "input_token_cost_per_million": 0.1,
+      "output_token_cost_per_million": 0.4,
+      "source": "https://ai.google.dev/pricing",
+      "note": "Paid tier standard text/image/video input pricing."
+    },
+    {
+      "provider": "google",
+      "patterns": ["gemini-2.5-flash-image*"],
+      "input_token_cost_per_million": 0.3,
+      "output_token_cost_per_million": 30.0,
+      "source": "https://ai.google.dev/pricing",
+      "note": "Image output is token-equivalent; 1024px image is about 1290 output tokens."
+    },
+    {
+      "provider": "google",
+      "patterns": ["gemini-2.5-flash*"],
+      "input_token_cost_per_million": 0.3,
+      "output_token_cost_per_million": 2.5,
+      "source": "https://ai.google.dev/pricing",
+      "note": "Paid tier standard text/image/video input pricing."
+    }
+  ]
+}

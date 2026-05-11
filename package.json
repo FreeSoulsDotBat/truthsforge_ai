@@ -1,0 +1,21 @@
+{
+  "name": "truths-forge-ai",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev:web": "pnpm --filter @truths-forge/web dev",
+    "dev:docs": "pnpm --filter @truths-forge/docs dev",
+    "build:web": "pnpm --filter @truths-forge/web build",
+    "build:docs": "pnpm --filter @truths-forge/docs build",
+    "typecheck": "pnpm --filter @truths-forge/web typecheck",
+    "quality": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/quality.ps1",
+    "prepare-hooks": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-git-hooks.ps1",
+    "dev:desktop": "pnpm --filter @truths-forge/desktop tauri dev",
+    "dev:mobile": "pnpm --filter @truths-forge/mobile cap sync android"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}

@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException
+
+from app.core.contracts import (
+    ModelingApprovalRequest,
+    ModelingCapabilities,
+    ModelingExecutionResult,
+    ModelingPlan,
+    ModelingPlanCreate,
+    ModelingSession,
+    ModelingSessionStart,
+    ModelingSnapshot,
+    ModelingSnapshotCreate,
+)
+from app.modeling.service import get_modeling_service
+from app.storage.store import get_store
+
+router = APIRouter()
+
+
+def _service():
+    store = get_store()
+    required = [
+        "list_modeling_plans",
+        "upsert_modeling_plan",
+        "get_modeling_plan",
+        "get_modeling_plan_by_step",
+        "upsert_modeling_session",
+        "upsert_modeling_snapshot",
+    ]
+    if not all(hasattr(store, name) for name in required):
+        raise HTTPException(status_code=501, detail="Módulo 3D não suportado neste backend.")
+    return get_modeling_service(store)
+
+
+@router.get("/capabilities", response_model=ModelingCapabilities)
+def capabilities() -> ModelingCapabilities:
+    return _service().capabilities()
+
+
+@router.get("/sessions", response_model=list[ModelingSession])
+def list_sessions() -> list[ModelingSession]:
+    store = get_store()
+    if not hasattr(store, "list_modeling_sessions"):
+        return []
+    return store.list_modeling_sessions()
+
+
+@router.post("/sessions/start", response_model=ModelingSession)
+def start_session(payload: ModelingSessionStart) -> ModelingSession:
+    return _service().start_session(payload)
+
+
+@router.get("/plans", response_model=list[ModelingPlan])
+def list_plans() -> list[ModelingPlan]:
+    store = get_store()
+    if not hasattr(store, "list_modeling_plans"):
+        return []
+    return store.list_modeling_plans()
+
+
+@router.post("/plans", response_model=ModelingPlan)
+def create_plan(payload: ModelingPlanCreate) -> ModelingPlan:
+    return _service().create_plan(payload)
+
+
+@router.get("/plans/{plan_id}", response_model=ModelingPlan)
+def get_plan(plan_id: str) -> ModelingPlan:
+    store = get_store()
+    if not hasattr(store, "get_modeling_plan"):
+        raise HTTPException(status_code=501, detail="Módulo 3D não suportado neste backend.")
+    plan = store.get_modeling_plan(plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plano 3D não encontrado.")
+    return plan
+
+
+@router.post("/plans/{plan_id}/approve", response_model=ModelingPlan)
+def approve_plan(plan_id: str, payload: ModelingApprovalRequest) -> ModelingPlan:
+    try:
+        return _service().approve_plan(plan_id, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
+
+
+@router.post("/plans/{plan_id}/execute", response_model=ModelingExecutionResult)
+def execute_plan(plan_id: str) -> ModelingExecutionResult:
+    try:
+        return _service().execute_plan(plan_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
+
+
+@router.post("/steps/{step_id}/approve", response_model=ModelingPlan)
+def decide_step(step_id: str, payload: ModelingApprovalRequest) -> ModelingPlan:
+    try:
+        return _service().decide_step(step_id, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Etapa 3D não encontrada.") from exc
+
+
+@router.get("/snapshots", response_model=list[ModelingSnapshot])
+def list_snapshots() -> list[ModelingSnapshot]:
+    store = get_store()
+    if not hasattr(store, "list_modeling_snapshots"):
+        return []
+    return store.list_modeling_snapshots()
+
+
+@router.post("/snapshots", response_model=ModelingSnapshot)
+def create_snapshot(payload: ModelingSnapshotCreate) -> ModelingSnapshot:
+    return _service().create_snapshot(payload)

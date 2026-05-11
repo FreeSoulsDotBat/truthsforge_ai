@@ -1,0 +1,145 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile.dev
+    container_name: truths-forge-backend
+    restart: unless-stopped
+    working_dir: /workspace/backend
+    env_file:
+      - path: ../backend/.env
+        required: false
+    environment:
+      TRUTHS_FORGE_ENV: development
+      TRUTHS_FORGE_DATA_DIR: /workspace/.local
+      TRUTHS_FORGE_PUBLIC_BASE_URL: http://127.0.0.1:8000
+      TRUTHS_FORGE_ALLOWED_ORIGINS: http://127.0.0.1:5173,http://localhost:5173
+      TRUTHS_FORGE_DATABASE_URL: postgresql://${POSTGRES_USER:-forge}:${POSTGRES_PASSWORD:-forge_dev_password}@postgres:5432/${POSTGRES_DB:-truths_forge_ai}
+      TRUTHS_FORGE_QDRANT_URL: http://qdrant:6333
+      TRUTHS_FORGE_REDIS_URL: redis://valkey:6379/0
+      TRUTHS_FORGE_STORAGE_BACKEND: postgres
+      TRUTHS_FORGE_ALLOW_DEV_LLM: "true"
+      TRUTHS_FORGE_MONTHLY_BUDGET_BRL: ${TRUTHS_FORGE_MONTHLY_BUDGET_BRL:-200}
+      TRUTHS_FORGE_MAX_IMPORT_BYTES: ${TRUTHS_FORGE_MAX_IMPORT_BYTES:-5368709120}
+      WATCHFILES_FORCE_POLLING: "true"
+      WATCHFILES_POLL_DELAY_MS: "250"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ..:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()\""
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile.dev
+    container_name: truths-forge-web
+    restart: unless-stopped
+    working_dir: /workspace
+    environment:
+      VITE_API_BASE_URL: http://127.0.0.1:8000
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "150"
+      VITE_USE_POLLING: "true"
+      VITE_POLLING_INTERVAL: "150"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ..:/workspace
+      - pnpm_store:/pnpm/store
+      - web_node_modules:/workspace/node_modules
+      - web_app_node_modules:/workspace/apps/web/node_modules
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:5173').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  docs:
+    build:
+      context: ..
+      dockerfile: apps/docs/Dockerfile.dev
+    container_name: truths-forge-docs
+    restart: unless-stopped
+    working_dir: /workspace
+    ports:
+      - "${DOCS_PORT:-3000}:3000"
+    volumes:
+      - ..:/workspace
+      - docs_pnpm_store:/pnpm/store
+      - docs_root_node_modules:/workspace/node_modules
+      - docs_node_modules:/workspace/apps/docs/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "200"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  pgadmin:
+    image: dpage/pgadmin4:9.14
+    container_name: truths-forge-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@truthsforge.dev}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-truths_forge_admin}
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+      POSTGRES_USER: ${POSTGRES_USER:-forge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forge_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-truths_forge_ai}
+    ports:
+      - "${PGADMIN_PORT:-8080}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: truths-forge-redis-commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:valkey:6379
+    ports:
+      - "${REDIS_COMMANDER_PORT:-8081}:8081"
+    depends_on:
+      valkey:
+        condition: service_healthy
+
+volumes:
+  pnpm_store:
+  web_node_modules:
+  web_app_node_modules:
+  docs_pnpm_store:
+  docs_root_node_modules:
+  docs_node_modules:
+  pgadmin_data:

@@ -1,0 +1,23 @@
+{
+  "id": "knowledge-bases",
+  "title": "Bases de conhecimento",
+  "description": "Modelo mental",
+  "source": "@site/../../docs/knowledge-bases.md",
+  "sourceDirName": ".",
+  "slug": "/knowledge-bases",
+  "permalink": "/docs/knowledge-bases",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Observabilidade da infra local",
+    "permalink": "/docs/infra-observability"
+  },
+  "next": {
+    "title": "Desenvolvimento Local",
+    "permalink": "/docs/local-dev"
+  }
+}

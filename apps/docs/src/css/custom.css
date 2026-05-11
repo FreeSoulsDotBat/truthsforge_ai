@@ -1,0 +1,103 @@
+:root {
+  --ifm-color-primary: #b8792f;
+  --ifm-color-primary-dark: #a86d2a;
+  --ifm-color-primary-darker: #9f6728;
+  --ifm-color-primary-darkest: #825521;
+  --ifm-color-primary-light: #c68536;
+  --ifm-color-primary-lighter: #cc8d42;
+  --ifm-color-primary-lightest: #d9a363;
+  --ifm-background-color: #f7f4ee;
+  --ifm-font-family-base:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
+[data-theme="dark"] {
+  --ifm-background-color: #0c0d0f;
+  --ifm-navbar-background-color: #101111;
+  --ifm-footer-background-color: #101111;
+  --ifm-card-background-color: #171716;
+  --ifm-color-primary: #f0b84d;
+}
+
+.docsHome {
+  min-height: calc(100vh - 60px);
+}
+
+.docsHero {
+  display: grid;
+  min-height: 360px;
+  align-items: center;
+  padding: 4rem 1.5rem 2rem;
+  background:
+    linear-gradient(180deg, rgba(18, 18, 17, 0.88), rgba(12, 13, 15, 0.98)),
+    #0c0d0f;
+  color: #e7edf5;
+}
+
+.docsHero > div,
+.docsGrid {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+}
+
+.eyebrow {
+  margin-bottom: 0.75rem;
+  color: #f0b84d;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.docsHero h1 {
+  margin: 0;
+  font-size: clamp(2.4rem, 7vw, 5rem);
+  line-height: 0.95;
+}
+
+.docsHero p {
+  max-width: 680px;
+  margin-top: 1.2rem;
+  color: #c8c5bc;
+  font-size: 1.08rem;
+  line-height: 1.75;
+}
+
+.heroActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.docsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  padding: 2rem 1.5rem 4rem;
+}
+
+.docCard {
+  min-height: 150px;
+  padding: 1.25rem;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 8px;
+  color: inherit;
+  background: var(--ifm-card-background-color);
+  text-decoration: none;
+}
+
+.docCard:hover {
+  border-color: var(--ifm-color-primary);
+  color: inherit;
+  text-decoration: none;
+}
+
+.docCard h2 {
+  font-size: 1.1rem;
+}
+
+.docCard p {
+  color: var(--ifm-color-emphasis-700);
+}

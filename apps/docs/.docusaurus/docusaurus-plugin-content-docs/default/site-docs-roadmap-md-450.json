@@ -1,0 +1,19 @@
+{
+  "id": "roadmap",
+  "title": "Roadmap",
+  "description": "M0 - Bootstrap",
+  "source": "@site/../../docs/roadmap.md",
+  "sourceDirName": ".",
+  "slug": "/roadmap",
+  "permalink": "/docs/roadmap",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Resumo oficial de raciocinio",
+    "permalink": "/docs/reasoning-summary"
+  }
+}

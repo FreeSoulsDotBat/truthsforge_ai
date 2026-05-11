@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Truth's Forge AI",
+  "version": "0.1.0",
+  "identifier": "ai.truthsforge.app",
+  "build": {
+    "beforeDevCommand": "pnpm --filter @truths-forge/web dev",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "pnpm --filter @truths-forge/web build",
+    "frontendDist": "../../web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Truth's Forge AI",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:8000 http://localhost:8000; img-src 'self' data: blob: http://127.0.0.1:8000 http://localhost:8000; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  }
+}

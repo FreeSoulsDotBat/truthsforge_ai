@@ -1,0 +1,50 @@
+name: truths-forge-ai
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: truths-forge-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forge_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-truths_forge_ai}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ../.local/postgres:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-forge} -d ${POSTGRES_DB:-truths_forge_ai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    container_name: truths-forge-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - ../.local/qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: truths-forge-valkey
+    restart: unless-stopped
+    ports:
+      - "${VALKEY_PORT:-6379}:6379"
+    volumes:
+      - ../.local/valkey:/data
+    command: ["valkey-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 8

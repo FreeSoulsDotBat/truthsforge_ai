@@ -1,0 +1,23 @@
+{
+  "id": "decisions",
+  "title": "Decisoes",
+  "description": "ADR-001 - Monorepo",
+  "source": "@site/../../docs/decisions.md",
+  "sourceDirName": ".",
+  "slug": "/decisions",
+  "permalink": "/docs/decisions",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Importacao do ChatGPT",
+    "permalink": "/docs/chatgpt-import"
+  },
+  "next": {
+    "title": "Deep Research",
+    "permalink": "/docs/deep-research"
+  }
+}

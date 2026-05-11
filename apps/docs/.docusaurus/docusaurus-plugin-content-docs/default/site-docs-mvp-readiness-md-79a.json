@@ -1,0 +1,23 @@
+{
+  "id": "mvp-readiness",
+  "title": "MVP readiness",
+  "description": "Status em 2026-05-03.",
+  "source": "@site/../../docs/mvp-readiness.md",
+  "sourceDirName": ".",
+  "slug": "/mvp-readiness",
+  "permalink": "/docs/mvp-readiness",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Desenvolvimento Local",
+    "permalink": "/docs/local-dev"
+  },
+  "next": {
+    "title": "Resumo oficial de raciocinio",
+    "permalink": "/docs/reasoning-summary"
+  }
+}
