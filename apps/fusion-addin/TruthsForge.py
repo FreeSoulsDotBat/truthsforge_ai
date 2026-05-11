@@ -434,14 +434,95 @@ def _validate_dimensions(design: Any, _arguments: dict[str, Any]) -> dict[str, A
 
 
 def _validate_printability(design: Any, arguments: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "message": "Printability via Fusion ainda é placeholder; rode blender.validate_printability sobre o STL/3MF exportado.",
-        "checks_executed": list(arguments.get("checks") or []),
-        "issues": [],
-        "metrics": {},
-        "risk_score": 0.0,
-        "printer_profile": arguments.get("printer_profile"),
-    }
+    bodies = _collect_body_summaries(design)
+    if not bodies:
+        return {
+            "message": "Nenhum corpo no design para validar.",
+            "objects_inspected": 0,
+            "checks_executed": list(arguments.get("checks") or []),
+            "issues": [],
+            "metrics": {},
+            "risk_score": 0.0,
+            "printer_profile": arguments.get("printer_profile"),
+        }
+    from printability_logic import compute_printability_report
+
+    return compute_printability_report(
+        bodies,
+        checks=arguments.get("checks"),
+        printer_profile=arguments.get("printer_profile"),
+    )
+
+
+def _collect_body_summaries(design: Any) -> list[dict[str, Any]]:
+    """Extract printability inputs from the active design's bodies.
+
+    All values are converted to millimetres / mm² so the pure logic module
+    can stay agnostic of Fusion's centimetre defaults.
+    """
+    if adsk is None:
+        return []
+    summaries: list[dict[str, Any]] = []
+    root = _root_component(design)
+    bodies = root.bRepBodies
+    # cos(135°) ≈ -0.7071; faces whose normal Z is below this threshold are
+    # pointing strongly downward and count as overhang.
+    overhang_normal_threshold = -0.7071
+    # Faces smaller than this are "thin features" (0.01 cm² = 1 mm²).
+    thin_face_area_cm2 = 0.01
+    for index in range(bodies.count):
+        body = bodies.item(index)
+        try:
+            volume_cm3 = float(getattr(body, "volume", 0.0))
+        except Exception:
+            volume_cm3 = 0.0
+        try:
+            surface_cm2 = float(getattr(body.physicalProperties, "area", 0.0))
+        except Exception:
+            surface_cm2 = 0.0
+        bbox = body.boundingBox
+        downward_area_cm2 = 0.0
+        total_face_area_cm2 = 0.0
+        thin_area_cm2 = 0.0
+        for face_index in range(body.faces.count):
+            face = body.faces.item(face_index)
+            try:
+                evaluator = face.evaluator
+                _, area_cm2 = evaluator.getArea()
+            except Exception:
+                area_cm2 = 0.0
+            total_face_area_cm2 += float(area_cm2)
+            if area_cm2 < thin_face_area_cm2:
+                thin_area_cm2 += float(area_cm2)
+            try:
+                normal_eval = face.evaluator
+                _, normal = normal_eval.getNormalAtPoint(face.pointOnFace)
+                if normal.z <= overhang_normal_threshold:
+                    downward_area_cm2 += float(area_cm2)
+            except Exception:
+                continue
+        summaries.append(
+            {
+                "name": body.name,
+                "is_solid": bool(getattr(body, "isSolid", True)),
+                "volume_mm3": volume_cm3 * 1000.0,
+                "surface_area_mm2": surface_cm2 * 100.0,
+                "bbox_min_mm": [
+                    bbox.minPoint.x * 10.0,
+                    bbox.minPoint.y * 10.0,
+                    bbox.minPoint.z * 10.0,
+                ],
+                "bbox_max_mm": [
+                    bbox.maxPoint.x * 10.0,
+                    bbox.maxPoint.y * 10.0,
+                    bbox.maxPoint.z * 10.0,
+                ],
+                "downward_face_area_mm2": downward_area_cm2 * 100.0,
+                "total_face_area_mm2": total_face_area_cm2 * 100.0,
+                "thin_face_area_mm2": thin_area_cm2 * 100.0,
+            }
+        )
+    return summaries
 
 
 # ---------------------------------------------------------------------------
