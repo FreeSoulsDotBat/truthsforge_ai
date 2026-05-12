@@ -118,14 +118,23 @@ def _worker_loop() -> None:
                     pass
                 _last_backfill_at = now
             continue
+        retry_scheduled = False
         try:
             try:
-                process_platform_file_index(file_id)
+                indexed = process_platform_file_index(file_id)
+                if indexed is not None and indexed.index_status == JobStatus.failed:
+                    metadata = dict(indexed.metadata) if isinstance(indexed.metadata, dict) else {}
+                    attempts = int(metadata.get("index_attempts", 1))
+                    retryable = bool(metadata.get("index_retryable", False))
+                    if retryable and attempts < 3:
+                        _queue.put((INDEX_PRIORITY_BACKGROUND + attempts, file_id))
+                        retry_scheduled = True
             except Exception:
                 pass
         finally:
             with _thread_lock:
-                _enqueued_ids.discard(file_id)
+                if not retry_scheduled:
+                    _enqueued_ids.discard(file_id)
             _queue.task_done()
 
 
@@ -176,6 +185,25 @@ def recover_pending_platform_file_indexes(max_items: int = _RECOVERY_MAX_ITEMS) 
     ][:max_items]
     enqueue_platform_file_indexes(pending_file_ids, priority=INDEX_PRIORITY_BACKGROUND)
     return pending_file_ids
+
+
+def retry_failed_platform_file_indexes(max_items: int = _RECOVERY_MAX_ITEMS) -> list[str]:
+    store = get_store()
+    if not hasattr(store, "list_documents"):
+        return []
+    failed_file_ids: list[str] = []
+    for document in store.list_documents():
+        if document.index_status != JobStatus.failed:
+            continue
+        metadata = document.metadata if isinstance(document.metadata, dict) else {}
+        file_id = metadata.get("file_id")
+        attempts = int(metadata.get("index_attempts", 0))
+        if isinstance(file_id, str) and attempts < 3:
+            failed_file_ids.append(file_id)
+        if len(failed_file_ids) >= max_items:
+            break
+    enqueue_platform_file_indexes(failed_file_ids, priority=INDEX_PRIORITY_BACKGROUND)
+    return failed_file_ids
 
 
 def backfill_missing_platform_file_indexes(max_items: int = _BACKFILL_MAX_ITEMS) -> list[str]:
