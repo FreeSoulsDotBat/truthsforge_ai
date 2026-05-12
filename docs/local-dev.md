@@ -29,6 +29,36 @@ Servicos:
 - Qdrant porta direta: `127.0.0.1:6333`
 - Valkey porta direta: `127.0.0.1:6379`
 
+## Modos de storage
+
+O modo recomendado para uso real local e o stack completo em containers:
+
+```powershell
+$env:TRUTHS_FORGE_STORAGE_BACKEND="postgres"
+```
+
+Use esse modo quando quiser validar persistencia como producao local. Se o Postgres nao
+conectar, o backend deve falhar em vez de mascarar o problema.
+
+Para desenvolvimento leve sem Docker, deixe o default:
+
+```powershell
+$env:TRUTHS_FORGE_STORAGE_BACKEND="auto"
+```
+
+Nesse modo o backend tenta Postgres e cai para o dev store JSON quando o banco nao esta
+disponivel. O fallback JSON serve para testes, demos e trabalho rapido; nao e formato de
+producao, backup ou sincronizacao mobile.
+
+Para testes isolados, use:
+
+```powershell
+$env:TRUTHS_FORGE_STORAGE_BACKEND="json"
+```
+
+O RAG real continua esperando Qdrant. Sem Qdrant, algumas buscas podem operar como scaffold
+ou retornar vazio.
+
 Se o pgAdmin recusar o login apos alteracoes em `infra/.env`, ou se o servidor Postgres nao aparecer no painel esquerdo, rode `.\scripts\reset-pgadmin.ps1`.
 
 ## Deep Research

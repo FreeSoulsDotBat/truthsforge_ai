@@ -57,7 +57,7 @@ O backend esta organizado por dominios:
 - `cost_governor`: orcamento, estimativa e bloqueios.
 - `workers`: jobs longos de indexacao, embedding, OCR e compactacao.
 
-O store principal do modo containerizado e Postgres. O JSON-backed store permanece como fallback local para testes ou quando o banco nao estiver disponivel.
+O store principal do modo containerizado e Postgres. O JSON-backed store permanece como fallback local para testes ou quando o banco nao estiver disponivel; ele nao e caminho de producao, sync ou backup.
 
 ## Dados
 
@@ -67,6 +67,14 @@ O store principal do modo containerizado e Postgres. O JSON-backed store permane
 - Qdrant guarda vetores e payloads indexaveis para RAG.
 - Filesystem guarda arquivos grandes em `.local/files`.
 - Valkey entra para filas/cache em workers.
+
+## Modos de storage
+
+- `TRUTHS_FORGE_STORAGE_BACKEND=postgres`: exige Postgres disponivel e falha rapido se o banco nao conectar. Use para validacao de producao local.
+- `TRUTHS_FORGE_STORAGE_BACKEND=auto`: tenta Postgres e cai para JSON quando o banco nao esta disponivel. Use em desenvolvimento leve.
+- `TRUTHS_FORGE_STORAGE_BACKEND=json`: usa apenas o dev store local. Use em testes automatizados, prototipos ou ambientes sem Docker.
+
+Mesmo no modo `auto`, Qdrant continua sendo o indice vetorial esperado para RAG real. Se Qdrant nao estiver disponivel, buscas vetoriais podem retornar vazio ou operar apenas como scaffold.
 
 ## RAG e ranqueamento
 
