@@ -19,8 +19,10 @@ PRIMITIVE_OPS = {
     "cube": "primitive_cube_add",
     "cylinder": "primitive_cylinder_add",
     "uv_sphere": "primitive_uv_sphere_add",
+    "icosphere": "primitive_ico_sphere_add",
     "plane": "primitive_plane_add",
     "cone": "primitive_cone_add",
+    "torus": "primitive_torus_add",
 }
 
 BOOLEAN_OPERATIONS = {"union", "difference", "intersect"}
@@ -148,12 +150,24 @@ def _create_mesh_primitive(input_json: dict[str, Any]) -> dict[str, Any]:
         op(radius1=size_m[0] / 2, depth=size_m[2], location=location_m)
     elif primitive == "uv_sphere":
         op(radius=size_m[0] / 2, location=location_m)
+    elif primitive == "icosphere":
+        subdivisions = max(1, min(int(input_json.get("subdivisions") or 2), 6))
+        op(radius=size_m[0] / 2, subdivisions=subdivisions, location=location_m)
+    elif primitive == "torus":
+        major_mm = float(input_json.get("major_radius_mm") or 30.0)
+        minor_mm = float(input_json.get("minor_radius_mm") or 8.0)
+        op(
+            major_radius=max(major_mm, 0.1) / 1000.0,
+            minor_radius=max(minor_mm, 0.1) / 1000.0,
+            location=location_m,
+        )
     elif primitive == "plane":
         op(size=size_m[0], location=location_m)
 
     obj = bpy.context.object
     obj.name = str(input_json.get("name") or f"TF_{primitive.capitalize()}")[:63]
-    obj.dimensions = size_m
+    if primitive not in {"icosphere", "torus"}:
+        obj.dimensions = size_m
     bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
     return {
         "message": f"Primitivo {primitive} criado.",
@@ -204,6 +218,132 @@ def _apply_boolean(input_json: dict[str, Any]) -> dict[str, Any]:
     return {
         "message": f"Boolean {operation} aplicada em {target.name}.",
         "objects": [target.name],
+    }
+
+
+def _apply_subdivision(input_json: dict[str, Any]) -> dict[str, Any]:
+    levels = max(1, min(int(input_json.get("levels") or 2), 6))
+    targets = _mesh_objects()
+    if not targets:
+        raise ValueError("Nenhum objeto mesh encontrado para aplicar subdivisão.")
+    for obj in targets:
+        _select_only(obj)
+        modifier = obj.modifiers.new(name="TruthsForge_Subsurf", type="SUBSURF")
+        modifier.levels = levels
+        modifier.render_levels = levels
+        bpy.ops.object.modifier_apply(modifier=modifier.name)
+    return {
+        "message": f"Subdivisão (níveis={levels}) aplicada em {len(targets)} objeto(s).",
+        "objects": [obj.name for obj in targets],
+    }
+
+
+def _apply_solidify(input_json: dict[str, Any]) -> dict[str, Any]:
+    thickness_mm = float(input_json.get("thickness_mm") or 1.0)
+    if thickness_mm <= 0:
+        raise ValueError("thickness_mm precisa ser positivo.")
+    offset = float(input_json.get("offset") or -1.0)
+    if offset < -1.0 or offset > 1.0:
+        raise ValueError("offset deve estar entre -1.0 e 1.0.")
+    targets = _mesh_objects()
+    if not targets:
+        raise ValueError("Nenhum objeto mesh encontrado para aplicar solidify.")
+    for obj in targets:
+        _select_only(obj)
+        modifier = obj.modifiers.new(name="TruthsForge_Solidify", type="SOLIDIFY")
+        modifier.thickness = thickness_mm / 1000.0
+        modifier.offset = offset
+        bpy.ops.object.modifier_apply(modifier=modifier.name)
+    return {
+        "message": f"Solidify ({thickness_mm} mm) aplicado em {len(targets)} objeto(s).",
+        "objects": [obj.name for obj in targets],
+    }
+
+
+def _assign_material(input_json: dict[str, Any]) -> dict[str, Any]:
+    raw_color = input_json.get("color") or input_json.get("base_color") or [0.8, 0.8, 0.8]
+    if not isinstance(raw_color, list) or len(raw_color) not in (3, 4):
+        raise ValueError("color deve ser uma lista RGB [r, g, b] ou RGBA [r, g, b, a].")
+    color = [max(0.0, min(1.0, float(value))) for value in raw_color]
+    if len(color) == 3:
+        color.append(1.0)
+    name = str(input_json.get("name") or "TF_Material")[:63]
+    target = _resolve_object(input_json.get("target"))
+    material = bpy.data.materials.get(name)
+    if material is None:
+        material = bpy.data.materials.new(name=name)
+    material.use_nodes = True
+    principled = material.node_tree.nodes.get("Principled BSDF") if material.node_tree else None
+    if principled is not None and "Base Color" in principled.inputs:
+        principled.inputs["Base Color"].default_value = tuple(color)
+    if not target.data.materials:
+        target.data.materials.append(material)
+    else:
+        target.data.materials[0] = material
+    return {
+        "message": f"Material '{material.name}' atribuído a '{target.name}'.",
+        "objects": [target.name],
+        "material": material.name,
+        "color": color,
+    }
+
+
+def _measure_object(input_json: dict[str, Any]) -> dict[str, Any]:
+    target = _resolve_object(input_json.get("target"))
+    metrics = _measure_object_stats(target)
+    return {
+        "message": (
+            f"Medidas de '{target.name}': bbox {metrics['dimensions_mm']} mm, "
+            f"volume {metrics['volume_mm3']:.2f} mm³."
+        ),
+        "objects": [target.name],
+        **metrics,
+    }
+
+
+def _repair_non_manifold(input_json: dict[str, Any]) -> dict[str, Any]:
+    target = _resolve_object(input_json.get("target"))
+    before_mesh = _bmesh_from_object(target)
+    try:
+        before_non_manifold = _count_non_manifold_edges(before_mesh)
+        before_loose = _count_loose_verts(before_mesh)
+    finally:
+        before_mesh.free()
+
+    _select_only(target)
+    bpy.ops.object.mode_set(mode="EDIT")
+    try:
+        bpy.ops.mesh.select_all(action="SELECT")
+        # Use Blender's built-in repair tools — both reasonably non-destructive.
+        try:
+            bpy.ops.mesh.dissolve_degenerate()
+        except RuntimeError:
+            pass
+        try:
+            bpy.ops.mesh.delete_loose()
+        except RuntimeError:
+            pass
+        bpy.ops.mesh.remove_doubles(threshold=1.0e-5)
+        bpy.ops.mesh.normals_make_consistent(inside=False)
+        bpy.ops.mesh.fill_holes(sides=4)
+    finally:
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    after_mesh = _bmesh_from_object(target)
+    try:
+        after_non_manifold = _count_non_manifold_edges(after_mesh)
+        after_loose = _count_loose_verts(after_mesh)
+    finally:
+        after_mesh.free()
+
+    return {
+        "message": (
+            f"Repair em '{target.name}': non_manifold {before_non_manifold}→{after_non_manifold}, "
+            f"loose_verts {before_loose}→{after_loose}."
+        ),
+        "objects": [target.name],
+        "before": {"non_manifold_edges": before_non_manifold, "loose_verts": before_loose},
+        "after": {"non_manifold_edges": after_non_manifold, "loose_verts": after_loose},
     }
 
 
@@ -571,6 +711,16 @@ def _execute(job: dict[str, Any]) -> dict[str, Any]:
         result = _apply_bevel(input_json)
     elif tool_name == "blender.apply_boolean":
         result = _apply_boolean(input_json)
+    elif tool_name == "blender.apply_subdivision":
+        result = _apply_subdivision(input_json)
+    elif tool_name == "blender.apply_solidify":
+        result = _apply_solidify(input_json)
+    elif tool_name == "blender.assign_material":
+        result = _assign_material(input_json)
+    elif tool_name == "blender.measure_object":
+        result = _measure_object(input_json)
+    elif tool_name == "blender.repair_non_manifold":
+        result = _repair_non_manifold(input_json)
     elif tool_name == "blender.export_stl":
         result = _export_stl(input_json, exports_dir)
     elif tool_name == "blender.export_obj":

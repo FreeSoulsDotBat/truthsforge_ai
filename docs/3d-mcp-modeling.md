@@ -32,23 +32,36 @@ Variáveis:
 - `TRUTHS_FORGE_BLENDER_EXECUTABLE`: caminho absoluto ou comando resolvível no `PATH`.
 - `TRUTHS_FORGE_MODELING_TIMEOUT_SECONDS`: timeout por etapa, padrão `90`.
 
-O workspace fica em `.local/modeling/workspaces/<project>/<plan>`. O runner atual só aceita ferramentas allowlistadas:
+O workspace fica em `.local/modeling/workspaces/<project>/<plan>`. O runner atual só aceita ferramentas allowlistadas, classificadas em três faixas pela `policy.py`:
 
-- `blender.create_mesh_primitive` — primitivos `cube`, `cylinder`, `uv_sphere`, `plane`, `cone`
-  com `dimensions_mm` e `location` opcional.
+**Read-only — auto-executáveis em qualquer modo:**
+
+- `blender.validate_mesh` — checks rápidos (non-manifold, loose verts, loose parts).
+- `blender.validate_printability` — relatório completo via `bmesh`. Veja seção Printability abaixo.
+- `blender.measure_object` — bbox, dimensions, volume aproximado de um objeto.
+
+**Mutáveis padrão — herdam `approval_required` do plano:**
+
+- `blender.create_mesh_primitive` — primitivos `cube`, `cylinder`, `uv_sphere`, `icosphere`,
+  `plane`, `cone`, `torus` com `dimensions_mm` (ou `major_radius_mm`/`minor_radius_mm` no torus)
+  e `location` opcional.
 - `blender.apply_bevel` — bevel uniforme em todos os meshes da cena.
-- `blender.apply_boolean` — `union`, `difference`, `intersect` entre dois objetos; remove o objeto
-  auxiliar por padrão (`delete_other`). Classificada como HIGH_RISK pela política, exige
-  aprovação humana.
-- `blender.validate_mesh` — checks rápidos (non-manifold, loose verts, loose parts); read-only.
-- `blender.validate_printability` — relatório completo via `bmesh` (read-only). Veja seção
-  Printability abaixo.
+- `blender.apply_subdivision` — modifier SUBSURF com `levels` 1–6, aplicado.
+- `blender.apply_solidify` — modifier SOLIDIFY com `thickness_mm` + `offset` (-1.0..1.0).
+- `blender.assign_material` — cria/atualiza material com `Principled BSDF` e atribui ao
+  primeiro slot do objeto target; aceita `color` RGB ou RGBA.
 - `blender.export_stl`, `blender.export_obj`, `blender.export_3mf` — exporta a cena para
   `.local/modeling/workspaces/.../exports/`.
 
-Isso é proposital: a LLM cria intenção e plano, mas não injeta Python livre no Blender. Tools
-read-only (validates) são auto-executadas mesmo em modo `approval_required`; tools destrutivas
-como `apply_boolean` permanecem em HIGH_RISK e exigem aprovação humana explícita.
+**HIGH_RISK — sempre exigem aprovação humana, mesmo declarado low pela LLM:**
+
+- `blender.apply_boolean` — `union`/`difference`/`intersect` entre dois objetos; remove o
+  objeto auxiliar por padrão (`delete_other`).
+- `blender.repair_non_manifold` — sequência de `dissolve_degenerate` + `delete_loose` +
+  `remove_doubles` + `normals_make_consistent` + `fill_holes`. Topologia muda globalmente —
+  rollback exige snapshot.
+
+Isso é proposital: a LLM cria intenção e plano, mas não injeta Python livre no Blender.
 
 ## Endpoints
 

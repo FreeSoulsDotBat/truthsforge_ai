@@ -69,6 +69,14 @@ def test_execution_plan_schema_enumerates_allowed_tools() -> None:
     assert set(tool_enum) == set(PLANNER_TOOLSET)
     assert "project_store.create_snapshot" in tool_enum
     assert "blender.validate_printability" in tool_enum
+    # Tier 2 tools must be reachable by the planner.
+    assert {
+        "blender.apply_subdivision",
+        "blender.apply_solidify",
+        "blender.assign_material",
+        "blender.measure_object",
+        "blender.repair_non_manifold",
+    }.issubset(set(tool_enum))
 
 
 def test_create_llm_plan_builds_plan_from_structured_payload() -> None:
