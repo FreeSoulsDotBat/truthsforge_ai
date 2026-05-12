@@ -303,7 +303,6 @@ class Agent(BaseModel):
     allowed_project_ids: list[str] = Field(default_factory=lambda: [DEFAULT_GENERAL_PROJECT_ID])
     knowledge_base_ids: list[str] = Field(default_factory=list)
     permission_policy: PermissionPolicy | None = None
-    permission_policy: PermissionPolicy | None = None
     graph: AgentGraph | None = None
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
