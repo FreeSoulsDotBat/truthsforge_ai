@@ -388,12 +388,61 @@ no início do próximo call. Sem state persistente do lado backend a limpar.
 discovery file. Add-in e backend respeitam a mesma variável, então deployments
 com `data_dir` customizado continuam sincronizados.
 
+## Printability Fusion 360
+
+O `fusion.validate_printability` agora roda checks geométricos reais
+diretamente da API do Fusion, em vez do placeholder original. A lógica
+ficou em [`apps/fusion-addin/printability_logic.py`](../apps/fusion-addin/printability_logic.py)
+como módulo puro (sem deps `adsk`), o que permite testar todos os
+thresholds via CI fora do Fusion.
+
+Fluxo:
+
+1. O add-in itera `design.rootComponent.bRepBodies` e, para cada corpo,
+   extrai: nome, `isSolid`, `volume` (cm³ → mm³), `physicalProperties.area`
+   (cm² → mm²), bounding box (cm → mm), e percorre cada face para somar
+   área total, área de faces "para baixo" (normal.z ≤ cos 135°), e área
+   de faces "finas" (< 1 mm²).
+2. Esses summaries entram em `compute_printability_report(bodies, checks,
+   printer_profile)`, que aplica os checks abaixo e devolve
+   `{message, objects_inspected, checks_executed, issues, metrics,
+   risk_score, printer_profile}` — mesma forma da resposta Blender.
+
+Checks suportados:
+
+| Check | Severidade | Critério |
+|---|---|---|
+| `is_solid` | error | body não fechado → não printável |
+| `volume` | error | `volume_mm3 ≤ 0` (corpo aberto/degenerado) |
+| `bounding_box` | warning | menor dimensão < `min_dimension_mm` do profile |
+| `wall_thickness_approx` | warning | `2·V / A < min_wall_thickness_mm` |
+| `overhang_approx` | info | `downward_area / total_area > max_overhang_ratio` |
+| `thin_features` | info | `thin_face_area / total_area > max_thin_face_ratio` |
+
+Perfis de impressora embutidos: `default` (genérico FDM) e `bambu_x1c_pla`.
+Adicionar perfis é trivial — basta uma nova entrada em `PRINTER_PROFILES`.
+Cada perfil define os thresholds dos checks proporcionais (acima).
+
+`risk_score` (0–1) agrega severidades com os mesmos pesos do Blender:
+`error=0.5`, `warning=0.2`, `info=0.05`, saturado em 1.0.
+
+Diferença prática contra o `blender.validate_printability`:
+
+- O Blender opera sobre **malhas** (vértices/arestas/faces), pega
+  non-manifold edges e loose parts diretamente do `bmesh`.
+- O Fusion opera sobre **B-Rep** — corpos sólidos paramétricos. Não há
+  conceito de "non-manifold edge" (a topologia é garantida pelo modelador),
+  então o equivalente é `is_solid` (o corpo é fechado?). Os checks de
+  parede fina e overhang usam as próprias propriedades físicas do corpo.
+
+Em workflows híbridos (CAD → mesh), recomenda-se rodar ambos: o Fusion
+detecta problemas paramétricos cedo, o Blender pega problemas de malha
+após a exportação STL/3MF.
+
 ## Próximos incrementos
 
 1. Tools tier 2: `apply_subdivision`, `apply_solidify`, `assign_material`,
    `measure_object`, `repair_non_manifold`, `icosphere`, `torus`.
-2. `fusion.validate_printability` ligado a checks geométricos reais (hoje é
-   placeholder — recomenda usar `blender.validate_printability`).
 
 ## Limite de segurança
 
