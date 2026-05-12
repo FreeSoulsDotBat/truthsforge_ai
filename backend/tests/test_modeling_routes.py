@@ -585,5 +585,5 @@ def test_modeling_policy_classifies_tier2_tools_correctly() -> None:
     assert by_tool["blender.measure_object"].approval_required is False
     # repair_non_manifold é HIGH_RISK → approval mesmo com risk_level low
     assert by_tool["blender.repair_non_manifold"].approval_required is True
-    # apply_subdivision: low risk, não está em HIGH_RISK nem READ_ONLY → segue como declarado (False)
+    # apply_subdivision: low risk, fora de HIGH_RISK/READ_ONLY → mantém o que foi declarado
     assert by_tool["blender.apply_subdivision"].approval_required is False
