@@ -82,6 +82,7 @@ MAX_CONTEXT_DOCUMENTS = 20
 FOLDER_MENTION_PATTERN = re.compile(r"@([A-Za-z0-9_./-]+)")
 GENERATED_IMAGE_MAX_BYTES = 50 * 1024 * 1024
 IMAGE_GENERATION_ESTIMATED_OUTPUT_TOKENS = 1290
+USD_TO_BRL = 5.0
 
 
 def _create_generated_image_file(
@@ -1071,6 +1072,64 @@ def _sse(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+def _cost_metadata(
+    *,
+    preflight_estimated_cost_brl: float,
+    final_estimated_cost_brl: float | None = None,
+    current_spend_brl: float,
+    monthly_budget_brl: float,
+    warn_threshold_percent: int,
+    block_at_budget: bool,
+) -> dict[str, object]:
+    final_cost = (
+        preflight_estimated_cost_brl
+        if final_estimated_cost_brl is None
+        else final_estimated_cost_brl
+    )
+    projected_spend_brl = round(current_spend_brl + final_cost, 6)
+    remaining_budget_brl = round(max(monthly_budget_brl - projected_spend_brl, 0), 6)
+    warn_threshold_brl = round(monthly_budget_brl * warn_threshold_percent / 100, 6)
+    return {
+        "preflight_estimated_cost_brl": preflight_estimated_cost_brl,
+        "final_estimated_cost_brl": final_estimated_cost_brl,
+        "current_month_spend_brl": current_spend_brl,
+        "projected_month_spend_brl": projected_spend_brl,
+        "remaining_month_budget_brl": remaining_budget_brl,
+        "monthly_budget_brl": monthly_budget_brl,
+        "warn_threshold_percent": warn_threshold_percent,
+        "warn_threshold_brl": warn_threshold_brl,
+        "block_at_budget": block_at_budget,
+        "usd_to_brl": USD_TO_BRL,
+    }
+
+
+def _context_audit_metadata(
+    *,
+    project_id: str,
+    folder_id: str | None,
+    context_project_ids: list[str],
+    context_knowledge_base_ids: list[str],
+    context_snippets: list[dict[str, str]],
+    attached_document_ids: list[str],
+    attached_file_ids: list[str],
+    generated_file_ids: list[str] | None = None,
+) -> dict[str, object]:
+    context_document_ids = sorted(
+        {snippet["document_id"] for snippet in context_snippets if snippet.get("document_id")}
+    )
+    return {
+        "project_id": project_id,
+        "folder_id": folder_id,
+        "context_project_ids": context_project_ids,
+        "context_document_ids": context_document_ids,
+        "context_knowledge_base_ids": context_knowledge_base_ids,
+        "context_snippet_count": len(context_snippets),
+        "attached_document_ids": attached_document_ids,
+        "attached_file_ids": attached_file_ids,
+        "generated_file_ids": generated_file_ids or [],
+    }
+
+
 def _runtime_status(stage: str, label: str, detail: str | None = None) -> str:
     payload = {"stage": stage, "label": label}
     if detail:
@@ -1198,6 +1257,13 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
         tokens_out=estimated_tokens_out,
         current_spend_brl=current_spend_brl,
     )
+    preflight_cost_metadata = _cost_metadata(
+        preflight_estimated_cost_brl=preflight.estimated_cost_brl,
+        current_spend_brl=current_spend_brl,
+        monthly_budget_brl=policy.monthly_budget_brl,
+        warn_threshold_percent=policy.warn_threshold_percent,
+        block_at_budget=policy.block_at_budget,
+    )
     if (
         preflight.blocked
         or deep_research_pricing_required
@@ -1248,6 +1314,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 "persona": "JUDITE",
                 "blocked": True,
                 "reason": block_reason,
+                "cost": preflight_cost_metadata,
             },
         )
         store.add_message(user_message)
@@ -1263,7 +1330,13 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 metadata={
                     "session_id": session.id,
                     "reason": block_reason,
+                    "provider": model.provider.value,
+                    "provider_model_id": model.provider_model_id,
+                    "model_display_name": model.display_name,
+                    "preflight_tokens_out": estimated_tokens_out,
+                    "cost": preflight_cost_metadata,
                     "deep_research": payload.deep_research,
+                    "deep_research_max_tool_calls": payload.deep_research_max_tool_calls,
                     "reasoning_summary": payload.reasoning_summary,
                     "response_mode": payload.response_mode,
                     "image_model_id": payload.image_model_id,
@@ -1662,7 +1735,22 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
         tokens_out = estimate_tokens(billable_output_text)
         if payload.response_mode == "image" and not provider_error:
             tokens_out = max(tokens_out, IMAGE_GENERATION_ESTIMATED_OUTPUT_TOKENS)
-        final_cost = estimate_cost(model, policy, tokens_in=tokens_in, tokens_out=tokens_out)
+        final_cost = estimate_cost(
+            model,
+            policy,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            current_spend_brl=current_spend_brl,
+        )
+        final_cost_metadata = _cost_metadata(
+            preflight_estimated_cost_brl=preflight.estimated_cost_brl,
+            final_estimated_cost_brl=final_cost.estimated_cost_brl,
+            current_spend_brl=current_spend_brl,
+            monthly_budget_brl=policy.monthly_budget_brl,
+            warn_threshold_percent=policy.warn_threshold_percent,
+            block_at_budget=policy.block_at_budget,
+        )
+        generated_file_ids = assistant_message.metadata.get("generated_file_ids", [])
         record_audit_event(
             AuditEvent(
                 event_type="chat.stream",
@@ -1674,6 +1762,10 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 metadata={
                     "session_id": session.id,
                     "provider": assistant_message.metadata.get("provider"),
+                    "provider_model_id": model.provider_model_id,
+                    "model_display_name": model.display_name,
+                    "preflight_tokens_out": estimated_tokens_out,
+                    "cost": final_cost_metadata,
                     "agent_id": assistant_message.metadata.get("agent_id"),
                     "target_agent_id": assistant_message.metadata.get("target_agent_id"),
                     "support_agent_ids": assistant_message.metadata.get("support_agent_ids", []),
@@ -1683,15 +1775,18 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                     "response_mode": payload.response_mode,
                     "reasoning_summary": payload.reasoning_summary,
                     "multi_agent_mode": payload.multi_agent_mode,
-                    "project_id": effective_project_id,
-                    "folder_id": effective_folder_id,
-                    "context_project_ids": effective_context_project_ids,
-                    "context_document_ids": [],
-                    "context_knowledge_base_ids": effective_knowledge_base_ids,
-                    "context_snippet_count": len(context_snippets),
-                    "attached_document_ids": payload.attached_document_ids,
-                    "attached_file_ids": payload.attached_file_ids,
-                    "generated_file_ids": assistant_message.metadata.get("generated_file_ids", []),
+                    **_context_audit_metadata(
+                        project_id=effective_project_id,
+                        folder_id=effective_folder_id,
+                        context_project_ids=effective_context_project_ids,
+                        context_knowledge_base_ids=effective_knowledge_base_ids,
+                        context_snippets=context_snippets,
+                        attached_document_ids=payload.attached_document_ids,
+                        attached_file_ids=payload.attached_file_ids,
+                        generated_file_ids=generated_file_ids
+                        if isinstance(generated_file_ids, list)
+                        else [],
+                    ),
                     "fallback_reason": fallback_reason,
                     "provider_error": provider_error,
                 },
