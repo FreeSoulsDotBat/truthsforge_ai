@@ -130,8 +130,7 @@ def test_document_search_falls_back_to_metadata_filters_when_vector_store_is_una
     response = client.post(
         "/api/documents/search",
         json={
-            "query": "Contrato Alpha",
-            "limit": 5,
+            "query": created.json()["title"],
             "tags": ["contratos"],
             "source_types": ["txt"],
         },
@@ -142,3 +141,35 @@ def test_document_search_falls_back_to_metadata_filters_when_vector_store_is_una
     assert any(result["document_id"] == created.json()["id"] for result in results)
     matched = next(result for result in results if result["document_id"] == created.json()["id"])
     assert matched["metadata"]["match_mode"] == "metadata"
+
+
+def test_document_search_accepts_naive_datetime_filters_when_vector_store_is_unavailable(
+    monkeypatch,
+) -> None:
+    async def unavailable_search(self, collection, vector, limit=8, payload_filter=None):
+        raise RuntimeError("qdrant offline")
+
+    monkeypatch.setattr(QdrantVectorStore, "search", unavailable_search)
+    client = TestClient(app)
+    title = f"Contrato Data {uuid4().hex}"
+    created = client.post(
+        "/api/documents/text",
+        json={
+            "title": title,
+            "content": "documento com filtro temporal",
+            "source_type": "txt",
+        },
+    )
+    assert created.status_code == 200
+
+    response = client.post(
+        "/api/documents/search",
+        json={
+            "query": title,
+            "created_after": "2024-01-01T00:00:00",
+            "created_before": "2999-01-01T00:00:00",
+        },
+    )
+
+    assert response.status_code == 200
+    assert any(result["document_id"] == created.json()["id"] for result in response.json())

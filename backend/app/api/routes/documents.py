@@ -74,6 +74,13 @@ def _vector_payload_filter(
     return {"must": must} if must else None
 
 
+def _general_project_ids(store) -> set[str | None]:
+    project_ids: set[str | None] = {None, "", DEFAULT_GENERAL_PROJECT_ID}
+    if hasattr(store, "list_projects"):
+        project_ids.update(project.id for project in store.list_projects() if project.is_general)
+    return project_ids
+
+
 def _matches_document_filters(
     document: Document,
     *,
@@ -317,7 +324,7 @@ async def search_documents(payload: DocumentSearchRequest) -> list[DocumentSearc
         results = []
     matches: list[DocumentSearchResult] = []
     seen_document_ids: set[str] = set()
-    general_project_ids = {None, "", DEFAULT_GENERAL_PROJECT_ID}
+    general_project_ids = _general_project_ids(store)
     for item in results:
         raw_payload = item.get("payload") or {}
         raw_document_id = str(raw_payload.get("document_id") or "")
@@ -386,6 +393,8 @@ async def search_documents(payload: DocumentSearchRequest) -> list[DocumentSearc
         for document in documents:
             if document.id in seen_document_ids:
                 continue
+            if any(match.document_id == document.id for match in matches):
+                continue
             if allowed_document_ids is not None and document.id not in allowed_document_ids:
                 continue
             if payload.source_types and document.source_type not in payload.source_types:
@@ -429,23 +438,27 @@ async def search_documents(payload: DocumentSearchRequest) -> list[DocumentSearc
             )
             if score <= 0:
                 continue
-            matches.append(
-                DocumentSearchResult(
-                    document_id=document.id,
-                    title=document.title,
-                    score=round(score * 0.5, 6),
-                    content="",
-                    metadata={
-                        "source_type": document.source_type,
-                        "category_id": document.category_id,
-                        "folder_id": document.folder_id,
-                        "project_id": document.project_id,
-                        "tags": document.tags,
-                        "match_mode": "metadata",
-                    },
-                )
+            result = DocumentSearchResult(
+                document_id=document.id,
+                title=document.title,
+                score=round(score * 0.5, 6),
+                content="",
+                metadata={
+                    "source_type": document.source_type,
+                    "category_id": document.category_id,
+                    "folder_id": document.folder_id,
+                    "project_id": document.project_id,
+                    "tags": document.tags,
+                    "match_mode": "metadata",
+                },
             )
-            if len(matches) >= payload.limit:
-                break
+            if len(matches) < payload.limit:
+                matches.append(result)
+            else:
+                weakest_index, weakest_match = min(
+                    enumerate(matches), key=lambda item: item[1].score
+                )
+                if result.score > weakest_match.score:
+                    matches[weakest_index] = result
 
     return sorted(matches, key=lambda item: item.score, reverse=True)[: payload.limit]

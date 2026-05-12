@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def now_utc() -> datetime:
@@ -933,6 +933,15 @@ class DocumentSearchRequest(BaseModel):
     ] = Field(default_factory=list)
     created_after: datetime | None = None
     created_before: datetime | None = None
+
+    @field_validator("created_after", "created_before")
+    @classmethod
+    def normalize_search_datetime(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
 
 class DocumentBatchRequest(BaseModel):
