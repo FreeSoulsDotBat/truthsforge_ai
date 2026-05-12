@@ -127,9 +127,9 @@ def execute_tool_request(
         ToolExecutionResult(
             tool_id=tool.id,
             agent_id=agent.id if agent else request.agent_id,
-            status="approval_required",
+            status="error",
             permission=decision.permission,
-            requires_approval=True,
+            requires_approval=False,
             message="Runtime real ainda não implementado para esta ferramenta.",
         ),
         request.input,

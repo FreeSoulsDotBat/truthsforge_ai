@@ -119,6 +119,24 @@ def test_dangerous_tool_requires_approval_and_records_audit_event() -> None:
     )
 
 
+def test_approved_dangerous_tool_without_runtime_returns_error_not_approval_loop() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/api/tools/execute",
+        json={
+            "tool_id": "filesystem.write",
+            "approved": True,
+            "input": {"path": "x.txt", "content": "x"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["requires_approval"] is False
+    assert "Runtime real ainda não implementado" in payload["message"]
+
+
 def test_safe_rag_tool_execution_is_allowed_without_approval() -> None:
     client = TestClient(app)
     response = client.post(
