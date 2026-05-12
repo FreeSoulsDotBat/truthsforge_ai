@@ -265,11 +265,82 @@ Erros seguem códigos JSON-RPC: `PARSE_ERROR`, `METHOD_NOT_FOUND`,
 `INVALID_PARAMS`, `INTERNAL_ERROR`, mais o range customizado `-32001`
 (`TOOL_NOT_FOUND`) e `-32002` (`TOOL_EXECUTION_FAILED`).
 
+## Bridge Fusion 360 (add-in desktop)
+
+O add-in fica em [`apps/fusion-addin/`](../apps/fusion-addin/) e é instalado
+pelo painel **Utilities → Scripts and Add-Ins → Add-Ins → + Add** do Fusion
+apontando para essa pasta (instruções detalhadas no README do próprio add-in).
+
+Arquitetura quando o add-in está rodando:
+
+1. O add-in escuta em `127.0.0.1:<porta aleatória>` e grava um arquivo de
+   discovery em `~/.truths_forge/fusion-bridge.json` com `{host, port, token,
+   pid, tools}`. O token é efêmero (gerado a cada `run()` do add-in) e o
+   arquivo é escrito atomicamente via `.tmp` + rename.
+2. O `FusionDesktopAdapter` no backend lê esse arquivo a cada chamada, abre
+   socket TCP loopback, envia `auth` com o token, e em seguida despacha
+   `tools/list`/`tools/call`/`status` no mesmo line-delimited JSON-RPC 2.0
+   usado pelos servidores stdio do PR #5.
+3. Dentro do add-in, cada `tools/call` é despachado para a **main thread do
+   Fusion** via `app.fireCustomEvent` (padrão oficial Autodesk para evitar
+   crash na API). O worker thread bloqueia em uma `Queue` esperando a
+   resposta da main thread. Timeout default: 120 s.
+4. Quando o add-in é desativado ou o Fusion fecha, `stop()` apaga o discovery.
+   O adapter detecta a ausência e marca `adapter_mock`, fazendo o fusion_mcp
+   stdio cair para mock-mode automaticamente.
+
+### Wire format
+
+Mesmo do PR #5: JSON-RPC 2.0 line-delimited. Métodos do add-in:
+
+- `auth` — primeiro frame obrigatório; payload `{"token": "..."}`. Token errado
+  fecha a conexão imediatamente.
+- `tools/list` — retorna `{server, tools}`.
+- `status` — retorna `{server, connected, transport, addin_pid, tools}`.
+- `tools/call` — recebe `{name, arguments, _meta}` (mesmas chaves do PR #5),
+  bloqueia até a main thread executar, devolve o envelope `{ok, mcp_server,
+  transport, tool_name, software, message, ...}`.
+
+### Tools expostas no MVP
+
+`fusion.open_design`, `fusion.create_sketch`, `fusion.add_rectangle`,
+`fusion.add_circle`, `fusion.extrude_profile`, `fusion.set_parameter`,
+`fusion.export_step`, `fusion.export_stl`, `fusion.export_3mf`,
+`fusion.validate_dimensions`, `fusion.validate_printability` (placeholder —
+recomenda usar `blender.validate_printability` sobre o mesh exportado).
+
+### Segurança
+
+- **Loopback-only**: `bind` em `127.0.0.1`; conexões remotas são impossíveis no
+  nível do socket. Backend e add-in precisam estar na mesma máquina.
+- **Token efêmero**: gerado a cada subida do add-in via `secrets.token_urlsafe`.
+  Não persiste entre sessões.
+- **Auth-first**: o primeiro frame de qualquer conexão é obrigatoriamente
+  `auth`. Anything else fecha o socket.
+- **Allowlist server-side**: o `_execute_on_main_thread` rejeita qualquer
+  `tool_name` fora de `FUSION_TOOLS`. Sem script livre.
+- **Sem subprocess de shell**: o add-in não executa comandos do SO; só fala
+  com a API do Fusion via `adsk.core`/`adsk.fusion`.
+
+### Container e backend remoto
+
+Quando o backend roda dentro do container e o Fusion no host, `127.0.0.1` do
+container **não** é o `127.0.0.1` do host. O caminho mais simples é rodar o
+backend localmente nesse caso, ou montar volume e usar `host.docker.internal`
+no host config — modos cobertos por PR futuro se virar prioridade.
+
+### Override de path
+
+`TRUTHS_FORGE_FUSION_BRIDGE_DISCOVERY` aceita um caminho custom para o
+discovery file. Add-in e backend respeitam a mesma variável, então deployments
+com `data_dir` customizado continuam sincronizados.
+
 ## Próximos incrementos
 
-1. Tools tier 2: `apply_subdivision`, `apply_solidify`, `assign_material`, `measure_object`,
-   `repair_non_manifold`, `icosphere`, `torus`.
-2. Implementar `fusion_mcp` real por add-in persistente do Fusion 360.
+1. Tools tier 2: `apply_subdivision`, `apply_solidify`, `assign_material`,
+   `measure_object`, `repair_non_manifold`, `icosphere`, `torus`.
+2. `fusion.validate_printability` ligado a checks geométricos reais (hoje é
+   placeholder — recomenda usar `blender.validate_printability`).
 
 ## Limite de segurança
 
