@@ -51,7 +51,104 @@ def test_openapi_contains_runtime_routes() -> None:
     assert "/api/3d/plans/{plan_id}/execute" in paths
     assert "/api/files/{file_id}/content" in paths
     assert "/api/chat/sessions/{session_id}" in paths
+    assert "/api/tools" in paths
+    assert "/api/tools/execute" in paths
     assert "delete" in paths["/api/chat/sessions/{session_id}"]
+
+
+def test_tool_catalog_and_permissions_are_exposed() -> None:
+    client = TestClient(app)
+    catalog = client.get("/api/tools")
+    assert catalog.status_code == 200
+    tool_ids = {item["id"] for item in catalog.json()}
+    assert {"rag.search", "python.run", "filesystem.write"}.issubset(tool_ids)
+
+    safe = client.get("/api/tools/rag.search/permission")
+    assert safe.status_code == 200
+    assert safe.json()["allowed"] is True
+
+    dangerous = client.get("/api/tools/python.run/permission")
+    assert dangerous.status_code == 200
+    assert dangerous.json()["requires_approval"] is True
+
+
+def test_agent_tool_allowlist_denies_unlisted_tool() -> None:
+    client = TestClient(app)
+    created = client.post(
+        "/api/agents",
+        json={
+            "name": f"Agente seguro {uuid4().hex}",
+            "system_prompt": "Use apenas RAG.",
+            "tools_allowed": ["rag.search"],
+        },
+    )
+    assert created.status_code == 200
+    agent_id = created.json()["id"]
+
+    permission = client.get(f"/api/tools/python.run/permission?agent_id={agent_id}")
+
+    assert permission.status_code == 200
+    assert permission.json()["permission"] == "deny"
+    assert permission.json()["reason"] == "tool_not_allowed_for_agent"
+
+
+def test_dangerous_tool_requires_approval_and_records_audit_event() -> None:
+    client = TestClient(app)
+    before = client.get("/api/audit/events")
+    assert before.status_code == 200
+    existing_ids = {item["id"] for item in before.json()}
+
+    response = client.post(
+        "/api/tools/execute",
+        json={"tool_id": "filesystem.write", "input": {"path": "x.txt", "content": "x"}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "approval_required"
+    assert payload["requires_approval"] is True
+
+    after = client.get("/api/audit/events")
+    assert after.status_code == 200
+    new_events = [item for item in after.json() if item["id"] not in existing_ids]
+    assert any(
+        item["event_type"] == "tool.execution"
+        and item["metadata"]["tool_id"] == "filesystem.write"
+        and item["metadata"]["status"] == "approval_required"
+        for item in new_events
+    )
+
+
+def test_approved_dangerous_tool_without_runtime_returns_error_not_approval_loop() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/api/tools/execute",
+        json={
+            "tool_id": "filesystem.write",
+            "approved": True,
+            "input": {"path": "x.txt", "content": "x"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["requires_approval"] is False
+    assert "Runtime real ainda não implementado" in payload["message"]
+
+
+def test_safe_rag_tool_execution_is_allowed_without_approval() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/api/tools/execute",
+        json={"tool_id": "rag.search", "input": {"query": "JUDITE"}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["permission"] == "allow"
+    assert payload["output"]["query"] == "JUDITE"
 
 
 def test_chat_session_can_be_deleted() -> None:

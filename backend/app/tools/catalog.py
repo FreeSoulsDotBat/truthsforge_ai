@@ -26,3 +26,7 @@ DEFAULT_TOOLS = [
         requires_confirmation=True,
     ),
 ]
+
+
+def tool_by_id(tool_id: str) -> ToolDefinition | None:
+    return next((tool for tool in DEFAULT_TOOLS if tool.id == tool_id), None)

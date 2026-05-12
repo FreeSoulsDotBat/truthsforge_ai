@@ -750,7 +750,9 @@ class DevStore:
                 list(raw.get("knowledge_base_ids") or [])
             )
             agent = Agent(**raw)
-            agent.permission_policy = PermissionPolicy(agent_id=agent.id)
+            agent.permission_policy = raw.get("permission_policy") or PermissionPolicy(
+                agent_id=agent.id
+            )
             agent.graph = AgentGraph(agent_id=agent.id)
             self._data["agents"].append(_dump_model(agent))
             self._write()
@@ -770,7 +772,9 @@ class DevStore:
                     list(raw.get("knowledge_base_ids") or [])
                 )
                 agent = Agent(id=agent_id, **raw)
-                agent.permission_policy = PermissionPolicy(agent_id=agent.id)
+                agent.permission_policy = raw.get("permission_policy") or PermissionPolicy(
+                    agent_id=agent.id
+                )
                 agent.graph = AgentGraph(agent_id=agent.id)
             else:
                 raw = _dump_model(payload)
