@@ -333,7 +333,13 @@ export const api = {
     request<ModelingExecutionResult>(`/api/3d/plans/${planId}/execute`, {
       method: "POST"
     }),
-  modelingSnapshots: () => request<ModelingSnapshot[]>("/api/3d/snapshots"),
+  modelingSnapshots: (params: { plan_id?: string; project_id?: string } = {}) => {
+    const search = new URLSearchParams();
+    if (params.plan_id) search.set("plan_id", params.plan_id);
+    if (params.project_id) search.set("project_id", params.project_id);
+    const suffix = search.toString();
+    return request<ModelingSnapshot[]>(suffix ? `/api/3d/snapshots?${suffix}` : "/api/3d/snapshots");
+  },
   createModelingSnapshot: (payload: ModelingSnapshotCreate & { label: string }) =>
     request<ModelingSnapshot>("/api/3d/snapshots", {
       method: "POST",

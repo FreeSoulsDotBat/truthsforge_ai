@@ -1377,8 +1377,32 @@ class PostgresStore:
         self._upsert_payload("modeling_plans", _dump_model(plan))
         return plan
 
-    def list_modeling_snapshots(self) -> list[ModelingSnapshot]:
-        return self._list("modeling_snapshots", ModelingSnapshot, order_by="created_at DESC")
+    def list_modeling_snapshots(
+        self,
+        *,
+        plan_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[ModelingSnapshot]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if plan_id is not None:
+            clauses.append("payload->>'plan_id' = %s")
+            params.append(plan_id)
+        if project_id is not None:
+            clauses.append("payload->>'project_id' = %s")
+            params.append(project_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT payload FROM modeling_snapshots
+                    {where}
+                    ORDER BY created_at DESC
+                    """,
+                    tuple(params),
+                )
+                return [ModelingSnapshot(**row["payload"]) for row in cur.fetchall()]
 
     def upsert_modeling_snapshot(self, snapshot: ModelingSnapshot) -> ModelingSnapshot:
         self._upsert_payload(
