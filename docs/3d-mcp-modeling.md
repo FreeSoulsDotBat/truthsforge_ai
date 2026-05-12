@@ -337,10 +337,50 @@ recomenda usar `blender.validate_printability` sobre o mesh exportado).
 
 ### Container e backend remoto
 
-Quando o backend roda dentro do container e o Fusion no host, `127.0.0.1` do
-container **não** é o `127.0.0.1` do host. O caminho mais simples é rodar o
-backend localmente nesse caso, ou montar volume e usar `host.docker.internal`
-no host config — modos cobertos por PR futuro se virar prioridade.
+Quando o backend roda dentro de um container e o Fusion no host, o `127.0.0.1`
+que o add-in escreveu no discovery não é alcançável de dentro do container.
+Defina `TRUTHS_FORGE_FUSION_BRIDGE_HOST` no ambiente do backend para
+sobrescrever o host efetivo:
+
+```yaml
+# docker-compose.dev.yml — exemplo
+services:
+  backend:
+    environment:
+      TRUTHS_FORGE_FUSION_BRIDGE_HOST: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Linux precisa desse mapping
+```
+
+O override aceita IP ou nome DNS arbitrário. Precedência:
+`host_override` no construtor > env var > `host` do discovery file.
+
+### Health-check, cache e backoff
+
+`status()` é o único probe ativo do adapter — abre socket, faz auth, chama
+`status` no add-in. Cada `status()` é **cacheado por TTL curto** (default 2 s)
+para não pagar uma conexão TCP a cada chamada da UI ou de
+`/api/3d/capabilities`. Falhas consecutivas são contadas:
+
+- 1–2 falhas → próximo `status()` re-probeia.
+- ≥ `BACKOFF_THRESHOLD = 3` falhas em sequência → o adapter entra em
+  `adapter_backoff` por `BACKOFF_SECONDS = 5 s`. Durante o backoff,
+  `status()` retorna o estado cacheado sem tocar a porta.
+- Uma resposta bem-sucedida zera o contador.
+
+`execute()` que falha invalida o cache de status imediatamente, garantindo
+que a próxima leitura da UI reflita o estado real (não um "available"
+obsoleto). `FusionAdapterStatus` agora expõe `consecutive_failures`,
+`last_error_at`, `last_error_message` e `effective_host` (o host que foi
+efetivamente tentado, já depois do override) — todos esses campos sobem para
+o `/api/3d/capabilities` quando você quiser surfacear o motivo da desconexão
+na UI.
+
+### Reconnect
+
+Como cada `execute()` abre socket curto novo, "reconnect" é automático: se o
+Fusion fechou e reabriu (gerando novo token), o adapter relê o discovery file
+no início do próximo call. Sem state persistente do lado backend a limpar.
 
 ### Override de path
 
