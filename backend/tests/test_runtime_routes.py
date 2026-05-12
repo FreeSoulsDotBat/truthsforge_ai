@@ -283,6 +283,117 @@ def test_image_generation_without_pricing_is_blocked_by_cost_governor() -> None:
     assert response.status_code == 402
     assert "image_generation_pricing_required" in response.text
 
+    audit_events = client.get("/api/audit/events")
+    assert audit_events.status_code == 200
+    blocked_event = next(
+        event
+        for event in audit_events.json()
+        if event["event_type"] == "chat.blocked"
+        and event["metadata"]["reason"] == "image_generation_pricing_required"
+        and event["metadata"]["image_model_id"] == model_id
+    )
+    assert blocked_event["model_id"] == model_id
+    assert blocked_event["tokens_in"] > 0
+    assert blocked_event["tokens_out"] == 0
+    assert blocked_event["metadata"]["provider"] == "openai"
+    assert blocked_event["metadata"]["provider_model_id"] == "test-image-no-price"
+    assert blocked_event["metadata"]["model_display_name"] == "Imagem sem preço"
+    assert blocked_event["metadata"]["preflight_tokens_out"] == 1290
+    assert blocked_event["metadata"]["cost"]["monthly_budget_brl"] >= 0
+    assert blocked_event["metadata"]["cost"]["projected_month_spend_brl"] >= 0
+
+
+def test_chat_stream_audit_records_cost_and_context_metadata() -> None:
+    client = TestClient(app)
+    model_id = f"test/audit-cost-{uuid4().hex}"
+    created_model = client.post(
+        "/api/models",
+        json={
+            "id": model_id,
+            "provider": "openai",
+            "display_name": "Auditoria custo",
+            "provider_model_id": "audit-cost-model",
+            "enabled": True,
+            "default": True,
+            "capabilities": ["chat"],
+            "input_token_cost_per_million": 2,
+            "output_token_cost_per_million": 4,
+        },
+    )
+    assert created_model.status_code == 200
+
+    project = client.post(
+        "/api/projects",
+        json={"name": f"Projeto auditoria {uuid4().hex}", "description": "auditoria"},
+    )
+    assert project.status_code == 200
+    project_id = project.json()["id"]
+
+    agent = client.post(
+        "/api/agents",
+        json={
+            "name": f"JUDITE auditoria {uuid4().hex}",
+            "description": "Orquestradora de teste",
+            "system_prompt": "Responda somente para testes.",
+            "model_id": model_id,
+            "role": "orchestrator",
+            "allowed_project_ids": [project_id],
+        },
+    )
+    assert agent.status_code == 200
+
+    filename = f"auditoria-{uuid4().hex}.txt"
+    uploaded = client.post(
+        "/api/files/upload",
+        params={"source": "upload", "project_id": project_id},
+        files={"file": (filename, b"conteudo auditavel", "text/plain")},
+    )
+    assert uploaded.status_code == 201
+    file_id = uploaded.json()["id"]
+
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "registre auditoria de custo",
+            "project_id": project_id,
+            "agent_id": agent.json()["id"],
+            "attached_file_ids": [file_id],
+        },
+    )
+
+    assert response.status_code == 200
+    assert "event: done" in response.text
+
+    audit_events = client.get("/api/audit/events")
+    assert audit_events.status_code == 200
+    stream_event = next(
+        event
+        for event in audit_events.json()
+        if event["event_type"] == "chat.stream"
+        and event["model_id"] == model_id
+        and event["metadata"]["attached_file_ids"] == [file_id]
+    )
+    metadata = stream_event["metadata"]
+    assert metadata["provider"] == "dev"
+    assert metadata["agent_id"] == agent.json()["id"]
+    assert metadata["provider_model_id"] == "audit-cost-model"
+    assert metadata["model_display_name"].endswith("Auditoria custo")
+    assert metadata["project_id"] == project_id
+    assert metadata["attached_document_ids"] == []
+    assert metadata["attached_file_ids"] == [file_id]
+    assert metadata["generated_file_ids"] == []
+    assert metadata["context_document_ids"] == []
+    assert metadata["context_snippet_count"] == 0
+    assert metadata["preflight_tokens_out"] == 900
+    assert metadata["fallback_reason"] == "API key não configurada para openai."
+    assert stream_event["tokens_in"] > 0
+    assert stream_event["tokens_out"] > 0
+    assert stream_event["estimated_cost_brl"] == metadata["cost"]["final_estimated_cost_brl"]
+    assert metadata["cost"]["preflight_estimated_cost_brl"] >= stream_event["estimated_cost_brl"]
+    assert (
+        metadata["cost"]["projected_month_spend_brl"] >= metadata["cost"]["current_month_spend_brl"]
+    )
+
 
 def test_attached_document_from_another_project_is_rejected() -> None:
     client = TestClient(app)
