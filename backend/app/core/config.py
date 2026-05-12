@@ -34,6 +34,20 @@ class Settings(BaseModel):
     qdrant_url: str = Field(
         default_factory=lambda: os.getenv("TRUTHS_FORGE_QDRANT_URL", "http://127.0.0.1:6333")
     )
+    rag_embedding_backend: str = Field(
+        default_factory=lambda: os.getenv("TRUTHS_FORGE_RAG_EMBEDDING_BACKEND", "auto").lower()
+    )
+    rag_embedding_model: str = Field(
+        default_factory=lambda: os.getenv(
+            "TRUTHS_FORGE_RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+        )
+    )
+    rag_embedding_dimensions: int = Field(
+        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_RAG_EMBEDDING_DIMENSIONS", "64"))
+    )
+    rag_ocr_languages: str = Field(
+        default_factory=lambda: os.getenv("TRUTHS_FORGE_RAG_OCR_LANGUAGES", "por+eng")
+    )
     redis_url: str = Field(
         default_factory=lambda: os.getenv("TRUTHS_FORGE_REDIS_URL", "redis://127.0.0.1:6379/0")
     )

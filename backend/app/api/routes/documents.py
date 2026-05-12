@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -28,6 +29,49 @@ from app.workers.index_queue import enqueue_platform_file_index
 
 router = APIRouter()
 DOCUMENT_COLLECTION = "truths_forge_documents"
+
+
+def _query_terms(query: str) -> set[str]:
+    return {term for term in re.findall(r"[\wÀ-ÿ]{2,}", query.lower()) if term}
+
+
+def _keyword_score(query: str, *values: str) -> float:
+    terms = _query_terms(query)
+    if not terms:
+        return 0.0
+    haystack = " ".join(values).lower()
+    matches = sum(1 for term in terms if term in haystack)
+    return matches / len(terms)
+
+
+def _match_condition(key: str, values: list[str]) -> dict[str, object] | None:
+    normalized = [value for value in dict.fromkeys(values) if value]
+    if not normalized:
+        return None
+    if len(normalized) == 1:
+        return {"key": key, "match": {"value": normalized[0]}}
+    return {"key": key, "match": {"any": normalized}}
+
+
+def _vector_payload_filter(
+    *,
+    document_ids: set[str] | None,
+    folder_ids: list[str],
+    category_ids: list[str],
+    tags: list[str],
+    source_types: list[str],
+) -> dict[str, object] | None:
+    must: list[dict[str, object]] = []
+    for condition in [
+        _match_condition("document_id", sorted(document_ids) if document_ids is not None else []),
+        _match_condition("folder_id", folder_ids),
+        _match_condition("category_id", category_ids),
+        _match_condition("tags", tags),
+        _match_condition("source_type", source_types),
+    ]:
+        if condition is not None:
+            must.append(condition)
+    return {"must": must} if must else None
 
 
 def _matches_document_filters(
@@ -243,6 +287,8 @@ async def create_document_from_file(payload: DocumentFromFileCreate) -> Document
 @router.post("/search", response_model=list[DocumentSearchResult])
 async def search_documents(payload: DocumentSearchRequest) -> list[DocumentSearchResult]:
     store = get_store()
+    documents = store.list_documents()
+    documents_by_id = {document.id: document for document in documents}
     allowed_document_ids: set[str] | None = None
     if payload.knowledge_base_ids and hasattr(store, "list_knowledge_base_documents"):
         allowed_document_ids = {
@@ -256,11 +302,21 @@ async def search_documents(payload: DocumentSearchRequest) -> list[DocumentSearc
     vector_store = QdrantVectorStore()
     try:
         results = await vector_store.search(
-            DOCUMENT_COLLECTION, embed_text(payload.query), payload.limit
+            DOCUMENT_COLLECTION,
+            embed_text(payload.query),
+            max(payload.limit * 4, payload.limit),
+            payload_filter=_vector_payload_filter(
+                document_ids=allowed_document_ids,
+                folder_ids=payload.folder_ids,
+                category_ids=payload.category_ids,
+                tags=payload.tags,
+                source_types=payload.source_types,
+            ),
         )
     except Exception:
-        return []
+        results = []
     matches: list[DocumentSearchResult] = []
+    seen_document_ids: set[str] = set()
     general_project_ids = {None, "", DEFAULT_GENERAL_PROJECT_ID}
     for item in results:
         raw_payload = item.get("payload") or {}
@@ -289,11 +345,27 @@ async def search_documents(payload: DocumentSearchRequest) -> list[DocumentSearc
             continue
         if payload.tags and not set(payload.tags).intersection(set(raw_payload.get("tags") or [])):
             continue
+        if payload.source_types and raw_payload.get("source_type") not in payload.source_types:
+            continue
+        source_document = documents_by_id.get(raw_document_id)
+        if source_document is not None:
+            if payload.created_after and source_document.created_at < payload.created_after:
+                continue
+            if payload.created_before and source_document.created_at > payload.created_before:
+                continue
+        keyword_score = _keyword_score(
+            payload.query,
+            str(raw_payload.get("title") or ""),
+            str(raw_payload.get("content") or ""),
+            " ".join(str(tag) for tag in raw_payload.get("tags") or []),
+        )
+        combined_score = (float(item.get("score", 0)) * 0.75) + (keyword_score * 0.25)
+        seen_document_ids.add(raw_document_id)
         matches.append(
             DocumentSearchResult(
                 document_id=raw_payload.get("document_id", ""),
                 title=raw_payload.get("title", "Documento"),
-                score=float(item.get("score", 0)),
+                score=round(combined_score, 6),
                 content=raw_payload.get("content", ""),
                 metadata={
                     "chunk_index": raw_payload.get("chunk_index"),
@@ -302,7 +374,78 @@ async def search_documents(payload: DocumentSearchRequest) -> list[DocumentSearc
                     "category_id": raw_payload.get("category_id"),
                     "folder_id": raw_payload.get("folder_id"),
                     "project_id": raw_payload.get("project_id"),
+                    "tags": raw_payload.get("tags") or [],
+                    "match_mode": "hybrid",
                 },
             )
         )
-    return matches
+        if len(matches) >= payload.limit:
+            break
+
+    if len(matches) < payload.limit:
+        for document in documents:
+            if document.id in seen_document_ids:
+                continue
+            if allowed_document_ids is not None and document.id not in allowed_document_ids:
+                continue
+            if payload.source_types and document.source_type not in payload.source_types:
+                continue
+            if payload.folder_ids and document.folder_id not in payload.folder_ids:
+                continue
+            if payload.category_ids and document.category_id not in payload.category_ids:
+                continue
+            if payload.tags and not set(payload.tags).intersection(set(document.tags)):
+                continue
+            if payload.created_after and document.created_at < payload.created_after:
+                continue
+            if payload.created_before and document.created_at > payload.created_before:
+                continue
+            if payload.project_scope_mode == "global_only":
+                if document.project_id not in general_project_ids:
+                    continue
+            elif payload.project_scope_mode == "project_only":
+                if payload.project_id:
+                    if document.project_id != payload.project_id:
+                        continue
+                elif document.project_id not in general_project_ids:
+                    continue
+            elif payload.project_scope_mode == "project_plus_global":
+                if payload.project_id:
+                    if document.project_id not in {
+                        payload.project_id,
+                        None,
+                        "",
+                        DEFAULT_GENERAL_PROJECT_ID,
+                    }:
+                        continue
+                elif document.project_id not in general_project_ids:
+                    continue
+
+            score = _keyword_score(
+                payload.query,
+                document.title,
+                document.source_type,
+                " ".join(document.tags),
+            )
+            if score <= 0:
+                continue
+            matches.append(
+                DocumentSearchResult(
+                    document_id=document.id,
+                    title=document.title,
+                    score=round(score * 0.5, 6),
+                    content="",
+                    metadata={
+                        "source_type": document.source_type,
+                        "category_id": document.category_id,
+                        "folder_id": document.folder_id,
+                        "project_id": document.project_id,
+                        "tags": document.tags,
+                        "match_mode": "metadata",
+                    },
+                )
+            )
+            if len(matches) >= payload.limit:
+                break
+
+    return sorted(matches, key=lambda item: item.score, reverse=True)[: payload.limit]

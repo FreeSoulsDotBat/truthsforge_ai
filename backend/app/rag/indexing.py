@@ -13,12 +13,17 @@ from app.core.contracts import (
     PlatformFile,
     now_utc,
 )
-from app.files.processor import chunk_text, detect_source_type, read_text_content, summarize_chunk
-from app.rag.embeddings import embed_text
+from app.files.processor import (
+    chunk_text,
+    detect_source_type,
+    extract_text_content,
+    summarize_chunk,
+)
+from app.rag.embeddings import embed_text, embedding_backend_name, embedding_model_name
 from app.rag.vector_store import QdrantVectorStore
 
 DOCUMENT_COLLECTION = "truths_forge_documents"
-TEXT_INDEX_SOURCE_TYPES = {"markdown", "txt", "csv", "html"}
+EXTRACTABLE_SOURCE_TYPES = {"markdown", "txt", "csv", "html", "pdf", "docx", "image", "unknown"}
 MAX_SYNC_TEXT_INDEX_BYTES = 20 * 1024 * 1024
 MAX_INDEX_CHARS = 250_000
 FALLBACK_TAG = "arquivo"
@@ -61,7 +66,7 @@ def _general_project_id(store) -> str:
 
 
 def _is_text_like(platform_file: PlatformFile, source_type: str) -> bool:
-    if source_type in TEXT_INDEX_SOURCE_TYPES:
+    if source_type in EXTRACTABLE_SOURCE_TYPES:
         return True
     if platform_file.content_type and platform_file.content_type.startswith("text/"):
         return True
@@ -213,18 +218,27 @@ def _fallback_document_text(document: Document, platform_file: PlatformFile) -> 
     return "\n".join(lines).strip()
 
 
-def _content_for_platform_file(document: Document, platform_file: PlatformFile) -> tuple[str, str]:
+def _content_for_platform_file(
+    document: Document, platform_file: PlatformFile
+) -> tuple[str, str, list[str]]:
     source_type = str(document.source_type)
-    text_content = ""
+    extraction_warnings: list[str] = []
     if _is_text_like(platform_file, source_type):
-        text_content = read_text_content(
+        extraction = extract_text_content(
             platform_file.storage_path,
             settings.data_dir,
+            source_type,
             max_chars=MAX_INDEX_CHARS,
-        ).strip()
-    if text_content:
-        return text_content, "text"
-    return _fallback_document_text(document, platform_file), "metadata_fallback"
+        )
+        text_content = extraction.text.strip()
+        extraction_warnings = extraction.warnings
+        if text_content:
+            return text_content, extraction.mode, extraction_warnings
+    return (
+        _fallback_document_text(document, platform_file),
+        "metadata_fallback",
+        extraction_warnings,
+    )
 
 
 async def delete_document_vectors(document_id: str) -> None:
@@ -254,6 +268,13 @@ async def index_document_content(document: Document, content: str) -> Document:
                 "pinned": document.pinned,
                 "tags": document.tags,
                 "source_type": document.source_type,
+                "created_at": document.created_at.isoformat(),
+                "updated_at": document.updated_at.isoformat(),
+                "file_id": (
+                    document.metadata.get("file_id")
+                    if isinstance(document.metadata, dict)
+                    else None
+                ),
             },
         }
         for index, chunk in enumerate(chunks)
@@ -261,6 +282,9 @@ async def index_document_content(document: Document, content: str) -> Document:
     await vector_store.upsert_chunks(DOCUMENT_COLLECTION, payloads)
     metadata = dict(document.metadata) if isinstance(document.metadata, dict) else {}
     metadata["chunk_count"] = len(chunks)
+    metadata["embedding_backend"] = embedding_backend_name()
+    metadata["embedding_model"] = embedding_model_name()
+    metadata["embedding_dimensions"] = len(payloads[0]["vector"]) if payloads else 0
     metadata.pop("index_error", None)
     metadata.pop("index_note", None)
     return document.model_copy(
@@ -283,6 +307,16 @@ async def index_platform_file_document(
         update={
             "indexed": False,
             "index_status": JobStatus.running,
+            "metadata": {
+                **(document.metadata if isinstance(document.metadata, dict) else {}),
+                "index_attempts": int(
+                    (document.metadata if isinstance(document.metadata, dict) else {}).get(
+                        "index_attempts", 0
+                    )
+                )
+                + 1,
+                "index_started_at": now_utc().isoformat(),
+            },
             "updated_at": now_utc(),
         }
     )
@@ -290,11 +324,17 @@ async def index_platform_file_document(
         running = store.update_document(running)
 
     try:
-        content, mode = _content_for_platform_file(running, platform_file)
+        content, mode, extraction_warnings = _content_for_platform_file(running, platform_file)
         indexed = await index_document_content(running, content)
         metadata = dict(indexed.metadata) if isinstance(indexed.metadata, dict) else {}
         metadata["index_content_mode"] = mode
         metadata["index_chars"] = len(content)
+        metadata["index_completed_at"] = now_utc().isoformat()
+        metadata["index_retryable"] = False
+        if extraction_warnings:
+            metadata["index_warnings"] = extraction_warnings
+        else:
+            metadata.pop("index_warnings", None)
         updated = indexed.model_copy(
             update={
                 "storage_path": platform_file.storage_path,
@@ -308,6 +348,8 @@ async def index_platform_file_document(
     except Exception as exc:
         metadata = dict(running.metadata) if isinstance(running.metadata, dict) else {}
         metadata["index_error"] = str(exc)[:240]
+        metadata["index_failed_at"] = now_utc().isoformat()
+        metadata["index_retryable"] = True
         failed = running.model_copy(
             update={
                 "indexed": False,

@@ -928,6 +928,11 @@ class DocumentSearchRequest(BaseModel):
     category_ids: list[str] = Field(default_factory=list)
     knowledge_base_ids: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    source_types: list[
+        Literal["pdf", "markdown", "csv", "txt", "docx", "image", "html", "unknown"]
+    ] = Field(default_factory=list)
+    created_after: datetime | None = None
+    created_before: datetime | None = None
 
 
 class DocumentBatchRequest(BaseModel):

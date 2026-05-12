@@ -18,7 +18,11 @@ dependencies = [
   "qdrant-client>=1.10.0",
   "redis>=5.0.0",
   "langchain>=0.2.0",
-  "langgraph>=0.2.0"
+  "langgraph>=0.2.0",
+  "sentence-transformers>=3.0.0",
+  "pypdf>=5.0.0",
+  "pillow>=10.0.0",
+  "pytesseract>=0.3.13"
 ]
 
 [project.optional-dependencies]

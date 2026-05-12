@@ -18,7 +18,11 @@ class VectorStore(ABC):
 
     @abstractmethod
     async def search(
-        self, collection: str, vector: list[float], limit: int = 8
+        self,
+        collection: str,
+        vector: list[float],
+        limit: int = 8,
+        payload_filter: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Search indexed chunks by vector similarity."""
 
@@ -65,13 +69,20 @@ class QdrantVectorStore(VectorStore):
             response.raise_for_status()
 
     async def search(
-        self, collection: str, vector: list[float], limit: int = 8
+        self,
+        collection: str,
+        vector: list[float],
+        limit: int = 8,
+        payload_filter: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(base_url=self.url, timeout=10) as client:
             await self._ensure_collection(client, collection)
+            body: dict[str, Any] = {"vector": vector, "limit": limit, "with_payload": True}
+            if payload_filter:
+                body["filter"] = payload_filter
             response = await client.post(
                 f"/collections/{collection}/points/search",
-                json={"vector": vector, "limit": limit, "with_payload": True},
+                json=body,
             )
             response.raise_for_status()
             return response.json().get("result", [])
