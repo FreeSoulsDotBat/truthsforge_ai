@@ -229,6 +229,34 @@ class PermissionPolicy(BaseModel):
     tool_permissions: dict[str, PermissionMode] = Field(default_factory=dict)
 
 
+class ToolPermissionDecision(BaseModel):
+    tool_id: str
+    permission: PermissionMode
+    allowed: bool
+    requires_approval: bool
+    reason: str
+    agent_id: str | None = None
+
+
+class ToolExecutionRequest(BaseModel):
+    tool_id: str
+    agent_id: str | None = None
+    input: dict[str, Any] = Field(default_factory=dict)
+    approved: bool = False
+
+
+class ToolExecutionResult(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("toolrun"))
+    tool_id: str
+    agent_id: str | None = None
+    status: Literal["completed", "approval_required", "denied", "error"]
+    output: dict[str, Any] = Field(default_factory=dict)
+    permission: PermissionMode
+    requires_approval: bool = False
+    message: str = ""
+    created_at: datetime = Field(default_factory=now_utc)
+
+
 class AgentGraph(BaseModel):
     id: str = Field(default_factory=lambda: new_id("graph"))
     agent_id: str
@@ -274,6 +302,7 @@ class Agent(BaseModel):
     tools_allowed: list[str] = Field(default_factory=list)
     allowed_project_ids: list[str] = Field(default_factory=lambda: [DEFAULT_GENERAL_PROJECT_ID])
     knowledge_base_ids: list[str] = Field(default_factory=list)
+    permission_policy: PermissionPolicy | None = None
     permission_policy: PermissionPolicy | None = None
     graph: AgentGraph | None = None
     created_at: datetime = Field(default_factory=now_utc)

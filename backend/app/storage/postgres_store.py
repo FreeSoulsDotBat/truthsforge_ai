@@ -675,7 +675,9 @@ class PostgresStore:
             list(raw.get("knowledge_base_ids") or [])
         )
         agent = Agent(**raw)
-        agent.permission_policy = PermissionPolicy(agent_id=agent.id)
+        agent.permission_policy = raw.get("permission_policy") or PermissionPolicy(
+            agent_id=agent.id
+        )
         agent.graph = AgentGraph(agent_id=agent.id)
         self._upsert_payload("agents", _dump_model(agent))
         return agent
@@ -712,7 +714,9 @@ class PostgresStore:
                 list(raw.get("knowledge_base_ids") or [])
             )
             agent = Agent(id=agent_id, **raw)
-            agent.permission_policy = PermissionPolicy(agent_id=agent.id)
+            agent.permission_policy = raw.get("permission_policy") or PermissionPolicy(
+                agent_id=agent.id
+            )
             agent.graph = AgentGraph(agent_id=agent.id)
         self._upsert_payload("agents", _dump_model(agent))
         return agent

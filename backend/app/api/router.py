@@ -16,6 +16,7 @@ from app.api.routes import (
     prompts,
     server,
     settings,
+    tools,
 )
 
 api_router = APIRouter()
@@ -33,4 +34,5 @@ api_router.include_router(imports.router, prefix="/api/imports", tags=["imports"
 api_router.include_router(audit.router, prefix="/api/audit", tags=["audit"])
 api_router.include_router(cost.router, prefix="/api/cost", tags=["cost"])
 api_router.include_router(settings.router, prefix="/api/settings", tags=["settings"])
+api_router.include_router(tools.router, prefix="/api/tools", tags=["tools"])
 api_router.include_router(modeling.router, prefix="/api/3d", tags=["3d-modeling"])
