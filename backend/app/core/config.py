@@ -43,7 +43,7 @@ class Settings(BaseModel):
         )
     )
     rag_embedding_dimensions: int = Field(
-        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_RAG_EMBEDDING_DIMENSIONS", "64"))
+        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_RAG_EMBEDDING_DIMENSIONS", "384"))
     )
     rag_ocr_languages: str = Field(
         default_factory=lambda: os.getenv("TRUTHS_FORGE_RAG_OCR_LANGUAGES", "por+eng")

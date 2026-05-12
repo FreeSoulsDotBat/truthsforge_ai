@@ -118,6 +118,7 @@ def _worker_loop() -> None:
                     pass
                 _last_backfill_at = now
             continue
+        retry_scheduled = False
         try:
             try:
                 indexed = process_platform_file_index(file_id)
@@ -127,11 +128,13 @@ def _worker_loop() -> None:
                     retryable = bool(metadata.get("index_retryable", False))
                     if retryable and attempts < 3:
                         _queue.put((INDEX_PRIORITY_BACKGROUND + attempts, file_id))
+                        retry_scheduled = True
             except Exception:
                 pass
         finally:
             with _thread_lock:
-                _enqueued_ids.discard(file_id)
+                if not retry_scheduled:
+                    _enqueued_ids.discard(file_id)
             _queue.task_done()
 
 
