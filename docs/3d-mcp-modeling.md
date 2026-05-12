@@ -265,10 +265,40 @@ Erros seguem códigos JSON-RPC: `PARSE_ERROR`, `METHOD_NOT_FOUND`,
 `INVALID_PARAMS`, `INTERNAL_ERROR`, mais o range customizado `-32001`
 (`TOOL_NOT_FOUND`) e `-32002` (`TOOL_EXECUTION_FAILED`).
 
+## Testes de UI
+
+A aba 3D agora tem cobertura unitária via **Vitest + @testing-library/react**.
+
+- `apps/web/src/features/modeling/format.ts` — helpers puros
+  (`formatDurationMs`, `formatConfidencePercentage`, `formatRiskPercentage`,
+  `riskSeverity`, `riskSeverityClass`, `formatTimestamp`, `truncate`).
+  Sem deps de React; testados em `format.test.ts` com 15 cenários
+  cobrindo `null`/`NaN`, clamping, transição segundos → minutos e
+  mapeamento de severidade para classes Tailwind.
+- `dashboard-sections.tsx` exporta `ModelingStepCard`. Os 8 testes em
+  `ModelingStepCard.test.tsx` cobrem render dos badges (risk_level,
+  approval, status), botões "Aprovar etapa" / "Rejeitar etapa" só em
+  `waiting_approval + approval_required`, callbacks com decisão
+  correta, `isBusy` desabilita, mensagem de output e exibição vermelha
+  do erro.
+
+Para adicionar um teste novo:
+
+1. Exportar o componente em `dashboard-sections.tsx` (ou extraí-lo
+   para `features/modeling/components/`).
+2. Criar `*.test.tsx` ao lado, importando `@testing-library/react` +
+   `vitest`.
+3. Rodar via `pnpm --filter @truths-forge/web test:unit` ou via
+   `./scripts/quality.ps1`.
+
+Helpers puros ficam em `features/modeling/format.ts` e similares.
+Componentes só são extraídos para arquivos próprios quando crescem
+demais (>200 linhas ou hooks dedicados).
+
 ## Próximos incrementos
 
-1. Tools tier 2: `apply_subdivision`, `apply_solidify`, `assign_material`, `measure_object`,
-   `repair_non_manifold`, `icosphere`, `torus`.
+1. Tools tier 2: `apply_subdivision`, `apply_solidify`, `assign_material`,
+   `measure_object`, `repair_non_manifold`, `icosphere`, `torus`.
 2. Implementar `fusion_mcp` real por add-in persistente do Fusion 360.
 
 ## Limite de segurança
