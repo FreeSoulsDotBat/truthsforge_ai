@@ -28,7 +28,15 @@ import { AgentLLMNumberInput, AgentLLMSelect, Field, InfoTip, SubFieldLabel } fr
 import { EmptyPanel, InfoRow, PanelTitle, SearchIcon } from "../../components/app-panels";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { defaultLLMConfig, agentRequiredFieldsComplete } from "../agents/agent-domain";
+import {
+  formatConfidencePercentage,
+  formatDurationMs,
+  formatRiskPercentage,
+  formatTimestamp,
+  riskSeverityClass
+} from "../modeling/format";
 import {
   fileContentUrl,
   isChatGPTInformationalFileName,
@@ -795,8 +803,10 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
 
   const planScopedKey = selectedPlan?.id ?? "__none";
   const snapshotsQuery = useQuery({
-    queryKey: ["modeling-snapshots"],
-    queryFn: () => api.modelingSnapshots(),
+    queryKey: ["modeling-snapshots", planScopedKey],
+    queryFn: () =>
+      selectedPlan ? api.modelingSnapshots({ plan_id: selectedPlan.id }) : Promise.resolve<ModelingSnapshot[]>([]),
+    enabled: !!selectedPlan,
     staleTime: 10_000
   });
   const toolCallsQuery = useQuery({
@@ -818,13 +828,14 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
     staleTime: 10_000
   });
 
-  const snapshotsForPlan = useMemo<ModelingSnapshot[]>(() => {
-    const list = snapshotsQuery.data ?? [];
-    if (!selectedPlan) return [];
-    return list.filter((snapshot) => snapshot.plan_id === selectedPlan.id);
-  }, [snapshotsQuery.data, selectedPlan]);
+  const snapshotsForPlan = useMemo<ModelingSnapshot[]>(() => snapshotsQuery.data ?? [], [snapshotsQuery.data]);
   const toolCalls = toolCallsQuery.data ?? [];
   const printabilityReports = printabilityQuery.data ?? [];
+  const [pendingRestoreSnapshotId, setPendingRestoreSnapshotId] = useState<string | null>(null);
+  const pendingRestoreSnapshot = useMemo<ModelingSnapshot | null>(() => {
+    if (!pendingRestoreSnapshotId) return null;
+    return snapshotsForPlan.find((snap) => snap.id === pendingRestoreSnapshotId) ?? null;
+  }, [pendingRestoreSnapshotId, snapshotsForPlan]);
 
   async function createPlan() {
     if (!prompt.trim()) return;
@@ -942,13 +953,18 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
     }
   }
 
-  async function restoreSnapshot(snapshotId: string) {
+  function requestRestoreSnapshot(snapshotId: string) {
     if (!selectedPlan) return;
-    const confirmed = window.confirm(
-      "Restaurar o snapshot vai sobrescrever o workspace atual. " +
-        "Um auto-snapshot do estado atual será criado antes. Deseja continuar?"
-    );
-    if (!confirmed) return;
+    setPendingRestoreSnapshotId(snapshotId);
+  }
+
+  function cancelRestoreSnapshot() {
+    setPendingRestoreSnapshotId(null);
+  }
+
+  async function confirmRestoreSnapshot() {
+    if (!selectedPlan || !pendingRestoreSnapshotId) return;
+    const snapshotId = pendingRestoreSnapshotId;
     setIsBusy(true);
     setStatus("Restaurando snapshot...");
     try {
@@ -961,6 +977,7 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Falha ao restaurar snapshot.");
     } finally {
+      setPendingRestoreSnapshotId(null);
       setIsBusy(false);
     }
   }
@@ -976,7 +993,7 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
       });
       await printabilityQuery.refetch();
       setStatus(
-        `Relatório ${report.id} gerado: ${report.issues.length} aviso(s), risco ${(report.risk_score * 100).toFixed(0)}%.`
+        `Relatório ${report.id} gerado: ${report.issues.length} aviso(s), risco ${formatRiskPercentage(report.risk_score)}.`
       );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Falha ao validar printability.");
@@ -1084,7 +1101,7 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Badge>{selectedPlan.software_choice}</Badge>
-                  <Badge>{Math.round(selectedPlan.confidence * 100)}%</Badge>
+                  <Badge>{formatConfidencePercentage(selectedPlan.confidence)}</Badge>
                   <Badge>{selectedPlan.status}</Badge>
                   {selectedPlan.planner_source && (
                     <Badge>{selectedPlan.planner_source === "llm" ? "planner: IA" : "planner: heurístico"}</Badge>
@@ -1190,15 +1207,13 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
                     </div>
                     {snapshot.reason && <p className="mt-1 line-clamp-2 text-forge-muted">{snapshot.reason}</p>}
                     {snapshot.restored_at && (
-                      <p className="mt-1 text-forge-amber">
-                        Restaurado em {new Date(snapshot.restored_at).toLocaleString("pt-BR")}
-                      </p>
+                      <p className="mt-1 text-forge-amber">Restaurado em {formatTimestamp(snapshot.restored_at)}</p>
                     )}
                     <div className="mt-2 flex justify-end">
                       <Button
                         className="h-8 px-2 text-[11px]"
                         disabled={isBusy || !snapshot.storage_path}
-                        onClick={() => void restoreSnapshot(snapshot.id)}
+                        onClick={() => requestRestoreSnapshot(snapshot.id)}
                       >
                         <Undo2 size={14} /> Restaurar
                       </Button>
@@ -1222,7 +1237,7 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
                     </div>
                     <p className="mt-1 text-forge-muted">
                       {call.mcp_server} · {call.transport}
-                      {typeof call.duration_ms === "number" ? ` · ${call.duration_ms} ms` : ""}
+                      {typeof call.duration_ms === "number" ? ` · ${formatDurationMs(call.duration_ms)}` : ""}
                     </p>
                     {call.status === "error" && (
                       <p className="mt-1 text-forge-red">
@@ -1250,7 +1265,11 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
                   <div key={report.id} className="rounded-md border border-forge-line bg-[#0e0f0e] p-3 text-xs">
                     <div className="flex items-center justify-between gap-2">
                       <span className="line-clamp-1 font-semibold">{report.issues.length} aviso(s)</span>
-                      <Badge>risco {(report.risk_score * 100).toFixed(0)}%</Badge>
+                      <Badge>
+                        <span className={riskSeverityClass(report.risk_score)}>
+                          risco {formatRiskPercentage(report.risk_score)}
+                        </span>
+                      </Badge>
                     </div>
                     <p className="mt-1 line-clamp-2 text-forge-muted">{report.summary}</p>
                     {report.issues.length > 0 && (
@@ -1275,11 +1294,30 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
           )}
         </aside>
       </div>
+      <ConfirmDialog
+        open={!!pendingRestoreSnapshot}
+        title="Restaurar snapshot?"
+        tone="danger"
+        confirmLabel="Restaurar"
+        cancelLabel="Cancelar"
+        busy={isBusy}
+        onConfirm={() => void confirmRestoreSnapshot()}
+        onCancel={cancelRestoreSnapshot}
+      >
+        Restaurar este snapshot vai sobrescrever o workspace atual. O serviço cria um auto-snapshot pré-restore antes da
+        escrita, então é possível desfazer depois.
+        {pendingRestoreSnapshot && (
+          <p className="mt-3 text-xs text-forge-muted">
+            Snapshot: <span className="text-forge-text">{pendingRestoreSnapshot.label}</span>
+            {pendingRestoreSnapshot.files.length > 0 && <> · {pendingRestoreSnapshot.files.length} arquivo(s)</>}
+          </p>
+        )}
+      </ConfirmDialog>
     </section>
   );
 }
 
-function ModelingStepCard({
+export function ModelingStepCard({
   step,
   isBusy,
   onDecide

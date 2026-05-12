@@ -1378,13 +1378,23 @@ class DevStore:
             self._write()
             return plan
 
-    def list_modeling_snapshots(self) -> list[ModelingSnapshot]:
+    def list_modeling_snapshots(
+        self,
+        *,
+        plan_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[ModelingSnapshot]:
         self._ensure_key("modeling_snapshots", [])
-        return sorted(
+        snapshots = sorted(
             self._list("modeling_snapshots", ModelingSnapshot),
             key=lambda item: item.created_at,
             reverse=True,
         )
+        if plan_id is not None:
+            snapshots = [item for item in snapshots if item.plan_id == plan_id]
+        if project_id is not None:
+            snapshots = [item for item in snapshots if item.project_id == project_id]
+        return snapshots
 
     def upsert_modeling_snapshot(self, snapshot: ModelingSnapshot) -> ModelingSnapshot:
         with self._lock:

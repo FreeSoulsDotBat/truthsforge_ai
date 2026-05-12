@@ -106,11 +106,14 @@ def decide_step(step_id: str, payload: ModelingApprovalRequest) -> ModelingPlan:
 
 
 @router.get("/snapshots", response_model=list[ModelingSnapshot])
-def list_snapshots() -> list[ModelingSnapshot]:
+def list_snapshots(
+    plan_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+) -> list[ModelingSnapshot]:
     store = get_store()
     if not hasattr(store, "list_modeling_snapshots"):
         return []
-    return store.list_modeling_snapshots()
+    return store.list_modeling_snapshots(plan_id=plan_id, project_id=project_id)
 
 
 @router.post("/snapshots", response_model=ModelingSnapshot)

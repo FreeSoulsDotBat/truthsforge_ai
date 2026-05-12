@@ -13,6 +13,11 @@ EXPECTED_BLENDER_TOOLS = {
     "blender.create_mesh_primitive",
     "blender.apply_bevel",
     "blender.apply_boolean",
+    "blender.apply_subdivision",
+    "blender.apply_solidify",
+    "blender.assign_material",
+    "blender.measure_object",
+    "blender.repair_non_manifold",
     "blender.validate_mesh",
     "blender.validate_printability",
     "blender.export_stl",
@@ -124,6 +129,51 @@ def test_modeling_snapshot_records_manifest() -> None:
     assert payload["manifest"]["label"] == "Snapshot teste"
     assert payload["storage_path"]
     assert Path(payload["storage_path"], "manifest.json").is_file()
+
+
+def test_list_snapshots_supports_plan_id_filter(monkeypatch, tmp_path) -> None:
+    """GET /api/3d/snapshots?plan_id=... must filter server-side."""
+    import uuid
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    client = TestClient(app)
+
+    # Use unique plan/project IDs per run so the assertions hold even when
+    # the dev store accumulates snapshots from previous test runs.
+    suffix = uuid.uuid4().hex[:8]
+    plan_a = f"plan_filter_a_{suffix}"
+    plan_b = f"plan_filter_b_{suffix}"
+    project_a = f"prj_a_{suffix}"
+    project_b = f"prj_b_{suffix}"
+    bogus_plan = f"does_not_exist_{suffix}"
+
+    first = client.post(
+        "/api/3d/snapshots",
+        json={"plan_id": plan_a, "project_id": project_a, "label": "A"},
+    ).json()
+    second = client.post(
+        "/api/3d/snapshots",
+        json={"plan_id": plan_b, "project_id": project_b, "label": "B"},
+    ).json()
+
+    all_snapshots = client.get("/api/3d/snapshots").json()
+    ids = {item["id"] for item in all_snapshots}
+    assert {first["id"], second["id"]}.issubset(ids)
+
+    only_a = client.get(f"/api/3d/snapshots?plan_id={plan_a}").json()
+    assert {item["id"] for item in only_a} == {first["id"]}
+
+    only_b = client.get(f"/api/3d/snapshots?plan_id={plan_b}").json()
+    assert {item["id"] for item in only_b} == {second["id"]}
+
+    only_prj_a = client.get(f"/api/3d/snapshots?project_id={project_a}").json()
+    assert {item["id"] for item in only_prj_a} == {first["id"]}
+
+    combined = client.get(f"/api/3d/snapshots?plan_id={plan_a}&project_id={project_a}").json()
+    assert {item["id"] for item in combined} == {first["id"]}
+
+    no_match = client.get(f"/api/3d/snapshots?plan_id={bogus_plan}").json()
+    assert no_match == []
 
 
 def test_modeling_snapshot_copies_and_restores_workspace_files(monkeypatch, tmp_path) -> None:
@@ -486,3 +536,54 @@ def test_modeling_policy_skips_approval_for_read_only_tools() -> None:
     assert by_tool["blender.validate_printability"].approval_required is False
     # apply_boolean é HIGH_RISK e deve forçar approval mesmo com risk_level low.
     assert by_tool["blender.apply_boolean"].approval_required is True
+
+
+def test_modeling_policy_classifies_tier2_tools_correctly() -> None:
+    from app.core.contracts import (
+        ModelingExecutionMode,
+        ModelingPlan,
+        ModelingPlanStep,
+        ModelingRiskLevel,
+        ModelingSoftware,
+    )
+    from app.modeling.policy import apply_modeling_policy
+
+    plan = ModelingPlan(
+        prompt="tier 2",
+        software_choice=ModelingSoftware.blender,
+        mode=ModelingExecutionMode.approval_required,
+        steps=[
+            ModelingPlanStep(
+                seq=1,
+                title="medir",
+                software=ModelingSoftware.blender,
+                tool_name="blender.measure_object",
+                risk_level=ModelingRiskLevel.medium,
+                approval_required=True,
+            ),
+            ModelingPlanStep(
+                seq=2,
+                title="reparar",
+                software=ModelingSoftware.blender,
+                tool_name="blender.repair_non_manifold",
+                risk_level=ModelingRiskLevel.low,
+                approval_required=False,
+            ),
+            ModelingPlanStep(
+                seq=3,
+                title="subdivision",
+                software=ModelingSoftware.blender,
+                tool_name="blender.apply_subdivision",
+                risk_level=ModelingRiskLevel.low,
+                approval_required=False,
+            ),
+        ],
+    )
+    enforced = apply_modeling_policy(plan)
+    by_tool = {step.tool_name: step for step in enforced.steps}
+    # measure_object é read-only → auto-execução
+    assert by_tool["blender.measure_object"].approval_required is False
+    # repair_non_manifold é HIGH_RISK → approval mesmo com risk_level low
+    assert by_tool["blender.repair_non_manifold"].approval_required is True
+    # apply_subdivision: low risk, fora de HIGH_RISK/READ_ONLY → mantém o que foi declarado
+    assert by_tool["blender.apply_subdivision"].approval_required is False

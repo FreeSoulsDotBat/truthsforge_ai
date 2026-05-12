@@ -32,23 +32,36 @@ Variáveis:
 - `TRUTHS_FORGE_BLENDER_EXECUTABLE`: caminho absoluto ou comando resolvível no `PATH`.
 - `TRUTHS_FORGE_MODELING_TIMEOUT_SECONDS`: timeout por etapa, padrão `90`.
 
-O workspace fica em `.local/modeling/workspaces/<project>/<plan>`. O runner atual só aceita ferramentas allowlistadas:
+O workspace fica em `.local/modeling/workspaces/<project>/<plan>`. O runner atual só aceita ferramentas allowlistadas, classificadas em três faixas pela `policy.py`:
 
-- `blender.create_mesh_primitive` — primitivos `cube`, `cylinder`, `uv_sphere`, `plane`, `cone`
-  com `dimensions_mm` e `location` opcional.
+**Read-only — auto-executáveis em qualquer modo:**
+
+- `blender.validate_mesh` — checks rápidos (non-manifold, loose verts, loose parts).
+- `blender.validate_printability` — relatório completo via `bmesh`. Veja seção Printability abaixo.
+- `blender.measure_object` — bbox, dimensions, volume aproximado de um objeto.
+
+**Mutáveis padrão — herdam `approval_required` do plano:**
+
+- `blender.create_mesh_primitive` — primitivos `cube`, `cylinder`, `uv_sphere`, `icosphere`,
+  `plane`, `cone`, `torus` com `dimensions_mm` (ou `major_radius_mm`/`minor_radius_mm` no torus)
+  e `location` opcional.
 - `blender.apply_bevel` — bevel uniforme em todos os meshes da cena.
-- `blender.apply_boolean` — `union`, `difference`, `intersect` entre dois objetos; remove o objeto
-  auxiliar por padrão (`delete_other`). Classificada como HIGH_RISK pela política, exige
-  aprovação humana.
-- `blender.validate_mesh` — checks rápidos (non-manifold, loose verts, loose parts); read-only.
-- `blender.validate_printability` — relatório completo via `bmesh` (read-only). Veja seção
-  Printability abaixo.
+- `blender.apply_subdivision` — modifier SUBSURF com `levels` 1–6, aplicado.
+- `blender.apply_solidify` — modifier SOLIDIFY com `thickness_mm` + `offset` (-1.0..1.0).
+- `blender.assign_material` — cria/atualiza material com `Principled BSDF` e atribui ao
+  primeiro slot do objeto target; aceita `color` RGB ou RGBA.
 - `blender.export_stl`, `blender.export_obj`, `blender.export_3mf` — exporta a cena para
   `.local/modeling/workspaces/.../exports/`.
 
-Isso é proposital: a LLM cria intenção e plano, mas não injeta Python livre no Blender. Tools
-read-only (validates) são auto-executadas mesmo em modo `approval_required`; tools destrutivas
-como `apply_boolean` permanecem em HIGH_RISK e exigem aprovação humana explícita.
+**HIGH_RISK — sempre exigem aprovação humana, mesmo declarado low pela LLM:**
+
+- `blender.apply_boolean` — `union`/`difference`/`intersect` entre dois objetos; remove o
+  objeto auxiliar por padrão (`delete_other`).
+- `blender.repair_non_manifold` — sequência de `dissolve_degenerate` + `delete_loose` +
+  `remove_doubles` + `normals_make_consistent` + `fill_holes`. Topologia muda globalmente —
+  rollback exige snapshot.
+
+Isso é proposital: a LLM cria intenção e plano, mas não injeta Python livre no Blender.
 
 ## Endpoints
 
@@ -60,7 +73,8 @@ como `apply_boolean` permanecem em HIGH_RISK e exigem aprovação humana explíc
 - `POST /api/3d/plans/{plan_id}/approve`: aprova ou rejeita o plano inteiro.
 - `POST /api/3d/plans/{plan_id}/execute`: executa etapas aprovadas.
 - `POST /api/3d/steps/{step_id}/approve`: aprova ou rejeita uma etapa específica.
-- `GET /api/3d/snapshots`: lista snapshots persistidos.
+- `GET /api/3d/snapshots`: lista snapshots persistidos, com filtros opcionais
+  `plan_id` e `project_id` (filtragem server-side via JSONB).
 - `POST /api/3d/snapshots`: cria snapshot real do workspace 3D (cópia + manifesto + hash).
 - `GET /api/3d/snapshots/{snapshot_id}`: retorna o snapshot com arquivos e manifesto.
 - `POST /api/3d/snapshots/{snapshot_id}/restore`: restaura o snapshot sobre o workspace original e
@@ -218,6 +232,37 @@ A aprovação por etapa é granular: você pode aprovar `blender.create_mesh_pri
 `blender.apply_boolean`, por exemplo. O executor pula etapas rejeitadas e marca o plano como
 `running` se ainda houver etapas pendentes ou `failed` se alguma etapa explodir.
 
+### Modal de confirmação de restore
+
+O botão **Restaurar** abre o componente reutilizável `ConfirmDialog`
+(`apps/web/src/components/ui/ConfirmDialog.tsx`) em vez de chamar
+`window.confirm`. O dialog tem:
+
+- `role="alertdialog"` + `aria-modal="true"`, com `aria-labelledby` apontando
+  para o título e `aria-describedby` para o corpo.
+- Foco inicial vai para o botão de confirmação; `Tab`/`Shift+Tab` ciclam
+  entre Confirmar e Cancelar (focus trap mínimo, sem dependência externa).
+- `ESC` cancela; clique no backdrop também cancela.
+- `tone="danger"` pinta a borda em vermelho e o botão primário com fundo
+  diferenciado.
+- `busy` desabilita ambos os botões enquanto a ação está em curso.
+
+O componente é testado em `apps/web/src/components/ui/ConfirmDialog.test.tsx`
+com 10 cenários cobrindo render, focus, callbacks, ESC, backdrop e cycle de
+foco.
+
+### Filtro server-side de snapshots
+
+O painel "Snapshots do plano" agora consome `GET /api/3d/snapshots?plan_id=...`
+em vez de filtrar a lista completa client-side. Vantagens:
+
+- Backend retorna só o que importa para o plano selecionado; payload da UI
+  diminui linearmente com o número de planos no banco.
+- Filtro JSONB no Postgres (`payload->>'plan_id' = %s`) usa índices se
+  forem adicionados depois sem mudar interface.
+- Cache do `useQuery` é por `["modeling-snapshots", planId]` — trocar de
+  plano força refetch focado, sem trazer snapshots de outros planos.
+
 ## Transporte MCP: in-process vs stdio
 
 O `LocalMCPClient` agora suporta dois modos de transporte, selecionados pela
@@ -265,11 +310,207 @@ Erros seguem códigos JSON-RPC: `PARSE_ERROR`, `METHOD_NOT_FOUND`,
 `INVALID_PARAMS`, `INTERNAL_ERROR`, mais o range customizado `-32001`
 (`TOOL_NOT_FOUND`) e `-32002` (`TOOL_EXECUTION_FAILED`).
 
+## Bridge Fusion 360 (add-in desktop)
+
+O add-in fica em [`apps/fusion-addin/`](../apps/fusion-addin/) e é instalado
+pelo painel **Utilities → Scripts and Add-Ins → Add-Ins → + Add** do Fusion
+apontando para essa pasta (instruções detalhadas no README do próprio add-in).
+
+Arquitetura quando o add-in está rodando:
+
+1. O add-in escuta em `127.0.0.1:<porta aleatória>` e grava um arquivo de
+   discovery em `~/.truths_forge/fusion-bridge.json` com `{host, port, token,
+   pid, tools}`. O token é efêmero (gerado a cada `run()` do add-in) e o
+   arquivo é escrito atomicamente via `.tmp` + rename.
+2. O `FusionDesktopAdapter` no backend lê esse arquivo a cada chamada, abre
+   socket TCP loopback, envia `auth` com o token, e em seguida despacha
+   `tools/list`/`tools/call`/`status` no mesmo line-delimited JSON-RPC 2.0
+   usado pelos servidores stdio do PR #5.
+3. Dentro do add-in, cada `tools/call` é despachado para a **main thread do
+   Fusion** via `app.fireCustomEvent` (padrão oficial Autodesk para evitar
+   crash na API). O worker thread bloqueia em uma `Queue` esperando a
+   resposta da main thread. Timeout default: 120 s.
+4. Quando o add-in é desativado ou o Fusion fecha, `stop()` apaga o discovery.
+   O adapter detecta a ausência e marca `adapter_mock`, fazendo o fusion_mcp
+   stdio cair para mock-mode automaticamente.
+
+### Wire format
+
+Mesmo do PR #5: JSON-RPC 2.0 line-delimited. Métodos do add-in:
+
+- `auth` — primeiro frame obrigatório; payload `{"token": "..."}`. Token errado
+  fecha a conexão imediatamente.
+- `tools/list` — retorna `{server, tools}`.
+- `status` — retorna `{server, connected, transport, addin_pid, tools}`.
+- `tools/call` — recebe `{name, arguments, _meta}` (mesmas chaves do PR #5),
+  bloqueia até a main thread executar, devolve o envelope `{ok, mcp_server,
+  transport, tool_name, software, message, ...}`.
+
+### Tools expostas no MVP
+
+`fusion.open_design`, `fusion.create_sketch`, `fusion.add_rectangle`,
+`fusion.add_circle`, `fusion.extrude_profile`, `fusion.set_parameter`,
+`fusion.export_step`, `fusion.export_stl`, `fusion.export_3mf`,
+`fusion.validate_dimensions`, `fusion.validate_printability` (placeholder —
+recomenda usar `blender.validate_printability` sobre o mesh exportado).
+
+### Segurança
+
+- **Loopback-only**: `bind` em `127.0.0.1`; conexões remotas são impossíveis no
+  nível do socket. Backend e add-in precisam estar na mesma máquina.
+- **Token efêmero**: gerado a cada subida do add-in via `secrets.token_urlsafe`.
+  Não persiste entre sessões.
+- **Auth-first**: o primeiro frame de qualquer conexão é obrigatoriamente
+  `auth`. Anything else fecha o socket.
+- **Allowlist server-side**: o `_execute_on_main_thread` rejeita qualquer
+  `tool_name` fora de `FUSION_TOOLS`. Sem script livre.
+- **Sem subprocess de shell**: o add-in não executa comandos do SO; só fala
+  com a API do Fusion via `adsk.core`/`adsk.fusion`.
+
+### Container e backend remoto
+
+Quando o backend roda dentro de um container e o Fusion no host, o `127.0.0.1`
+que o add-in escreveu no discovery não é alcançável de dentro do container.
+Defina `TRUTHS_FORGE_FUSION_BRIDGE_HOST` no ambiente do backend para
+sobrescrever o host efetivo:
+
+```yaml
+# docker-compose.dev.yml — exemplo
+services:
+  backend:
+    environment:
+      TRUTHS_FORGE_FUSION_BRIDGE_HOST: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Linux precisa desse mapping
+```
+
+O override aceita IP ou nome DNS arbitrário. Precedência:
+`host_override` no construtor > env var > `host` do discovery file.
+
+### Health-check, cache e backoff
+
+`status()` é o único probe ativo do adapter — abre socket, faz auth, chama
+`status` no add-in. Cada `status()` é **cacheado por TTL curto** (default 2 s)
+para não pagar uma conexão TCP a cada chamada da UI ou de
+`/api/3d/capabilities`. Falhas consecutivas são contadas:
+
+- 1–2 falhas → próximo `status()` re-probeia.
+- ≥ `BACKOFF_THRESHOLD = 3` falhas em sequência → o adapter entra em
+  `adapter_backoff` por `BACKOFF_SECONDS = 5 s`. Durante o backoff,
+  `status()` retorna o estado cacheado sem tocar a porta.
+- Uma resposta bem-sucedida zera o contador.
+
+`execute()` que falha invalida o cache de status imediatamente, garantindo
+que a próxima leitura da UI reflita o estado real (não um "available"
+obsoleto). `FusionAdapterStatus` agora expõe `consecutive_failures`,
+`last_error_at`, `last_error_message` e `effective_host` (o host que foi
+efetivamente tentado, já depois do override) — todos esses campos sobem para
+o `/api/3d/capabilities` quando você quiser surfacear o motivo da desconexão
+na UI.
+
+### Reconnect
+
+Como cada `execute()` abre socket curto novo, "reconnect" é automático: se o
+Fusion fechou e reabriu (gerando novo token), o adapter relê o discovery file
+no início do próximo call. Sem state persistente do lado backend a limpar.
+
+### Override de path
+
+`TRUTHS_FORGE_FUSION_BRIDGE_DISCOVERY` aceita um caminho custom para o
+discovery file. Add-in e backend respeitam a mesma variável, então deployments
+com `data_dir` customizado continuam sincronizados.
+
+## Printability Fusion 360
+
+O `fusion.validate_printability` agora roda checks geométricos reais
+diretamente da API do Fusion, em vez do placeholder original. A lógica
+ficou em [`apps/fusion-addin/printability_logic.py`](../apps/fusion-addin/printability_logic.py)
+como módulo puro (sem deps `adsk`), o que permite testar todos os
+thresholds via CI fora do Fusion.
+
+Fluxo:
+
+1. O add-in itera `design.rootComponent.bRepBodies` e, para cada corpo,
+   extrai: nome, `isSolid`, `volume` (cm³ → mm³), `physicalProperties.area`
+   (cm² → mm²), bounding box (cm → mm), e percorre cada face para somar
+   área total, área de faces "para baixo" (normal.z ≤ cos 135°), e área
+   de faces "finas" (< 1 mm²).
+2. Esses summaries entram em `compute_printability_report(bodies, checks,
+   printer_profile)`, que aplica os checks abaixo e devolve
+   `{message, objects_inspected, checks_executed, issues, metrics,
+   risk_score, printer_profile}` — mesma forma da resposta Blender.
+
+Checks suportados:
+
+| Check | Severidade | Critério |
+|---|---|---|
+| `is_solid` | error | body não fechado → não printável |
+| `volume` | error | `volume_mm3 ≤ 0` (corpo aberto/degenerado) |
+| `bounding_box` | warning | menor dimensão < `min_dimension_mm` do profile |
+| `wall_thickness_approx` | warning | `2·V / A < min_wall_thickness_mm` |
+| `overhang_approx` | info | `downward_area / total_area > max_overhang_ratio` |
+| `thin_features` | info | `thin_face_area / total_area > max_thin_face_ratio` |
+
+Perfis de impressora embutidos: `default` (genérico FDM) e `bambu_x1c_pla`.
+Adicionar perfis é trivial — basta uma nova entrada em `PRINTER_PROFILES`.
+Cada perfil define os thresholds dos checks proporcionais (acima).
+
+`risk_score` (0–1) agrega severidades com os mesmos pesos do Blender:
+`error=0.5`, `warning=0.2`, `info=0.05`, saturado em 1.0.
+
+Diferença prática contra o `blender.validate_printability`:
+
+- O Blender opera sobre **malhas** (vértices/arestas/faces), pega
+  non-manifold edges e loose parts diretamente do `bmesh`.
+- O Fusion opera sobre **B-Rep** — corpos sólidos paramétricos. Não há
+  conceito de "non-manifold edge" (a topologia é garantida pelo modelador),
+  então o equivalente é `is_solid` (o corpo é fechado?). Os checks de
+  parede fina e overhang usam as próprias propriedades físicas do corpo.
+
+Em workflows híbridos (CAD → mesh), recomenda-se rodar ambos: o Fusion
+detecta problemas paramétricos cedo, o Blender pega problemas de malha
+após a exportação STL/3MF.
+
+## Testes de UI
+
+A aba 3D agora tem cobertura unitária via **Vitest + @testing-library/react**.
+
+- `apps/web/src/features/modeling/format.ts` — helpers puros
+  (`formatDurationMs`, `formatConfidencePercentage`, `formatRiskPercentage`,
+  `riskSeverity`, `riskSeverityClass`, `formatTimestamp`, `truncate`).
+  Sem deps de React; testados em `format.test.ts` com 15 cenários
+  cobrindo `null`/`NaN`, clamping, transição segundos → minutos e
+  mapeamento de severidade para classes Tailwind.
+- `dashboard-sections.tsx` exporta `ModelingStepCard`. Os 8 testes em
+  `ModelingStepCard.test.tsx` cobrem render dos badges (risk_level,
+  approval, status), botões "Aprovar etapa" / "Rejeitar etapa" só em
+  `waiting_approval + approval_required`, callbacks com decisão
+  correta, `isBusy` desabilita, mensagem de output e exibição vermelha
+  do erro.
+- `apps/web/src/components/ui/ConfirmDialog.test.tsx` cobre o modal
+  acessível usado no restore (PR #10): render condicional,
+  `role=alertdialog`, focus inicial, click confirm/cancel, ESC,
+  backdrop, `busy` desabilita, Tab cycle entre confirm e cancel.
+
+Para adicionar um teste novo:
+
+1. Exportar o componente em `dashboard-sections.tsx` (ou extraí-lo
+   para `features/modeling/components/`).
+2. Criar `*.test.tsx` ao lado, importando `@testing-library/react` +
+   `vitest`.
+3. Rodar via `pnpm --filter @truths-forge/web test:unit` ou via
+   `./scripts/quality.ps1`.
+
+Helpers puros ficam em `features/modeling/format.ts` e similares.
+Componentes só são extraídos para arquivos próprios quando crescem
+demais (>200 linhas ou hooks dedicados).
+
 ## Próximos incrementos
 
-1. Tools tier 2: `apply_subdivision`, `apply_solidify`, `assign_material`, `measure_object`,
-   `repair_non_manifold`, `icosphere`, `torus`.
-2. Implementar `fusion_mcp` real por add-in persistente do Fusion 360.
+1. Tools tier 2: `apply_subdivision`, `apply_solidify`, `assign_material`,
+   `measure_object`, `repair_non_manifold`, `icosphere`, `torus` —
+   entregues neste rollup pelo PR #7. Próximas tools ficariam em
+   tier 3 (animação básica, modifiers avançados).
 
 ## Limite de segurança
 
