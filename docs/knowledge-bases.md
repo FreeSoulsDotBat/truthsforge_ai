@@ -4,7 +4,7 @@
 
 `Arquivos` e a biblioteca bruta da plataforma. Todo arquivo enviado, recebido, importado ou gerado deve aparecer ali, com deduplicacao e pre-visualizacao quando aplicavel.
 
-`Documentos indexados` sao a representacao tecnica desses arquivos para busca: texto extraido, chunks, metadados e vetores no Qdrant.
+`Documentos indexados` sao a representacao tecnica desses arquivos para busca: texto extraido, chunks, metadados, status de indexacao e vetores no Qdrant.
 
 `Bases de conhecimento` sao colecoes curadas desses documentos. Uma base define escopo, tags, prioridade e limites de recuperacao, como `top documentos por busca` e `chunks por documento`.
 
@@ -25,16 +25,32 @@ No MVP, cada base controla:
 
 Isso permite manter uma base grande sem mandar tudo para a LLM.
 
+## Ingestao e indexacao
+
+Arquivos podem entrar por upload direto, anexo no chat, importacao do ChatGPT, geracao de imagem/modelagem 3D ou criacao manual de texto. O backend cria um `PlatformFile`, associa ou cria um `Document` tecnico e enfileira a indexacao em uma fila em memoria do processo FastAPI.
+
+Tipos com extracao implementada:
+
+- PDF com `pypdf` quando ha texto embutido;
+- Markdown, TXT, JSON, YAML, XML e logs como texto;
+- CSV convertido para linhas textuais;
+- HTML/HTM com texto visivel, ignorando `script`, `style` e `noscript`;
+- DOCX lendo `word/document.xml`;
+- imagens PNG/JPG/WEBP por OCR opcional via Pillow + pytesseract.
+
+A fila de indexacao faz backfill de arquivos sem documento, recupera pendencias apos reinicio e tenta novamente falhas retryable ate 3 vezes. `GET /api/files/indexing/status` expõe backlog, pendentes, rodando, falhas e arquivos ja indexados.
+
 ## Ranqueamento por relevancia
 
 O ranqueamento inicial e interno e nao usa uma segunda chamada de LLM.
 
 1. O backend transforma a pergunta atual em embedding.
 2. O Qdrant compara esse embedding com os chunks indexados e retorna os mais proximos semanticamente.
-3. O backend filtra os resultados pelas bases habilitadas do agente/projeto.
+3. O backend filtra os resultados pelas bases habilitadas do agente/projeto e pelos limites do request.
 4. Se o usuario citou uma pasta, o backend usa essa pasta como filtro opcional de escopo.
 5. O backend aplica pequenos boosts baratos: prioridade da base, prioridade do documento e documentos fixados.
-6. O prompt final recebe apenas os snippets melhor ranqueados dentro dos limites da base.
+6. Se o Qdrant falhar ou retornar pouco, ha fallback por metadados/palavras-chave para documentos elegiveis.
+7. O prompt final recebe apenas os snippets melhor ranqueados dentro dos limites da base.
 
 A inteligencia contextual vem da combinacao de embeddings + metadados + regras de escopo. Uma LLM reranker pode ser adicionada depois, mas ficara opt-in porque gera custo adicional.
 
@@ -49,8 +65,7 @@ Arquivos uteis ficam disponiveis para indexacao em segundo plano. Conforme forem
 1. Envie ou importe arquivos.
 2. Confirme que eles aparecem em `Arquivos`.
 3. Abra `Bases`.
-4. Crie uma base com nome, escopo e tags claras.
+4. Crie uma base com nome, escopo, limites e tags claras.
 5. Adicione arquivos/documentos a essa base.
 6. Atrele a base a um projeto ou agente.
 7. No chat, use `Editar bases de conhecimento atreladas` para mudar o conjunto daquela conversa quando precisar.
-

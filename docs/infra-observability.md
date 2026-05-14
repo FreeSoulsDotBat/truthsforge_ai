@@ -45,11 +45,24 @@ As tabelas principais hoje sao:
 - `model_configs`
 - `agents`
 - `prompts`
+- `projects`
+- `project_folders`
 - `chat_sessions`
 - `chat_messages`
 - `documents`
+- `platform_files`
+- `knowledge_categories`
+- `knowledge_bases`
+- `knowledge_base_documents`
 - `audit_events`
 - `cost_policy`
+- `import_jobs`
+- `modeling_sessions`
+- `modeling_plans`
+- `modeling_snapshots`
+- `modeling_tool_calls`
+- `modeling_printability_reports`
+- `modeling_model_versions`
 
 Os dados ficam em payloads `JSONB` para acelerar o MVP sem travar a modelagem final.
 
@@ -57,7 +70,7 @@ Os dados ficam em payloads `JSONB` para acelerar o MVP sem travar a modelagem fi
 
 Abra `http://127.0.0.1:8081`. Ele ja vem apontando para `valkey:6379`.
 
-Hoje o Redis/Valkey esta preparado para cache/fila, mas ainda nao ha fila de producao intensa. Quando workers de OCR, indexacao e jobs longos entrarem, listas, streams ou chaves de status aparecerao ali.
+Hoje o Redis/Valkey esta preparado para cache/fila, mas as filas implementadas de importacao do ChatGPT e indexacao de arquivos ainda rodam em memoria no processo FastAPI. Quando a fila virar distribuida ou houver jobs de producao intensa, listas, streams ou chaves de status aparecerao ali.
 
 ## Qdrant
 
@@ -76,7 +89,7 @@ O backend le `OPENAI_API_KEY` de `backend/.env` dentro do container. Nao coloque
 O modelo padrao foi configurado no registry local como:
 
 - `id`: `openai/default-chat`
-- `provider_model_id`: `gpt-5-mini`
+- `provider_model_id`: pode ser editado no Model Registry; no dev store atual o default inicial e `gpt-5-mini`
 - custo input: `0.25` USD por 1M tokens
 - custo output: `2.00` USD por 1M tokens
 

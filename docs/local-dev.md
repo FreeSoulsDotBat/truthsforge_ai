@@ -8,7 +8,14 @@ Execute:
 .\scripts\check-env.ps1
 ```
 
-No momento do bootstrap, foram detectados Docker e Git. `npm`, Rust/Cargo e ADB precisam estar no PATH antes de empacotar frontend/desktop/mobile.
+No ambiente Windows local, Docker Desktop e Git sao obrigatorios para o fluxo containerizado. `npm`/`pnpm`, Rust/Cargo e ADB so precisam estar no PATH quando for rodar host mode, empacotar desktop ou sincronizar Android fora dos containers.
+
+Em ambientes sem Docker, como execucoes automatizadas do Devin, o backend tambem roda em host mode com Python 3.11+ e o frontend com pnpm:
+
+```bash
+pip install -e "backend[dev]"
+pnpm install --frozen-lockfile
+```
 
 ## Modo recomendado: tudo em containers
 
@@ -95,6 +102,15 @@ docker compose --env-file infra\.env -f infra\docker-compose.yml -f infra\docker
 .\scripts\test-container.ps1
 ```
 
+Em host mode sem Docker:
+
+```bash
+pushd backend
+python -m pytest -q
+popd
+pnpm --filter @truths-forge/web test:unit
+```
+
 ## Qualidade e pre-commit
 
 O projeto tem uma rotina unica de qualidade para backend e frontend:
@@ -134,6 +150,20 @@ docker compose --env-file infra\.env -f infra\docker-compose.yml -f infra\docker
 docker compose --env-file infra\.env -f infra\docker-compose.yml -f infra\docker-compose.dev.yml exec -T web pnpm --filter @truths-forge/web typecheck
 docker compose --env-file infra\.env -f infra\docker-compose.yml -f infra\docker-compose.dev.yml exec -T web pnpm build:web
 docker compose --env-file infra\.env -f infra\docker-compose.yml -f infra\docker-compose.dev.yml exec -T docs pnpm build:docs
+```
+
+Equivalente em host mode sem Docker:
+
+```bash
+python -m ruff format --check backend/app backend/tests
+python -m ruff check backend/app backend/tests
+pushd backend && python -m pytest -q && popd
+pnpm --filter @truths-forge/web format:check
+pnpm --filter @truths-forge/web lint
+pnpm --filter @truths-forge/web test:unit
+pnpm --filter @truths-forge/web typecheck
+pnpm --filter @truths-forge/web build
+pnpm --filter @truths-forge/docs build
 ```
 
 ## Modo host opcional

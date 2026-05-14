@@ -2,7 +2,7 @@
 
 ## Visao geral
 
-Truth's Forge AI e uma aplicacao pessoal local-first. O desktop Windows e o centro computacional: roda FastAPI, Postgres, Qdrant, Valkey e workers. O frontend React e compartilhado entre desktop e Android.
+Truth's Forge AI e uma aplicacao pessoal local-first. O desktop Windows e o centro computacional: roda FastAPI, Postgres, Qdrant, Valkey, workers locais e adapters de modelagem. O frontend React e compartilhado entre web, desktop e Android.
 
 ```mermaid
 flowchart LR
@@ -46,27 +46,28 @@ O backend esta organizado por dominios:
 
 - `llm_gateway`: providers OpenAI, Anthropic e Google atras de `LLMProvider`.
 - `judite`: orquestracao em portugues BR, roteamento, politicas e memoria.
-- `agents`: runtime com LangGraph/LangChain e checkpoints humanos.
-- `rag`: contrato `VectorStore`, embeddings locais de infraestrutura e Qdrant como indice principal.
-- `files`: storage de documentos, chunking inicial de texto/Markdown, parsing e OCR futuros.
+- `agents`: runtime inicial com LangGraph/LangChain quando disponivel, selecao multiagente e checkpoints humanos futuros.
+- `rag`: contrato `VectorStore`, embeddings locais de infraestrutura, filtros e Qdrant como indice principal.
+- `files`: biblioteca de arquivos, chunking, parsing de PDF/Markdown/TXT/CSV/DOCX/HTML e OCR opcional para imagens.
 - `prompts`: biblioteca e renderizacao de templates.
 - `artifacts`: canvas e exportacoes futuras.
-- `tools`: catalogo de ferramentas internas e sandbox.
+- `tools`: catalogo de ferramentas internas, avaliacao de permissoes e runtime seguro inicial. `rag.search` conclui validacao segura; `python.run` e `filesystem.write` ainda exigem aprovacao e retornam erro ate existir sandbox real.
 - `security`: permissoes por agente/ferramenta.
 - `audit`: trilha de envio a provedores e execucao de ferramentas.
 - `cost_governor`: orcamento, estimativa e bloqueios.
-- `workers`: jobs longos de indexacao, embedding, OCR e compactacao.
+- `workers`: filas em memoria para importacao do ChatGPT e indexacao de arquivos, com recuperacao/backfill de pendencias. Redis/Valkey permanece pronto para cache/fila distribuida futura.
+- `modeling`: MCP local para Blender/Fusion, snapshots, tool calls, printability e artefatos 3D.
 
 O store principal do modo containerizado e Postgres. O JSON-backed store permanece como fallback local para testes ou quando o banco nao estiver disponivel; ele nao e caminho de producao, sync ou backup.
 
 ## Dados
 
-- Postgres guarda estado transacional: chats, mensagens, agentes, prompts, documentos, auditoria e politicas.
+- Postgres guarda estado transacional: chats, mensagens, agentes, prompts, projetos, pastas, documentos, arquivos, bases de conhecimento, jobs de importacao, auditoria, politicas e modelagem 3D.
 - Bases de conhecimento guardam colecoes curadas de documentos indexados; projetos e agentes apenas referenciam essas bases.
 - Segredos de provedores ficam cifrados em `.local/state/secrets.json` quando nao vierem do ambiente.
 - Qdrant guarda vetores e payloads indexaveis para RAG.
 - Filesystem guarda arquivos grandes em `.local/files`.
-- Valkey entra para filas/cache em workers.
+- Valkey entra para filas/cache quando os workers sairem do modo em memoria.
 
 ## Modos de storage
 
