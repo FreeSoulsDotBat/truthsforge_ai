@@ -13,7 +13,7 @@ Este arquivo não substitui `tasks.md`, issues ou PRs. Ele existe para evitar pe
 - Última frente trabalhada: criação do baseline SDD multiagente.
 - Executor anterior: Devin.
 - Executor recomendado para continuação: qualquer agente compatível após leitura de `AGENTS.md`, `spec.md`, `plan.md` e `tasks.md`.
-- Branch/PR relacionado: branch de implementação SDD a partir de `master`.
+- Branch/PR relacionado: PR #12.
 - Spec relacionada: `specs/repo-foundation/spec.md`.
 - Task relacionada: `Foundation SDD`.
 
@@ -36,13 +36,15 @@ Este arquivo não substitui `tasks.md`, issues ou PRs. Ele existe para evitar pe
 
 ### Validação executada
 
-- Pendente nesta branch até a conclusão da implementação e abertura do PR.
+- `git diff --check`
+- `python -m ruff check backend/app backend/tests`
+- `pnpm --filter @truths-forge/web typecheck`
+- `pnpm --filter @truths-forge/docs build`
+- CI do PR #12: GitGuardian e Devin Review verdes no primeiro envio.
 
 ### Pendências
 
-- Rodar validações locais.
-- Abrir PR separado.
-- Aguardar CI.
+-
 
 ### Riscos conhecidos
 
@@ -51,7 +53,7 @@ Este arquivo não substitui `tasks.md`, issues ou PRs. Ele existe para evitar pe
 
 ### Próximo passo recomendado
 
-- Validar docs/specs e manter o PR focado em governança SDD, sem misturar implementação funcional de features.
+-
 
 ## Regras
 

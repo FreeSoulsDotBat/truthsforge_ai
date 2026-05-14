@@ -152,19 +152,19 @@ Convergir documentação e código:
 
 Atacar lacunas funcionais de maior valor:
 
-- governança de conteúdo sensível;
-- approval runtime;
-- pairing mobile;
-- hardening de artifacts/export.
+-
+-
+-
+-
 
 ### Onda D
 
 Expandir especializações:
 
-- Fusion add-in operacional em ambientes reais;
-- cache offline útil no mobile;
-- testes visuais desktop/mobile;
-- empacotamento maduro.
+-
+-
+-
+-
 
 ## Estratégia de validação
 

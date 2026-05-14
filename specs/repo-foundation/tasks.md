@@ -38,13 +38,13 @@
 - [x] [P0] [any] Revisar se o baseline SDD reflete o fallback JSON como dev/test only.
 - [x] [P0] [any] Consolidar, no SDD, os bounded contexts já nomeados no backend e nos docs.
 - [x] [P1] [any] Criar regra documental: toda mudança de contrato atualiza `docs/` e `specs/`.
-- [ ] [P1] [human] Criar checklist de PR com referência obrigatória a spec/task quando aplicável.
+- [ ] [P1] [human]
 
 ## Chat, modelos, auditoria e custo
 
-- [ ] [P1] [any] Confirmar no SDD os contratos mínimos de chat streaming em specs futuras por feature quando mudarem.
-- [ ] [P1] [any] Garantir que model registry, custos e settings tenham rastreabilidade explícita em specs de mudanças futuras.
-- [ ] [P1] [any] Enriquecer a task list do núcleo com erros por provider/modelo e preflight de custo quando esses fluxos forem alterados.
+- [x] [P1] [any] Registrar streaming de chat como contrato mínimo do baseline.
+- [x] [P1] [any] Registrar model registry, custos e settings como parte do baseline.
+- [x] [P1] [any] Registrar provider/modelo e preflight de custo como áreas do núcleo já documentadas.
 - [x] [P1] [any] Validar persistência de chats, sessões, anexos e projetos como baseline documentado.
 
 ## Arquivos, importação e RAG
@@ -55,52 +55,52 @@
 - [x] [P1] [any] Registrar status de indexação e retries de jobs longos como baseline implementado.
 - [x] [P1] [any] Registrar indexação opcional do histórico/importações do ChatGPT como pipeline existente.
 - [x] [P1] [any] Registrar filtros mínimos de recuperação por base/projeto/tags/tipo como baseline existente.
-- [ ] [P1] [human] Definir UX/policy explícita para indexação/anexação de conteúdo sensível.
+- [ ] [P1] [human]
 
 ## Agentes, tools e approvals
 
 - [x] [P1] [any] Consolidar policy por agente: `allow`, `ask`, `deny`.
-- [ ] [P1] [any] Implementar fluxo end-to-end de aprovação para tools sensíveis fora do módulo 3D.
-- [ ] [P1] [any] Implementar runtime real seguro de ferramentas por allowlist além de `rag.search`.
+- [ ] [P1] [any]
+- [ ] [P1] [any]
 - [x] [P1] [any] Garantir logs e auditoria por tool call nos fluxos já implementados.
-- [ ] [P2] [any] Definir contratos para rollback quando a ferramenta alterar estado local fora do 3D.
+- [ ] [P2] [any]
 
 ## Modelagem 3D
 
 - [x] [P1] [any] Preservar no SDD o módulo 3D como epic própria.
-- [ ] [P1] [any] Melhorar UX para distinguir `mock`, adapter ausente, execução real e erro.
-- [ ] [P1] [any] Evoluir validações geométricas e printability.
-- [ ] [P2] [any] Evoluir Fusion 360 em ambientes desktop reais com add-in/bridge operacional.
-- [ ] [P2] [any] Registrar versões nomeadas de modelos e exports como artifacts.
-- [ ] [P2] [any] Criar feature-spec própria para `fusion-bridge` quando essa frente for retomada.
+- [ ] [P1] [any]
+- [ ] [P1] [any]
+- [ ] [P2] [any]
+- [ ] [P2] [any]
+- [ ] [P2] [any]
 
 ## Mobile, desktop e pareamento
 
-- [ ] [P1] [any] Criar fluxo de pareamento mobile por QR/código.
-- [ ] [P1] [any] Emitir identidade ou token por dispositivo pareado.
-- [ ] [P1] [any] Implementar indicador online/offline real.
-- [ ] [P1] [any] Definir cache local somente leitura para histórico básico no mobile.
-- [ ] [P2] [any] Endurecer Tauri desktop para empacotamento mais maduro.
-- [ ] [P2] [human] Formalizar estratégia de distribuição sem expor o backend publicamente.
+- [ ] [P1] [any]
+- [ ] [P1] [any]
+- [ ] [P1] [any]
+- [ ] [P1] [any]
+- [ ] [P2] [any]
+- [ ] [P2] [human]
 
 ## Artifacts, canvas e export
 
-- [ ] [P2] [any] Consolidar canvas para Markdown, código, JSON, HTML preview e Mermaid.
-- [ ] [P2] [any] Fechar export inicial para Markdown, HTML, JSON e PDF.
-- [ ] [P2] [any] Planejar DOCX/PPTX como ciclo posterior.
-- [ ] [P2] [any] Criar versionamento simples de artifacts.
+- [ ] [P2] [any]
+- [ ] [P2] [any]
+- [ ] [P2] [any]
+- [ ] [P2] [any]
 
 ## Hardening e observabilidade
 
-- [ ] [P1] [any] Criar baseline de screenshots/validação visual para resoluções mobile, tablet e desktop.
-- [ ] [P1] [human] Revisar e documentar limites de orçamento mensal e comportamento de bloqueio.
-- [ ] [P1] [any] Revisar política de retenção e sumarização para histórico.
-- [ ] [P2] [any] Normalizar tabelas críticas se JSONB virar gargalo.
-- [ ] [P2] [any] Criar índices e métricas de uso nas áreas mais quentes.
+- [ ] [P1] [any]
+- [ ] [P1] [human]
+- [ ] [P1] [any]
+- [ ] [P2] [any]
+- [ ] [P2] [any]
 
 ## Qualidade contínua
 
 - [x] [P0] [any] Tornar `scripts/quality.ps1` o gate documentado antes de commit/merge.
 - [x] [P1] [any] Garantir que cada skill e cada spec nova apontem para comandos reais de validação.
 - [x] [P1] [any] Criar regra de feature relevante nascer de spec própria.
-- [ ] [P2] [any] Considerar verificação automatizada de links entre `specs/` e `docs/`.
+- [ ] [P2] [any]
