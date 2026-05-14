@@ -36,19 +36,18 @@ Objetivo: estabilizar o nucleo do produto.
 
 Objetivo: substituir o RAG prototipo por busca util em bases grandes.
 
-- Trocar embedding deterministico por embeddings locais reais, mantendo fallback dev.
-- Implementar parsing real para PDF, DOCX, Markdown, TXT, CSV e HTML.
-- Implementar OCR PT-BR opcional para imagens e PDFs escaneados.
-- Melhorar fila de indexacao com retry, status e logs visiveis.
-- Implementar busca hibrida minima: vetorial + filtros por projeto/base/tags/tipo/data.
+- Melhorar governanca de embeddings locais: hoje `sentence-transformers` roda quando disponivel e cai para `deterministic-blake2b` quando o modelo/dependencia nao esta acessivel.
+- Expandir parsing real ja existente para PDF, DOCX, Markdown, TXT, CSV, HTML e imagens com OCR opcional; o proximo passo e melhorar qualidade por tipo e tratar PDFs escaneados com pipeline dedicado.
+- Evoluir fila de indexacao atual em memoria, com retry/status/backfill, para observabilidade mais rica e opcionalmente Redis/Valkey se houver volume.
+- Melhorar busca hibrida minima ja existente: vetorial + filtros por projeto/base/pasta/categoria/tags/tipo/data + fallback por metadados.
 - Garantir decisao explicita do usuario para indexar/anexar documentos sensiveis.
 
 ## Fase 3 - Permissoes e ferramentas
 
 Objetivo: liberar ferramentas perigosas apenas com sandbox, aprovacao e auditoria.
 
-- Implementar runtime real de tools por allowlist.
-- Criar fluxo end-to-end de aprovacao para `python.run`, `filesystem.write` e futuras tools.
+- Evoluir runtime real de tools por allowlist; hoje `rag.search` conclui validacao segura e ferramentas perigosas retornam erro seguro apos avaliacao de permissao.
+- Criar fluxo end-to-end de aprovacao e sandbox para `python.run`, `filesystem.write` e futuras tools.
 - Criar painel de permissoes por agente: `allow`, `ask`, `deny`.
 - Sandboxing para Python/JS antes de permitir alteracoes no PC.
 - Registrar logs por tool call e rollback quando aplicavel.
@@ -58,7 +57,7 @@ Objetivo: liberar ferramentas perigosas apenas com sandbox, aprovacao e auditori
 Objetivo: transformar JUDITE de orquestrador simples em coordenadora operacional.
 
 - Criar memoria da JUDITE: usuario, projetos, preferencias, decisoes e contexto tecnico.
-- Implementar selecao explicita de agentes/tools com justificativa e policy.
+- Evoluir selecao explicita de agentes ja presente no chat para workflows com justificativa, policy e delegacao verificavel.
 - Implementar memoria propria por agente.
 - Permitir agente chamar agente somente quando a permissao permitir.
 - Usar LangGraph onde houver workflow real com estado/checkpoints, nao como camada decorativa.

@@ -12,10 +12,10 @@ O módulo 3D nasce como um bounded context local para conectar JUDITE e agentes 
   tool fora da allowlist).
 - O executor usa adapter MCP local com fallback `mock`.
 - Blender já pode executar um subconjunto seguro por `blender --background` quando configurado.
-- Fusion 360 permanece em `mock` até o add-in persistente ser implementado.
+- Fusion 360 tem bridge real via add-in desktop em `apps/fusion-addin/`; sem add-in ativo, permanece em `mock`.
 - Ações mutáveis exigem aprovação humana por padrão.
 - Scripts livres, shell e operações destrutivas seguem fora do caminho feliz.
-- Artefatos gerados pelo Blender, como `.blend` e `.stl`, entram em `Arquivos` como `generated`.
+- Artefatos gerados pelo Blender/Fusion, como `.blend`, `.stl`, `.obj`, `.3mf` e `.step`, entram em `Arquivos` como `generated` quando retornados pelo adapter.
 
 ## Blender local
 
@@ -172,11 +172,16 @@ software). O audit event `modeling.plan_created` registra `planner_source` (`llm
 O LLM só pode escolher entre:
 
 - `project_store.create_snapshot`
-- `blender.{create_mesh_primitive, apply_bevel, apply_boolean, validate_mesh,
+- `blender.{create_mesh_primitive, apply_bevel, apply_boolean, apply_subdivision,
+  apply_solidify, assign_material, measure_object, repair_non_manifold, validate_mesh,
   validate_printability, export_stl, export_obj, export_3mf}`
 - `fusion.{create_sketch, extrude_profile, validate_dimensions, validate_printability}`
 
-Tools Fusion ainda rodam mock até o add-in persistente entrar (PR futuro).
+O planner usa apenas o subconjunto Fusion acima. O add-in real tambem expoe
+`fusion.open_design`, `fusion.add_rectangle`, `fusion.add_circle`,
+`fusion.set_parameter`, `fusion.export_step`, `fusion.export_stl` e
+`fusion.export_3mf`, mas essas tools ainda nao sao escolhidas automaticamente
+pelo planner LLM.
 
 ## Printability via bmesh
 
@@ -197,9 +202,10 @@ O `risk_score` (0–1) agrega severidades com pesos: `error=0.5`, `warning=0.2`,
 saturado em 1.0. Cada execução vira um `ModelingPrintabilityReport` persistido em
 `modeling_printability_reports`, com `metrics` por objeto e a lista completa de `issues`.
 
-A documentação da arquitetura proposta separa três níveis de printability — geométrica (MVP),
-intermediária (overhang/orientação/encaixes) e avançada (slicer, material, warping). Este PR
-entrega o nível geométrico inteiro; os demais ficam para PRs futuros.
+A arquitetura separa três níveis de printability — geométrica (MVP),
+intermediária (overhang/orientação/encaixes) e avançada (slicer, material, warping).
+O nível geométrico já existe no Blender; overhang aproximado também aparece como check
+informativo. Os demais níveis continuam incrementais.
 
 ## Novas tabelas
 
@@ -325,7 +331,7 @@ Arquitetura quando o add-in está rodando:
 2. O `FusionDesktopAdapter` no backend lê esse arquivo a cada chamada, abre
    socket TCP loopback, envia `auth` com o token, e em seguida despacha
    `tools/list`/`tools/call`/`status` no mesmo line-delimited JSON-RPC 2.0
-   usado pelos servidores stdio do PR #5.
+   usado pelos servidores stdio internos.
 3. Dentro do add-in, cada `tools/call` é despachado para a **main thread do
    Fusion** via `app.fireCustomEvent` (padrão oficial Autodesk para evitar
    crash na API). O worker thread bloqueia em uma `Queue` esperando a
@@ -336,13 +342,13 @@ Arquitetura quando o add-in está rodando:
 
 ### Wire format
 
-Mesmo do PR #5: JSON-RPC 2.0 line-delimited. Métodos do add-in:
+Mesmo contrato dos servidores stdio: JSON-RPC 2.0 line-delimited. Métodos do add-in:
 
 - `auth` — primeiro frame obrigatório; payload `{"token": "..."}`. Token errado
   fecha a conexão imediatamente.
 - `tools/list` — retorna `{server, tools}`.
 - `status` — retorna `{server, connected, transport, addin_pid, tools}`.
-- `tools/call` — recebe `{name, arguments, _meta}` (mesmas chaves do PR #5),
+- `tools/call` — recebe `{name, arguments, _meta}`,
   bloqueia até a main thread executar, devolve o envelope `{ok, mcp_server,
   transport, tool_name, software, message, ...}`.
 
@@ -351,8 +357,7 @@ Mesmo do PR #5: JSON-RPC 2.0 line-delimited. Métodos do add-in:
 `fusion.open_design`, `fusion.create_sketch`, `fusion.add_rectangle`,
 `fusion.add_circle`, `fusion.extrude_profile`, `fusion.set_parameter`,
 `fusion.export_step`, `fusion.export_stl`, `fusion.export_3mf`,
-`fusion.validate_dimensions`, `fusion.validate_printability` (placeholder —
-recomenda usar `blender.validate_printability` sobre o mesh exportado).
+`fusion.validate_dimensions`, `fusion.validate_printability`.
 
 ### Segurança
 
@@ -488,7 +493,7 @@ A aba 3D agora tem cobertura unitária via **Vitest + @testing-library/react**.
   correta, `isBusy` desabilita, mensagem de output e exibição vermelha
   do erro.
 - `apps/web/src/components/ui/ConfirmDialog.test.tsx` cobre o modal
-  acessível usado no restore (PR #10): render condicional,
+  acessível usado no restore: render condicional,
   `role=alertdialog`, focus inicial, click confirm/cancel, ESC,
   backdrop, `busy` desabilita, Tab cycle entre confirm e cancel.
 
@@ -507,10 +512,9 @@ demais (>200 linhas ou hooks dedicados).
 
 ## Próximos incrementos
 
-1. Tools tier 2: `apply_subdivision`, `apply_solidify`, `assign_material`,
-   `measure_object`, `repair_non_manifold`, `icosphere`, `torus` —
-   entregues neste rollup pelo PR #7. Próximas tools ficariam em
-   tier 3 (animação básica, modifiers avançados).
+1. Próximas tools Blender ficariam em tier 3 (animação básica, modifiers avançados).
+   O tier atual já cobre primitivas, bevel/boolean/subdivision/solidify/material,
+   medição, reparo, export e printability.
 
 ## Limite de segurança
 

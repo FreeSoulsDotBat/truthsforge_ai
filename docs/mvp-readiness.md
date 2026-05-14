@@ -1,6 +1,6 @@
 # MVP readiness
 
-Status em 2026-05-03.
+Status em 2026-05-14.
 
 ## Já encaminhado sem depender de decisão externa
 
@@ -11,18 +11,24 @@ Status em 2026-05-03.
 - Gateway LLM com contratos para OpenAI, Anthropic, Google e fallback dev local habilitado por configuração.
 - Configuração local de API keys por provedor com armazenamento cifrado em `.local/state`.
 - Cost Governor inicial com política editável, estimativa por tokens e auditoria de chamadas.
-- RAG inicial para texto/Markdown com storage em `.local/files`, chunking, embedding determinístico local e indexação/consulta no Qdrant.
-- Importacao local de historico do ChatGPT a partir de `conversations.json` ou ZIP com deduplicacao.
-- UI inicial responsiva em português BR: sidebar, chat, painel de contexto/auditoria/prompts/configurações/RAG e estado mobile.
+- RAG para arquivos e documentos com storage em `.local/files`, parsing de PDF/Markdown/TXT/CSV/DOCX/HTML, OCR opcional de imagens, chunking, embedding local, indexação em background, Qdrant e fallback por metadados.
+- Biblioteca `Arquivos` com upload, CRUD, download/preview, filtros, paginacao e deduplicacao.
+- Bases de conhecimento curadas, associadas a projetos, agentes e contexto da conversa.
+- Importacao local de historico do ChatGPT a partir de `conversations.json`, shards ou ZIP, com deduplicacao, assets e job em background.
+- UI inicial responsiva em português BR: sidebar, historico paginado, projetos/pastas, chat, anexos, modos de execucao, painel de contexto/auditoria/prompts/configurações/RAG/arquivos/bases/agentes/3D e estado mobile.
+- Geracao de imagem via OpenAI Images API, Deep Research via Responses API e resumo oficial de raciocinio opt-in.
+- Modo multiagente por contexto: agente principal/orquestrador, agente solicitado e agentes de apoio entram no prompt e na auditoria.
+- Modelagem 3D local por MCP com Blender real quando configurado, Fusion 360 por add-in loopback quando instalado, snapshots, rollback, tool calls e printability.
 
 ## Lacunas que ainda fazem parte do MVP funcional
 
-- Upload real de arquivos, parsing por tipo, OCR e jobs longos de indexação.
-- Indexacao opcional do historico importado do ChatGPT como base de conhecimento/RAG.
-- Fluxo de agentes com aprovação humana para ferramentas sensíveis.
+- Persistir workers em uma fila externa se o volume de OCR/indexacao/importacao crescer alem do processo local.
+- Criar fluxo automatico assistido para transformar historico importado do ChatGPT em bases de conhecimento revisadas.
+- Implementar sandbox real para `python.run` e `filesystem.write`; hoje o runtime avalia permissao, exige aprovacao quando necessario e retorna erro seguro para essas ferramentas.
+- Memoria duravel da JUDITE/agentes e workflows LangGraph reais com checkpoints humanos.
 - Autenticação/pareamento para acesso mobile fora da máquina local.
-- Testes de interface com navegador real e screenshots em desktop/mobile.
-- Provider registry preenchido com IDs reais de modelos e custos atuais escolhidos pelo usuário.
+- Testes de interface com navegador real e screenshots/recordings em desktop/mobile.
+- Provider registry preenchido/revisado com IDs reais de modelos e custos atuais escolhidos pelo usuário.
 - Configuração real de chaves OpenAI, Anthropic e Google pelo usuário.
 - Empacotamento Tauri/Capacitor ainda é scaffold, não instalador final.
 

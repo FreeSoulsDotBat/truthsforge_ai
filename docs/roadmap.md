@@ -25,17 +25,18 @@
 ## M3 - Agentes
 
 - CRUD completo de agentes.
-- LangGraph com state, memoria e human-in-the-loop.
-- Permissoes por agente/ferramenta.
-- Painel de aprovacoes.
+- Selecao explicita de agente principal, agente solicitado e agentes de apoio no chat.
+- LangGraph disponivel como wrapper inicial; workflows com state duravel, memoria e human-in-the-loop ainda evoluem.
+- Permissoes por agente/ferramenta com avaliacao no runtime.
+- Painel de aprovacoes ainda pendente para ferramentas sensiveis fora do modulo 3D.
 
 ## M4 - RAG
 
-- Ingestao inicial de texto/Markdown com chunking, embedding local deterministico e Qdrant.
+- Ingestao de arquivos/documentos com chunking, embeddings locais e Qdrant.
 - Upload e storage de PDF, MD, TXT, CSV, DOCX, HTML e imagens.
-- Parsing/chunking/OCR PT-BR.
-- Embeddings locais para infraestrutura.
-- Busca hibrida e chat com documentos.
+- Parsing/chunking/OCR PT-BR opcional.
+- Busca hibrida simples: vetor + filtros + boost/fallback por metadados.
+- Chat com bases de conhecimento, projetos, pastas e anexos.
 
 ## M5 - Custos, Auditoria e Retencao
 
@@ -53,10 +54,11 @@
 
 ## M7 - Artifacts e Ferramentas
 
-- Painel de artifacts/canvas.
-- Render Markdown, codigo, JSON, Mermaid, HTML, tabelas e graficos.
-- Export PDF, MD, HTML, DOCX, PPTX e JSON.
-- Execucao Python/JS sandboxada.
+- Geracao de imagem via OpenAI Images API e registro das imagens em `Arquivos`.
+- Runtime inicial de ferramentas por allowlist/permissao: `rag.search` validado, ferramentas perigosas bloqueadas/pendentes de sandbox.
+- Painel de artifacts/canvas ainda pendente.
+- Render Markdown/codigo/JSON/Mermaid/HTML/tabelas/graficos e export PDF/MD/HTML/DOCX/PPTX/JSON seguem como proximos passos de artifacts.
+- Execucao Python/JS sandboxada segue pendente; nao usar `python.run` para codigo real ate existir sandbox.
 
 ## M8 - Hardening
 
