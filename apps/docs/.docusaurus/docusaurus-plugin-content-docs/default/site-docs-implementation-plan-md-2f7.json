@@ -1,0 +1,23 @@
+{
+  "id": "implementation-plan",
+  "title": "Plano de implementacao",
+  "description": "Este plano organiza a correcao das lacunas arquiteturais identificadas nos documentos de arquitetura e no codigo atual. A ordem prioriza estabilidade, seguranca e utilidade do MVP antes de autonomia avançada.",
+  "source": "@site/../../docs/implementation-plan.md",
+  "sourceDirName": ".",
+  "slug": "/implementation-plan",
+  "permalink": "/docs/implementation-plan",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docsSidebar",
+  "previous": {
+    "title": "Geracao de imagem",
+    "permalink": "/docs/image-generation"
+  },
+  "next": {
+    "title": "Observabilidade da infra local",
+    "permalink": "/docs/infra-observability"
+  }
+}

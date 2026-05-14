@@ -4,15 +4,15 @@ import ComponentCreator from '@docusaurus/ComponentCreator';
 export default [
   {
     path: '/docs',
-    component: ComponentCreator('/docs', 'c9f'),
+    component: ComponentCreator('/docs', '701'),
     routes: [
       {
         path: '/docs',
-        component: ComponentCreator('/docs', '402'),
+        component: ComponentCreator('/docs', 'b80'),
         routes: [
           {
             path: '/docs',
-            component: ComponentCreator('/docs', 'cb4'),
+            component: ComponentCreator('/docs', 'b43'),
             routes: [
               {
                 path: '/docs/3d-mcp-modeling',
@@ -53,6 +53,18 @@ export default [
               {
                 path: '/docs/deep-research',
                 component: ComponentCreator('/docs/deep-research', '434'),
+                exact: true,
+                sidebar: "docsSidebar"
+              },
+              {
+                path: '/docs/image-generation',
+                component: ComponentCreator('/docs/image-generation', 'da4'),
+                exact: true,
+                sidebar: "docsSidebar"
+              },
+              {
+                path: '/docs/implementation-plan',
+                component: ComponentCreator('/docs/implementation-plan', '2bc'),
                 exact: true,
                 sidebar: "docsSidebar"
               },

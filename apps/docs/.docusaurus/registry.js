@@ -3,6 +3,8 @@ export default {
   "17896441": [() => import(/* webpackChunkName: "17896441" */ "@theme/DocItem"), "@theme/DocItem", require.resolveWeak("@theme/DocItem")],
   "1df93b7f": [() => import(/* webpackChunkName: "1df93b7f" */ "@site/src/pages/index.tsx"), "@site/src/pages/index.tsx", require.resolveWeak("@site/src/pages/index.tsx")],
   "273d2507": [() => import(/* webpackChunkName: "273d2507" */ "@site/../../docs/api.md"), "@site/../../docs/api.md", require.resolveWeak("@site/../../docs/api.md")],
+  "29816b73": [() => import(/* webpackChunkName: "29816b73" */ "@site/../../docs/image-generation.md"), "@site/../../docs/image-generation.md", require.resolveWeak("@site/../../docs/image-generation.md")],
+  "2f712c36": [() => import(/* webpackChunkName: "2f712c36" */ "@site/../../docs/implementation-plan.md"), "@site/../../docs/implementation-plan.md", require.resolveWeak("@site/../../docs/implementation-plan.md")],
   "45025738": [() => import(/* webpackChunkName: "45025738" */ "@site/../../docs/roadmap.md"), "@site/../../docs/roadmap.md", require.resolveWeak("@site/../../docs/roadmap.md")],
   "45e16164": [() => import(/* webpackChunkName: "45e16164" */ "@site/../../docs/application-map.md"), "@site/../../docs/application-map.md", require.resolveWeak("@site/../../docs/application-map.md")],
   "548da301": [() => import(/* webpackChunkName: "548da301" */ "@site/../../docs/chatgpt-import.md"), "@site/../../docs/chatgpt-import.md", require.resolveWeak("@site/../../docs/chatgpt-import.md")],

@@ -46,6 +46,16 @@
               "sidebar": "docsSidebar"
             },
             {
+              "id": "image-generation",
+              "path": "/docs/image-generation",
+              "sidebar": "docsSidebar"
+            },
+            {
+              "id": "implementation-plan",
+              "path": "/docs/implementation-plan",
+              "sidebar": "docsSidebar"
+            },
+            {
               "id": "infra-observability",
               "path": "/docs/infra-observability",
               "sidebar": "docsSidebar"

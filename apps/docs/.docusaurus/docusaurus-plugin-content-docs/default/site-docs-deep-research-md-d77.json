@@ -17,7 +17,7 @@
     "permalink": "/docs/decisions"
   },
   "next": {
-    "title": "Observabilidade da infra local",
-    "permalink": "/docs/infra-observability"
+    "title": "Geracao de imagem",
+    "permalink": "/docs/image-generation"
   }
 }
