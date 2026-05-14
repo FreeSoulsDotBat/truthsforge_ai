@@ -9,6 +9,8 @@ Este repositorio comeca pelo ambiente de desenvolvimento local:
 - `apps/desktop/`: scaffold Tauri para empacotar o frontend no Windows.
 - `apps/mobile/`: scaffold Capacitor para Android.
 - `infra/`: Docker Compose com PostgreSQL/pgvector, Qdrant e Valkey.
+- `specs/`: baseline SDD e futuras specs por feature.
+- `.agents/skills/`: procedimentos versionados para agentes e humanos trabalharem por bounded context.
 - `.local/`: dados locais de desenvolvimento, ignorados pelo Git.
 
 ## Estado atual
@@ -58,3 +60,14 @@ Qualidade antes de commit:
 ```
 
 O hook preparado em `.githooks/pre-commit` roda format check, lint e testes unitarios do backend/frontend dentro dos containers.
+
+## SDD e colaboração multiagente
+
+O repositório usa Spec-Driven Development em `specs/`.
+
+- `AGENTS.md` é o contrato comum para Codex, Claude Code, Devin e humanos.
+- `CLAUDE.md` apenas adapta o Claude Code para carregar o contrato comum.
+- `specs/repo-foundation/` descreve o baseline atual do produto em `spec.md`, `plan.md`, `tasks.md` e `handoff.md`.
+- `.agents/skills/` guarda procedimentos por bounded context, sem scripts executáveis por padrão.
+
+Mudanças relevantes devem nascer de uma spec existente ou criar `specs/<slug-da-feature>/` quando o escopo exceder ajuste pontual. Quando comportamento, contrato ou fluxo mudar, atualize `docs/` e `specs/` juntos.
