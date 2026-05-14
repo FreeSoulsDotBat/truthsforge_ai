@@ -13,6 +13,8 @@ O projeto e um monorepo: backend, frontends, documentacao, pacotes compartilhado
 - `packages/ui`: espaco reservado para componentes compartilhados.
 - `infra`: Docker Compose e configuracao dos servicos locais.
 - `docs`: documentacao do produto, arquitetura e operacao.
+- `specs`: especificacoes SDD vivas; `specs/repo-foundation` e o baseline compartilhado por humanos e agentes.
+- `.agents/skills`: procedimentos versionados por bounded context para Codex, Claude Code, Devin e humanos.
 - `.local`: dados locais ignorados pelo Git.
 
 ## Backend
@@ -52,6 +54,18 @@ O frontend React e a primeira experiencia do usuario.
 `apps/docs` roda Docusaurus em `http://127.0.0.1:3000`.
 
 Ele nao duplica a documentacao: le diretamente os arquivos Markdown da pasta `docs/` do monorepo (`path: "../../docs"` no Docusaurus).
+
+## SDD
+
+O SDD vive em `specs/` e organiza intenção, plano, tasks e handoff sem substituir `docs/`.
+
+- `AGENTS.md`: contrato comum de arquitetura, prioridade de contexto e qualidade.
+- `CLAUDE.md`: adaptador mínimo para Claude Code carregar `AGENTS.md`.
+- `specs/repo-foundation/spec.md`: baseline do MVP local-first.
+- `specs/repo-foundation/plan.md`: plano técnico e sequência de workstreams.
+- `specs/repo-foundation/tasks.md`: backlog rastreável por prioridade e executor sugerido.
+- `specs/repo-foundation/handoff.md`: continuidade quando humanos, Codex, Claude Code ou Devin alternarem a execução.
+- `.agents/skills/`: skills instruction-first para mapear repo, validar qualidade e trabalhar nos principais bounded contexts.
 
 ## Dados
 
