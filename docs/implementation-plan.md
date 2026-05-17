@@ -47,17 +47,18 @@ Objetivo: substituir o RAG prototipo por busca util em bases grandes.
 Objetivo: liberar ferramentas perigosas apenas com sandbox, aprovacao e auditoria.
 
 - Evoluir runtime real de tools por allowlist; hoje `rag.search` conclui validacao segura e ferramentas perigosas retornam erro seguro apos avaliacao de permissao.
-- Criar fluxo end-to-end de aprovacao e sandbox para `python.run`, `filesystem.write` e futuras tools.
+- Criar fluxo end-to-end de sandbox para `python.run`, `filesystem.write` e futuras tools.
+- Permitir adicoes sem aprovacao quando a policy permitir; exigir aprovacao humana para alteracoes e delecoes.
 - Criar painel de permissoes por agente: `allow`, `ask`, `deny`.
-- Sandboxing para Python/JS antes de permitir alteracoes no PC.
-- Registrar logs por tool call e rollback quando aplicavel.
+- Sandboxing por projeto para Python/JS antes de permitir alteracoes no PC, com rede permitida no MVP, timeout, limites de tamanho, auditoria e rollback obrigatorio.
+- Registrar logs por tool call.
 
 ## Fase 4 - JUDITE e agentes reais
 
 Objetivo: transformar JUDITE de orquestrador simples em coordenadora operacional.
 
-- Criar memoria da JUDITE: usuario, projetos, preferencias, decisoes e contexto tecnico.
-- Evoluir selecao explicita de agentes ja presente no chat para workflows com justificativa, policy e delegacao verificavel.
+- Criar memoria ampla da JUDITE: usuario, projetos, preferencias, decisoes, historico resumido, contexto tecnico e demais sinais uteis.
+- Evoluir selecao explicita de agentes ja presente no chat para workflows multi-etapa com justificativa, policy, delegacao verificavel e checkpoints humanos.
 - Implementar memoria propria por agente.
 - Permitir agente chamar agente somente quando a permissao permitir.
 - Usar LangGraph onde houver workflow real com estado/checkpoints, nao como camada decorativa.
@@ -66,10 +67,10 @@ Objetivo: transformar JUDITE de orquestrador simples em coordenadora operacional
 
 Objetivo: consolidar o modulo mais alinhado a arquitetura e remover falsas promessas.
 
-- Manter Blender como POC real principal.
+- Manter Blender real como caminho obrigatorio quando configurado.
 - Melhorar UI para diferenciar mock, adapter ausente, execucao real e erro.
 - Melhorar validacoes de malha/printability.
-- Evoluir Fusion 360 apenas quando o add-in/adapter real estiver minimamente operacional.
+- Tratar Fusion bridge como obrigatorio para a trilha atual, com spec propria, add-in/adapter real e loopback local.
 - Registrar versoes de modelos e exports como artifacts.
 
 ## Fase 6 - Mobile, pairing e seguranca
@@ -77,18 +78,17 @@ Objetivo: consolidar o modulo mais alinhado a arquitetura e remover falsas prome
 Objetivo: permitir Android como cliente seguro do backend desktop.
 
 - Implementar indicador online/offline real.
-- Criar pairing por QR/codigo no desktop.
-- Emitir JWT por dispositivo pareado.
+- Criar pairing por QR code local no desktop.
+- MVP mobile nao exige autenticacao de usuario.
 - Priorizar Tailscale/WireGuard; HTTPS publico fica fora do caminho padrao inicial.
-- Implementar cache local somente leitura para historico basico quando desktop estiver offline.
+- Implementar cache local completo quando desktop estiver offline.
 
 ## Fase 7 - Artifacts/canvas/export
 
 Objetivo: entregar a area produtiva/criativa do MVP.
 
 - Canvas para Markdown, codigo, JSON, HTML preview e Mermaid.
-- Export inicial: Markdown, HTML, JSON e PDF.
-- Depois: DOCX/PPTX.
+- Export com mesma prioridade para Markdown, codigo, JSON, HTML, Mermaid, PDF, DOCX e PPTX.
 - Versionamento simples de artifacts.
 
 ## Fase 8 - Retencao, compactacao e performance

@@ -22,7 +22,7 @@ Manter desktop e mobile como shells coerentes com o frontend principal e com o m
 - o mobile continua cliente pareado do desktop;
 - não trate o mobile como backend independente;
 - HTTPS público não é o caminho padrão inicial;
-- preserve a ideia de cache offline somente leitura quando esse fluxo for evoluído.
+- preserve a ideia de cache offline completo quando esse fluxo for evoluído.
 
 ## Entrega mínima
 

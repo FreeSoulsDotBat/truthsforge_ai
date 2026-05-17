@@ -33,3 +33,29 @@ O acesso remoto padrao sera por Tailscale/WireGuard. Portas HTTPS publicas ficam
 ## ADR-007 - Modelos locais
 
 Chat fica restrito a OpenAI, Anthropic e Google. Modelos locais podem ser usados para embeddings, reranking, OCR auxiliar e outras tarefas de infraestrutura que reduzam custo.
+
+## ADR-008 - Governança SDD por domínio
+
+Mudanças relevantes devem referenciar uma spec/task. Quando a frente exceder ajuste pontual, a spec deve viver em `specs/<slug-do-dominio>/`, separada do baseline `repo-foundation`.
+
+Toda entrega relevante deve incluir o checklist obrigatório de `docs/delivery-checklist.md`. Antes de alterar a plataforma, o executor deve confirmar com o dono do produto o nome da branch e a mensagem de commit em formato semântico.
+
+## ADR-009 - Autonomia de agentes e tools
+
+JUDITE deve evoluir como orquestradora que delega contexto e coordena workflows multi-etapa com checkpoints humanos. Agentes e tools podem executar adições sem aprovação quando a policy permitir. Alterações e deleções exigem aprovação humana.
+
+Tools de escrita ou execução devem operar em diretório isolado por projeto, com rede permitida no MVP, timeout e limites de tamanho definidos pela implementação, auditoria e rollback obrigatório.
+
+## ADR-010 - RAG, dados sensíveis e provedores externos
+
+Documentos indexados podem compor prompts enviados a OpenAI, Anthropic ou Google quando esses provedores estiverem configurados. Conteúdo sensível deve ser classificado por controle manual e heurística automática, com rastreabilidade na auditoria.
+
+O fluxo automático assistido de importação ChatGPT para bases revisadas não faz parte do MVP imediato.
+
+## ADR-011 - Mobile MVP sem autenticação de usuário
+
+O pareamento mobile inicial deve usar QR code local. Para o MVP, não haverá autenticação de usuário no mobile; o cliente pareado pode manter cache offline completo.
+
+## ADR-012 - 3D/Fusion obrigatório no MVP
+
+Blender real e Fusion bridge são obrigatórios para a trilha atual de modelagem 3D. Fusion deve ser tratado como spec própria do bounded context 3D, com planner, policy, snapshots, rollback, printability, exports e artifacts rastreáveis.

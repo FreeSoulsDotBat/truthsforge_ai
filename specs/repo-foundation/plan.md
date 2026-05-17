@@ -125,7 +125,7 @@ Objetivo: manter shells finos e funcionalmente coerentes com o frontend principa
 - Capacitor pareado no Android;
 - indicador online/offline;
 - pareamento por dispositivo;
-- cache somente leitura no mobile.
+- cache offline completo no mobile.
 
 ## Sequenciamento
 
@@ -152,19 +152,19 @@ Convergir documentação e código:
 
 Atacar lacunas funcionais de maior valor:
 
--
--
--
--
+- `specs/agents-tools/`: JUDITE orquestradora, workflows multi-etapa, tools, sandbox, memória e rollback.
+- `specs/rag-sensitive-data/`: classificação sensível manual/heurística, auditoria de documentos e escopo RAG.
+- `specs/modeling-3d-fusion/`: Blender real, Fusion bridge, snapshots, rollback, printability e artifacts.
+- `specs/observability-quality/`: auditoria obrigatória e golden paths.
 
 ### Onda D
 
 Expandir especializações:
 
--
--
--
--
+- `specs/mobile-pairing/`: QR local, mobile sem autenticação no MVP, indicador online/offline e cache completo.
+- `specs/artifacts-export/`: canvas, artifacts e exports Markdown/código/JSON/HTML/Mermaid/PDF/DOCX/PPTX.
+- Retenção, compactação e performance quando houver volume real.
+- Automação de rastreabilidade entre PR, spec, task e documentação.
 
 ## Estratégia de validação
 
@@ -185,7 +185,9 @@ Expandir especializações:
 
 - toda mudança de contrato exige atualização de spec e docs relevantes;
 - toda task concluída exige referência cruzada quando fizer parte do SDD;
-- toda feature nova deve nascer de uma pasta própria em `specs/` se exceder ajuste pontual.
+- toda feature nova deve nascer de uma pasta própria em `specs/` se exceder ajuste pontual;
+- toda entrega relevante deve usar o checklist obrigatório de `docs/delivery-checklist.md`;
+- antes de alterar a plataforma, o executor deve confirmar branch e commit semântico com o dono do produto.
 
 ## Riscos e mitigação
 

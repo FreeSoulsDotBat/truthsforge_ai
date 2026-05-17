@@ -65,6 +65,8 @@ O SDD vive em `specs/` e organiza intenção, plano, tasks e handoff sem substit
 - `specs/repo-foundation/plan.md`: plano técnico e sequência de workstreams.
 - `specs/repo-foundation/tasks.md`: backlog rastreável por prioridade e executor sugerido.
 - `specs/repo-foundation/handoff.md`: continuidade quando humanos, Codex, Claude Code ou Devin alternarem a execução.
+- `specs/<slug-do-dominio>/`: specs por domínio para agentes/tools, RAG, mobile, artifacts/export, 3D/Fusion e observabilidade.
+- `docs/delivery-checklist.md`: checklist obrigatório de entrega para PRs e handoffs.
 - `.agents/skills/`: skills instruction-first para mapear repo, validar qualidade e trabalhar nos principais bounded contexts.
 
 ## Dados

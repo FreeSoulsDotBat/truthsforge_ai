@@ -31,6 +31,7 @@ Este repositório pode ser trabalhado por Codex, Claude Code, Devin e humanos. N
 - Mantenha o produto em PT-BR, salvo quando arquivo, API ou convenção exigir inglês.
 - Prefira mudanças pequenas, testáveis e auditáveis.
 - Atualize documentação e specs quando comportamento, contrato ou fluxo mudar.
+- Antes de alterar a plataforma, pergunte ao dono do produto o nome da branch e a mensagem de commit em formato semântico.
 - Quando houver dúvida de domínio, consulte primeiro `docs/application-map.md`, `docs/architecture.md`, `docs/decisions.md` e `docs/implementation-plan.md`.
 - Caso ainda existam conflitos ou dúvidas de como desenvolver, pergunte ao dono do prompt antes de gerar código.
 
@@ -63,12 +64,18 @@ Este repositório pode ser trabalhado por Codex, Claude Code, Devin e humanos. N
 
 ### RAG e arquivos
 
-- Não envie documentos sensíveis para provedores externos sem uma decisão explícita do usuário.
+- Conteúdo indexado pode compor prompts para provedores externos configurados; registre e sinalize conteúdo sensível por classificação manual e heurística.
 - Diferencie claramente upload, parsing, chunking, indexação, vinculação a bases e recuperação em prompt.
+
+### Agentes e ferramentas
+
+- Ações de adição podem executar sem aprovação quando a policy permitir.
+- Alterações e deleções exigem aprovação humana antes da execução.
+- Tools com escrita ou execução devem operar em diretório isolado por projeto, com timeout, limite de tamanho, auditoria e rollback obrigatório.
 
 ### Modelagem 3D
 
-- Preserve human-in-the-loop para ações mutáveis e high-risk.
+- Preserve human-in-the-loop para alterações, deleções e ações high-risk.
 - Não libere script livre, shell ou operações destrutivas no caminho feliz.
 - Snapshot, rollback, auditoria e printability são parte do contrato, não detalhe opcional.
 
@@ -80,11 +87,13 @@ Antes de concluir uma tarefa relevante:
 - valide backend e frontend impactados;
 - confirme se documentação e spec continuam coerentes;
 - registre no `specs/repo-foundation/tasks.md` o que foi concluído e o que ficou pendente quando a tarefa fizer parte do SDD.
+- envie ao dono do produto o checklist de entrega definido em `docs/delivery-checklist.md`.
 
 ## Estilo de entrega
 
 Sempre devolva:
 
+- branch e commit semântico usados;
 - resumo do que mudou;
 - arquivos tocados;
 - riscos ou trade-offs;
