@@ -49,7 +49,7 @@
 
 - Capacitor Android com pairing.
 - Indicador online/offline.
-- Cache local somente leitura.
+- Cache offline completo.
 - Fluxo documentado para Tailscale/WireGuard.
 
 ## M7 - Artifacts e Ferramentas

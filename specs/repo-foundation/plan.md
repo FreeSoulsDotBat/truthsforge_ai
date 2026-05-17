@@ -125,7 +125,7 @@ Objetivo: manter shells finos e funcionalmente coerentes com o frontend principa
 - Capacitor pareado no Android;
 - indicador online/offline;
 - pareamento por dispositivo;
-- cache somente leitura no mobile.
+- cache offline completo no mobile.
 
 ## Sequenciamento
 

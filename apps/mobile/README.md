@@ -10,4 +10,4 @@ pnpm --filter @truths-forge/mobile cap add android
 pnpm --filter @truths-forge/mobile sync
 ```
 
-O cache offline somente leitura entra na fase M6.
+O cache offline completo entra na fase M6.
