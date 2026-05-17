@@ -102,7 +102,7 @@
 - [x] [P1] [human] Decidir que todos os golden paths listados são obrigatórios por domínio impactado.
 - [ ] [P1] [any] Mapear lacunas de auditoria por evento obrigatório.
 - [ ] [P1] [any] Criar golden paths de chat, RAG, upload/indexação, agente restrito, 3D e mobile.
-- [ ] [P2] [any]
+- [ ] [P2] [any] Padronizar schema de auditoria e consolidar retenção de eventos.
 
 ## Qualidade contínua
 

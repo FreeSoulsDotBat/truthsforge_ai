@@ -41,12 +41,19 @@ Este arquivo não substitui `tasks.md`, issues ou PRs. Ele existe para evitar pe
 - `AGENTS.md`
 - `CLAUDE.md`
 - `.agents/skills/**`
-- `specs/**`
+- `.github/pull_request_template.md`
 - `README.md`
+- `apps/mobile/README.md`
+- `docs/api.md`
 - `docs/application-map.md`
+- `docs/architecture.md`
 - `docs/decisions.md`
 - `docs/delivery-checklist.md`
-- `.github/pull_request_template.md`
+- `docs/implementation-plan.md`
+- `docs/knowledge-bases.md`
+- `docs/mvp-readiness.md`
+- `docs/roadmap.md`
+- `specs/**`
 
 ### Validação executada
 

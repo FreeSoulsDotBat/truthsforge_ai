@@ -1,4 +1,4 @@
-## Summary
+## Resumo
 
 ...
 
@@ -17,10 +17,10 @@
 - [ ] Testes manuais/visuais/e2e foram executados ou justificados.
 - [ ] Riscos, rollback e pendências fora do escopo estão registrados.
 
-## Review & Testing Checklist for Human
+## Checklist de revisão e testes para o dono do produto
 
 - [ ] ...
 
-### Notes
+### Observações
 
 ...
