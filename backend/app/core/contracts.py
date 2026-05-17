@@ -729,12 +729,27 @@ class ModelingPlannerSource(StrEnum):
     heuristic = "heuristic"
 
 
+class ModelingPlanKind(StrEnum):
+    """Distinguishes the primary plan of a 3D chat from subsequent edit plans.
+
+    ADR-013 collapses the v1 modes into a single chat-first flow. Each
+    modeling chat has at most one ``primary`` plan (the one the user
+    approved via the in-chat card). Every subsequent message in
+    ``editing`` stage produces an ``edit`` plan that auto-executes when
+    safe.
+    """
+
+    primary = "primary"
+    edit = "edit"
+
+
 class ModelingPlan(BaseModel):
     id: str = Field(default_factory=lambda: new_id("m3d_plan"))
     project_id: str | None = None
     conversation_id: str | None = None
     prompt: str
     mode: ModelingExecutionMode = ModelingExecutionMode.safe_auto
+    kind: ModelingPlanKind = ModelingPlanKind.primary
     software_choice: ModelingSoftware
     confidence: float = Field(default=0.7, ge=0, le=1)
     approval_required: bool = False
@@ -746,6 +761,8 @@ class ModelingPlan(BaseModel):
     steps: list[ModelingPlanStep] = Field(default_factory=list)
     planner_source: ModelingPlannerSource | None = None
     fallback_reason: str | None = None
+    parent_plan_id: str | None = None
+    """For ``kind="edit"``, the id of the primary plan it edits."""
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
 
@@ -755,6 +772,8 @@ class ModelingPlanCreate(BaseModel):
     project_id: str | None = None
     conversation_id: str | None = None
     mode: ModelingExecutionMode = ModelingExecutionMode.safe_auto
+    kind: ModelingPlanKind = ModelingPlanKind.primary
+    parent_plan_id: str | None = None
     software_override: ModelingSoftware | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=12)
 

@@ -11,6 +11,7 @@ from app.core.contracts import (
     ModelConfig,
     ModelingExecutionMode,
     ModelingPlanCreate,
+    ModelingPlanKind,
     ModelingSoftware,
     ProviderName,
 )
@@ -293,6 +294,54 @@ def test_plan_records_planner_source_and_fallback_reason(monkeypatch) -> None:
     plan = response.json()
     assert plan["planner_source"] == "heuristic"
     assert "teste de fallback" in (plan.get("fallback_reason") or "")
+
+
+def test_heuristic_plan_defaults_to_primary_kind() -> None:
+    payload = ModelingPlanCreate(prompt="cubo simples")
+    plan = create_heuristic_plan(payload)
+    assert plan.kind is ModelingPlanKind.primary
+    assert plan.parent_plan_id is None
+
+
+def test_heuristic_plan_preserves_edit_kind_and_parent_id() -> None:
+    payload = ModelingPlanCreate(
+        prompt="aplicar bevel de 2mm no cubo existente",
+        kind=ModelingPlanKind.edit,
+        parent_plan_id="m3d_plan_parent",
+    )
+    plan = create_heuristic_plan(payload)
+    assert plan.kind is ModelingPlanKind.edit
+    assert plan.parent_plan_id == "m3d_plan_parent"
+
+
+def test_llm_plan_preserves_edit_kind_and_parent_id() -> None:
+    gateway = _FakeGateway(
+        response={
+            "software_choice": "blender",
+            "confidence": 0.8,
+            "rationale": "edicao simples",
+            "assumptions": [],
+            "risks": [],
+            "steps": [
+                {
+                    "seq": 1,
+                    "title": "Aplicar bevel",
+                    "tool_name": "blender.apply_bevel",
+                    "risk_level": "low",
+                    "approval_required": False,
+                    "input_json": json.dumps({"bevel_mm": 2.0, "segments": 3}),
+                }
+            ],
+        }
+    )
+    payload = ModelingPlanCreate(
+        prompt="bevel de 2mm",
+        kind=ModelingPlanKind.edit,
+        parent_plan_id="m3d_plan_primary",
+    )
+    plan = create_llm_plan(payload, gateway=gateway, model=_planner_model())
+    assert plan.kind is ModelingPlanKind.edit
+    assert plan.parent_plan_id == "m3d_plan_primary"
 
 
 def test_plan_records_llm_source_when_gateway_succeeds(monkeypatch) -> None:
