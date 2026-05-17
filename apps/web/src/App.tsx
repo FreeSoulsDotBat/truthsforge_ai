@@ -1999,6 +1999,9 @@ function App() {
     setImageModelId(null);
     setReasoningSummary(false);
     setMultiAgentMode(false);
+    setModeling3dEnabled(false);
+    setModeling3dMode("approval_required");
+    setModeling3dSoftware("auto");
     setShortcutMenuOpen(false);
     setShortcutSubmenu(null);
     setExecutionMenuOpen(false);
@@ -3087,6 +3090,10 @@ function App() {
                 setActiveView("chat");
                 setActivePanel("contexto");
                 setModeling3dEnabled(true);
+                setMultiAgentMode(false);
+                setDeepResearch(false);
+                setReasoningSummary(false);
+                setResponseMode("text");
               }}
             />
           ) : activeView === "files" ? (
