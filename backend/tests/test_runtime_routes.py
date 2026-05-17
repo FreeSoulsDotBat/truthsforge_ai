@@ -519,7 +519,7 @@ def test_chat_stream_can_create_modeling_plan_inline() -> None:
             "agent_id": agent.json()["id"],
             "modeling_3d": {
                 "enabled": True,
-                "mode": "approval_required",
+                "mode": "safe_auto",
                 "software_override": "blender",
             },
         },
@@ -544,8 +544,10 @@ def test_chat_stream_can_create_modeling_plan_inline() -> None:
     assert plan["conversation_id"] == session["id"]
     assert plan["project_id"] == project_id
     assert plan["software_choice"] == "blender"
-    assert plan["status"] == "waiting_approval"
+    assert plan["status"] == "completed"
     assert plan["steps"]
+    assert all(step["tool_name"] != "project_store.create_snapshot" for step in plan["steps"])
+    assert all(step["approval_required"] is False for step in plan["steps"])
 
 
 def test_agent_cannot_stream_in_project_outside_runtime_scope() -> None:

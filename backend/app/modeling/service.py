@@ -122,7 +122,10 @@ class ModelingService:
         return ModelingCapabilities(
             safety_notes=[
                 "MCP roda localmente; nenhum MCP remoto fica exposto no MVP.",
-                "Ações mutáveis em Blender/Fusion exigem aprovação humana por padrão.",
+                (
+                    "Adições e alterações normais autoexecutam; deleções, "
+                    "ações destrutivas e high-risk exigem aprovação."
+                ),
                 "Scripts livres e comandos de shell ficam bloqueados até revisão explícita.",
             ],
             adapters=[

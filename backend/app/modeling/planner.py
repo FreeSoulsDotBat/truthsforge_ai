@@ -61,7 +61,6 @@ BLENDER_HINTS = {
 # policy.py and gets blocked at execution time, but we still narrow the LLM's
 # choice up front to keep planning deterministic.
 PLANNER_TOOLSET: tuple[str, ...] = (
-    "project_store.create_snapshot",
     "blender.create_mesh_primitive",
     "blender.apply_bevel",
     "blender.apply_boolean",
@@ -169,13 +168,13 @@ def create_heuristic_plan(payload: ModelingPlanCreate) -> ModelingPlan:
     """Deterministic boilerplate plan used as fallback and for tests."""
     software, confidence, rationale = choose_software(payload.prompt, payload.software_override)
     steps = _default_steps(software, payload.mode)
-    approval_required = payload.mode != ModelingExecutionMode.safe_auto or any(
-        step.approval_required for step in steps
-    )
+    approval_required = any(step.approval_required for step in steps)
     status = (
         ModelingPlanStatus.draft
         if payload.mode == ModelingExecutionMode.plan_only
         else ModelingPlanStatus.waiting_approval
+        if approval_required
+        else ModelingPlanStatus.approved
     )
     return ModelingPlan(
         project_id=payload.project_id,
@@ -193,7 +192,10 @@ def create_heuristic_plan(payload: ModelingPlanCreate) -> ModelingPlan:
             "Scripts livres gerados por IA permanecem bloqueados por padrão.",
         ],
         risks=[
-            "Operações mutáveis exigem aprovação humana no MVP.",
+            (
+                "Adições e alterações normais podem autoexecutar; "
+                "deleções, ações destrutivas e high-risk exigem aprovação."
+            ),
             (
                 "Blender executa apenas ferramentas allowlistadas; Fusion 360 exige "
                 "o add-in desktop ativo e cai para mock sem discovery válido."
@@ -258,11 +260,13 @@ def _build_messages(
         "Sua função é converter a intenção do usuário em um plano executável e auditável.\n"
         "Restrições obrigatórias:\n"
         "- Use SOMENTE as ferramentas listadas abaixo; qualquer outro tool_name é rejeitado.\n"
-        "- Sempre comece com project_store.create_snapshot como seq=1.\n"
         "- Prefira Fusion 360 para peças funcionais com tolerâncias, encaixes, furos e medidas.\n"
         "- Prefira Blender para forma orgânica, mesh, exportação para impressão visual ou bevel.\n"
         "- Cada etapa precisa indicar risk_level (low/medium/high) e approval_required.\n"
-        "- approval_required deve ser true para qualquer step destrutivo ou irreversível.\n"
+        "- approval_required deve ser true apenas para deleção, ação destrutiva, "
+        "irreversível ou high-risk.\n"
+        "- Adições e alterações normais em tools allowlistadas devem usar "
+        "approval_required=false.\n"
         "- input_json deve ser uma string JSON válida com os parâmetros da tool, em mm quando\n"
         '  fizer sentido (ex.: "{\\"primitive\\":\\"cube\\",\\"dimensions_mm\\":[40,20,10]}").'
         "\n\n"
@@ -336,7 +340,9 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
                 "etapa rejeitada antes da policy."
             )
         risk_level = _risk_level(item.get("risk_level"))
-        approval_required = bool(item.get("approval_required", True))
+        approval_required = risk_level == ModelingRiskLevel.high or bool(
+            item.get("approval_required", False)
+        )
         input_json = _decode_input_json(item.get("input_json"))
         step_software = _step_software(tool_name, software)
         status = (
@@ -357,12 +363,14 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
             )
         )
 
+    plan_approval_required = any(step.approval_required for step in steps)
     plan_status = (
         ModelingPlanStatus.draft
         if payload.mode == ModelingExecutionMode.plan_only
         else ModelingPlanStatus.waiting_approval
+        if plan_approval_required
+        else ModelingPlanStatus.approved
     )
-    plan_approval_required = any(step.approval_required for step in steps)
     return ModelingPlan(
         project_id=payload.project_id,
         conversation_id=payload.conversation_id,
@@ -412,123 +420,99 @@ def _step_software(tool_name: str, fallback: ModelingSoftware) -> ModelingSoftwa
 def _default_steps(
     software: ModelingSoftware, mode: ModelingExecutionMode
 ) -> list[ModelingPlanStep]:
-    approval_status = (
-        ModelingStepStatus.pending
-        if mode == ModelingExecutionMode.plan_only
-        else ModelingStepStatus.waiting_approval
-    )
+    status = ModelingStepStatus.pending
     if software == ModelingSoftware.blender:
         return [
             ModelingPlanStep(
                 seq=1,
-                title="Criar snapshot do workspace 3D",
-                software=software,
-                tool_name="project_store.create_snapshot",
-                risk_level=ModelingRiskLevel.low,
-                approval_required=False,
-                status=ModelingStepStatus.pending,
-                input_json={"reason": "before_modeling"},
-            ),
-            ModelingPlanStep(
-                seq=2,
                 title="Criar geometria inicial no Blender",
                 software=software,
                 tool_name="blender.create_mesh_primitive",
                 risk_level=ModelingRiskLevel.medium,
-                approval_required=True,
-                status=approval_status,
+                approval_required=False,
+                status=status,
                 input_json={"primitive": "cube", "units": "mm"},
             ),
             ModelingPlanStep(
-                seq=3,
+                seq=2,
                 title="Aplicar acabamento visual controlado",
                 software=software,
                 tool_name="blender.apply_bevel",
                 risk_level=ModelingRiskLevel.medium,
-                approval_required=True,
-                status=approval_status,
+                approval_required=False,
+                status=status,
                 input_json={"bevel_mm": 1.0, "segments": 3},
             ),
             ModelingPlanStep(
-                seq=4,
+                seq=3,
                 title="Exportar STL de validação",
                 software=software,
                 tool_name="blender.export_stl",
                 risk_level=ModelingRiskLevel.low,
                 approval_required=False,
-                status=ModelingStepStatus.pending,
+                status=status,
                 input_json={"target": "preview.stl"},
             ),
         ]
     return [
         ModelingPlanStep(
             seq=1,
-            title="Criar snapshot do workspace 3D",
-            software=software,
-            tool_name="project_store.create_snapshot",
-            risk_level=ModelingRiskLevel.low,
-            approval_required=False,
-            status=ModelingStepStatus.pending,
-            input_json={"reason": "before_modeling"},
-        ),
-        ModelingPlanStep(
-            seq=2,
             title="Abrir design Fusion ativo",
             software=software,
             tool_name="fusion.open_design",
             risk_level=ModelingRiskLevel.low,
             approval_required=False,
-            status=ModelingStepStatus.pending,
+            status=status,
             input_json={},
         ),
         ModelingPlanStep(
-            seq=3,
+            seq=2,
             title="Criar sketch paramétrico",
             software=software,
             tool_name="fusion.create_sketch",
             risk_level=ModelingRiskLevel.medium,
-            approval_required=True,
-            status=approval_status,
+            approval_required=False,
+            status=status,
             input_json={"name": "Judite base sketch", "plane": "xy", "units": "mm"},
         ),
         ModelingPlanStep(
-            seq=4,
+            seq=3,
             title="Adicionar perfil retangular dimensionado",
             software=software,
             tool_name="fusion.add_rectangle",
             risk_level=ModelingRiskLevel.medium,
-            approval_required=True,
-            status=approval_status,
+            approval_required=False,
+            status=status,
             input_json={"sketch": "Judite base sketch", "width_mm": 40, "height_mm": 20},
         ),
         ModelingPlanStep(
-            seq=5,
+            seq=4,
             title="Extrudar corpo principal",
             software=software,
             tool_name="fusion.extrude_profile",
             risk_level=ModelingRiskLevel.medium,
-            approval_required=True,
-            status=approval_status,
+            approval_required=False,
+            status=status,
             input_json={"sketch": "Judite base sketch", "distance_mm": 12, "operation": "new_body"},
         ),
         ModelingPlanStep(
-            seq=6,
+            seq=5,
             title="Validar printability do corpo",
             software=software,
             tool_name="fusion.validate_printability",
             risk_level=ModelingRiskLevel.low,
             approval_required=False,
-            status=ModelingStepStatus.pending,
+            status=status,
             input_json={"checks": ["is_solid", "wall_thickness_approx", "overhang_approx"]},
         ),
         ModelingPlanStep(
-            seq=7,
+            seq=6,
             title="Exportar STL para artifact",
             software=software,
             tool_name="fusion.export_stl",
             risk_level=ModelingRiskLevel.low,
             approval_required=False,
-            status=ModelingStepStatus.pending,
+            status=status,
             input_json={"target": "judite-fusion-preview.stl"},
         ),
     ]

@@ -10,11 +10,11 @@ function buildPlan(): ModelingPlan {
     project_id: "project_1",
     conversation_id: "session_1",
     prompt: "Modele uma caixa paramétrica",
-    mode: "approval_required",
+    mode: "safe_auto",
     software_choice: "fusion",
     confidence: 0.74,
-    approval_required: true,
-    status: "waiting_approval",
+    approval_required: false,
+    status: "completed",
     rationale: "Criar sketch, extrusão e export validável.",
     assumptions: ["Usar unidades em mm"],
     risks: ["Depende do bridge Fusion local"],
@@ -27,8 +27,8 @@ function buildPlan(): ModelingPlan {
         software: "fusion",
         tool_name: "fusion.add_rectangle",
         risk_level: "medium",
-        approval_required: true,
-        status: "waiting_approval",
+        approval_required: false,
+        status: "completed",
         input_json: {},
         output_json: {},
         error: null,
@@ -64,10 +64,10 @@ describe("MessageBubble modeling 3D", () => {
 
     expect(screen.getByText("Plano 3D MCP")).toBeTruthy();
     expect(screen.getByText("fusion")).toBeTruthy();
-    expect(screen.getByText("approval_required")).toBeTruthy();
-    expect(screen.getAllByText("waiting_approval")).toHaveLength(2);
+    expect(screen.getByText("safe_auto")).toBeTruthy();
+    expect(screen.getAllByText("completed")).toHaveLength(2);
     expect(screen.getByText("1. Criar sketch")).toBeTruthy();
     expect(screen.getByText(/fusion.add_rectangle/)).toBeTruthy();
-    expect(screen.getByText(/aprovação, execução MCP, snapshots, rollback e printability/)).toBeTruthy();
+    expect(screen.getByText(/aprovação fica só para deleções/)).toBeTruthy();
   });
 });

@@ -125,7 +125,8 @@ function ModelingPlanCard({ plan }: { plan: NonNullable<ReturnType<typeof messag
         )}
       </div>
       <p className="mt-3 text-forge-muted">
-        A aprovação, execução MCP, snapshots, rollback e printability continuam no painel 3D de configuração.
+        A conversa executa adições/alterações allowlistadas; aprovação fica só para deleções, destrutivo ou high-risk.
+        Snapshots e rollback continuam como ações manuais no painel 3D.
       </p>
     </div>
   );

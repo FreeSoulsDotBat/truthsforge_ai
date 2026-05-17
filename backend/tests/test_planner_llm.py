@@ -67,7 +67,7 @@ def test_execution_plan_schema_enumerates_allowed_tools() -> None:
         "enum"
     ]
     assert set(tool_enum) == set(PLANNER_TOOLSET)
-    assert "project_store.create_snapshot" in tool_enum
+    assert "project_store.create_snapshot" not in tool_enum
     assert "blender.validate_printability" in tool_enum
     # Tier 2 tools must be reachable by the planner.
     assert {
@@ -89,22 +89,14 @@ def test_create_llm_plan_builds_plan_from_structured_payload() -> None:
         "confidence": 0.82,
         "rationale": "Peça funcional com medidas explícitas; Fusion é mais adequado.",
         "assumptions": ["Unidades em mm.", "Folga padrão 0.2 mm para encaixe."],
-        "risks": ["Operação de extrude exige aprovação humana."],
+        "risks": ["Operações fluídas seguem a allowlist MCP."],
         "steps": [
             {
                 "seq": 1,
-                "title": "Snapshot inicial",
-                "tool_name": "project_store.create_snapshot",
-                "risk_level": "low",
-                "approval_required": False,
-                "input_json": json.dumps({"reason": "before_modeling"}),
-            },
-            {
-                "seq": 2,
                 "title": "Sketch da base",
                 "tool_name": "fusion.create_sketch",
                 "risk_level": "medium",
-                "approval_required": True,
+                "approval_required": False,
                 "input_json": json.dumps({"plane_ref": "xy", "units": "mm"}),
             },
         ],
@@ -115,12 +107,11 @@ def test_create_llm_plan_builds_plan_from_structured_payload() -> None:
     assert plan.software_choice == ModelingSoftware.fusion
     assert plan.confidence == 0.82
     assert plan.rationale.startswith("Peça funcional")
-    assert len(plan.steps) == 2
-    assert plan.steps[0].tool_name == "project_store.create_snapshot"
+    assert len(plan.steps) == 1
+    assert plan.steps[0].tool_name == "fusion.create_sketch"
     assert plan.steps[0].software == ModelingSoftware.fusion
-    assert plan.steps[1].tool_name == "fusion.create_sketch"
-    assert plan.steps[1].approval_required is True
-    assert plan.steps[1].input_json["plane_ref"] == "xy"
+    assert plan.steps[0].approval_required is False
+    assert plan.steps[0].input_json["plane_ref"] == "xy"
 
 
 def test_create_llm_plan_injects_knowledge_bases_as_data_block() -> None:
@@ -137,8 +128,8 @@ def test_create_llm_plan_injects_knowledge_bases_as_data_block() -> None:
         "steps": [
             {
                 "seq": 1,
-                "title": "Snapshot",
-                "tool_name": "project_store.create_snapshot",
+                "title": "Validar mesh",
+                "tool_name": "blender.validate_mesh",
                 "risk_level": "low",
                 "approval_required": False,
                 "input_json": "{}",
@@ -228,9 +219,9 @@ def test_service_falls_back_to_heuristic_when_gateway_raises(monkeypatch) -> Non
     audit = client.get("/api/3d/plans").json()
     matching = next((item for item in audit if item["id"] == plan["id"]), None)
     assert matching is not None
-    # Heuristic produces 4 steps always.
-    assert len(plan["steps"]) == 4
-    assert plan["steps"][0]["tool_name"] == "project_store.create_snapshot"
+    assert len(plan["steps"]) == 3
+    assert plan["steps"][0]["tool_name"] == "blender.create_mesh_primitive"
+    assert all(step["tool_name"] != "project_store.create_snapshot" for step in plan["steps"])
 
 
 def test_service_uses_llm_plan_when_gateway_returns_valid_payload(monkeypatch) -> None:
@@ -246,14 +237,6 @@ def test_service_uses_llm_plan_when_gateway_returns_valid_payload(monkeypatch) -
             "steps": [
                 {
                     "seq": 1,
-                    "title": "Snapshot",
-                    "tool_name": "project_store.create_snapshot",
-                    "risk_level": "low",
-                    "approval_required": False,
-                    "input_json": "{}",
-                },
-                {
-                    "seq": 2,
                     "title": "Validar mesh",
                     "tool_name": "blender.validate_mesh",
                     "risk_level": "low",
@@ -273,12 +256,12 @@ def test_service_uses_llm_plan_when_gateway_returns_valid_payload(monkeypatch) -
     )
     assert response.status_code == 200
     plan = response.json()
-    assert len(plan["steps"]) == 2
+    assert len(plan["steps"]) == 1
     assert plan["confidence"] == 0.9
-    assert plan["steps"][1]["tool_name"] == "blender.validate_mesh"
+    assert plan["steps"][0]["tool_name"] == "blender.validate_mesh"
     # validate_mesh is read-only by policy, so approval_required stays false even though
     # other plans in the suite would have it set.
-    assert plan["steps"][1]["approval_required"] is False
+    assert plan["steps"][0]["approval_required"] is False
 
 
 def test_create_heuristic_plan_still_available_as_alias() -> None:
@@ -325,8 +308,8 @@ def test_plan_records_llm_source_when_gateway_succeeds(monkeypatch) -> None:
             "steps": [
                 {
                     "seq": 1,
-                    "title": "Snapshot",
-                    "tool_name": "project_store.create_snapshot",
+                    "title": "Abrir design",
+                    "tool_name": "fusion.open_design",
                     "risk_level": "low",
                     "approval_required": False,
                     "input_json": "{}",

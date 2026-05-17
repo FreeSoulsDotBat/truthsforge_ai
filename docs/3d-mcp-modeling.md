@@ -19,16 +19,16 @@ O módulo 3D nasce como um bounded context local para conectar JUDITE e agentes 
 - O executor usa adapter MCP local com fallback `mock`.
 - Blender já pode executar um subconjunto seguro por `blender --background` quando configurado.
 - Fusion 360 tem bridge real via add-in desktop em `apps/fusion-addin/`; sem add-in ativo, permanece em `mock`.
-- Ações mutáveis exigem aprovação humana por padrão.
+- Adições e alterações normais em tools allowlistadas autoexecutam no fluxo fluido;
+  aprovação humana fica restrita a deleções, ações destrutivas e high-risk.
 - Scripts livres, shell e operações destrutivas seguem fora do caminho feliz.
 - Artefatos gerados pelo Blender/Fusion, como `.blend`, `.stl`, `.obj`, `.3mf` e `.step`, entram em `Arquivos` como `generated` quando retornados pelo adapter.
 
 ## Experiência chat-first
 
 O usuário modela 3D como conversa: ativa **MCP 3D** no menu de execução do
-composer, escolhe software (`auto`, `blender` ou `fusion`) e modo
-(`plan_only`, `approval_required` ou `safe_auto`), escreve o prompt e revisa o
-plano renderizado na própria conversa.
+composer, escolhe software (`auto`, `blender` ou `fusion`) e usa o modo padrão
+fluido (`safe_auto`) ou `plan_only` quando quiser apenas revisar o plano.
 
 O contrato do chat recebe:
 
@@ -37,7 +37,7 @@ O contrato do chat recebe:
   "message": "Crie um suporte com base retangular e export STL",
   "modeling_3d": {
     "enabled": true,
-    "mode": "approval_required",
+    "mode": "safe_auto",
     "software_override": "blender"
   }
 }
@@ -54,9 +54,11 @@ JUDITE com:
 - `metadata.modeling_plan`
 
 O frontend usa esse metadata para renderizar o card **Plano 3D MCP** dentro da
-bolha da JUDITE. A continuidade operacional permanece na aba `3D`: aprovar
-plano/etapas, executar MCP, criar/restaurar snapshots, validar printability e
-ver tool calls auditadas.
+bolha da JUDITE. No modo fluido, o backend executa automaticamente as etapas
+allowlistadas que não exigem aprovação. A continuidade operacional permanece na
+aba `3D`: aprovar etapas destrutivas/high-risk quando existirem, executar plano
+manual quando `plan_only`, criar/restaurar snapshots, validar printability e ver
+tool calls auditadas.
 
 ## Blender local
 
@@ -81,7 +83,7 @@ O workspace fica em `.local/modeling/workspaces/<project>/<plan>`. O runner atua
 - `blender.validate_printability` — relatório completo via `bmesh`. Veja seção Printability abaixo.
 - `blender.measure_object` — bbox, dimensions, volume aproximado de um objeto.
 
-**Mutáveis padrão — herdam `approval_required` do plano:**
+**Mutáveis padrão — autoexecutáveis no fluxo fluido:**
 
 - `blender.create_mesh_primitive` — primitivos `cube`, `cylinder`, `uv_sphere`, `icosphere`,
   `plane`, `cone`, `torus` com `dimensions_mm` (ou `major_radius_mm`/`minor_radius_mm` no torus)
@@ -99,8 +101,7 @@ O workspace fica em `.local/modeling/workspaces/<project>/<plan>`. O runner atua
 - `blender.apply_boolean` — `union`/`difference`/`intersect` entre dois objetos; remove o
   objeto auxiliar por padrão (`delete_other`).
 - `blender.repair_non_manifold` — sequência de `dissolve_degenerate` + `delete_loose` +
-  `remove_doubles` + `normals_make_consistent` + `fill_holes`. Topologia muda globalmente —
-  rollback exige snapshot.
+  `remove_doubles` + `normals_make_consistent` + `fill_holes`. Topologia muda globalmente.
 
 Isso é proposital: a LLM cria intenção e plano, mas não injeta Python livre no Blender.
 
@@ -111,8 +112,9 @@ Isso é proposital: a LLM cria intenção e plano, mas não injeta Python livre 
 - `POST /api/3d/sessions/start`: inicia sessão Blender/Fusion em modo mock/local.
 - `GET /api/3d/plans`: lista planos recentes.
 - `POST /api/3d/plans`: cria plano estruturado a partir de um prompt.
-- `POST /api/3d/plans/{plan_id}/approve`: aprova ou rejeita o plano inteiro.
-- `POST /api/3d/plans/{plan_id}/execute`: executa etapas aprovadas.
+- `POST /api/3d/plans/{plan_id}/approve`: aprova ou rejeita etapas bloqueadas do plano.
+- `POST /api/3d/plans/{plan_id}/execute`: executa etapas liberadas e bloqueia somente
+  as que exigem aprovação.
 - `POST /api/3d/steps/{step_id}/approve`: aprova ou rejeita uma etapa específica.
 - `GET /api/3d/snapshots`: lista snapshots persistidos, com filtros opcionais
   `plan_id` e `project_id` (filtragem server-side via JSONB).
@@ -142,9 +144,8 @@ Snapshots são feitos por par `(project_id, plan_id)`. O serviço resolve o work
 Arquivos de scaffolding do runner Blender (`*.job.json`, `*.result.json`) e o próprio
 `manifest.json` ficam fora dos snapshots porque não fazem parte do estado canônico.
 
-O step inicial `project_store.create_snapshot` que o planner gera roda como tool real (não mock):
-durante a execução do plano, o executor intercepta e chama o serviço de snapshot diretamente,
-retornando `transport: "local"` e `snapshot_id` no `output_json` da etapa.
+O planner não cria snapshot automático no plano fluido. Snapshots continuam como ação manual
+do painel 3D e como proteção do fluxo explícito de restore.
 
 ### Rollback seguro
 
@@ -179,10 +180,10 @@ Toda execução de etapa gera um `ModelingToolCall` persistido em `modeling_tool
 - Quando há falha: `error_code`, `error_message`, `retryable`,
   `safe_to_retry_after_snapshot_restore`
 
-O adapter Blender constrói `ModelingErrorEnvelope` em timeout e runner failed; o serviço usa o
-mesmo schema na falha do `project_store.create_snapshot`. O envelope é o caminho único de erro
-para tool calls — `host_details` carrega contexto estruturado (software, workspace_dir,
-returncode, stdout/stderr tail, timeout configurado).
+O adapter Blender constrói `ModelingErrorEnvelope` em timeout e runner failed; Fusion usa o
+mesmo envelope para falhas do bridge. O envelope é o caminho único de erro para tool calls —
+`host_details` carrega contexto estruturado (software, workspace_dir, returncode, stdout/stderr
+tail, timeout configurado).
 
 ## Planner LLM
 
@@ -203,10 +204,10 @@ O serviço de modelagem chama `LLMGateway.generate_structured` ao criar um plano
    strict — o planner desserializa e armazena no `ModelingPlanStep.input_json`.
 5. Defense in depth: o parser rejeita qualquer `tool_name` fora de `PLANNER_TOOLSET`, mesmo
    que o modelo escape do enum. Plano resultante ainda passa por `apply_modeling_policy`,
-   que classifica risco e força aprovação humana onde apropriado.
+   que força aprovação humana somente para deleção, ação destrutiva ou high-risk.
 
 Qualquer exceção (chave ausente, modelo offline, JSON inválido, tool fora da allowlist) é
-capturada e o service cai no `create_heuristic_plan` determinístico (4 steps boilerplate por
+capturada e o service cai no `create_heuristic_plan` determinístico (3 steps no Blender ou 6 steps no Fusion por
 software). O audit event `modeling.plan_created` registra `planner_source` (`llm` ou
 `heuristic`) e, quando aplicável, `fallback_reason`.
 
@@ -214,7 +215,6 @@ software). O audit event `modeling.plan_created` registra `planner_source` (`llm
 
 O LLM só pode escolher entre:
 
-- `project_store.create_snapshot`
 - `blender.{create_mesh_primitive, apply_bevel, apply_boolean, apply_subdivision,
   apply_solidify, assign_material, measure_object, repair_non_manifold, validate_mesh,
   validate_printability, export_stl, export_obj, export_3mf}`

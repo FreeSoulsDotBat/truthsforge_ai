@@ -39,32 +39,22 @@ def test_modeling_capabilities_are_exposed() -> None:
     assert "fusion.validate_printability" in adapter_tools["fusion"]
 
 
-def test_modeling_plan_requires_approval_and_can_execute_after_approval() -> None:
+def test_modeling_plan_executes_fluid_steps_without_plan_approval() -> None:
     client = TestClient(app)
     created = client.post(
         "/api/3d/plans",
         json={
             "prompt": "Crie uma peça paramétrica de 40 mm com furo central.",
-            "mode": "approval_required",
+            "mode": "safe_auto",
         },
     )
 
     assert created.status_code == 200
     plan = created.json()
     assert plan["software_choice"] == "fusion"
-    assert plan["status"] == "waiting_approval"
-    assert any(step["approval_required"] for step in plan["steps"])
-
-    blocked = client.post(f"/api/3d/plans/{plan['id']}/execute")
-    assert blocked.status_code == 200
-    assert blocked.json()["blocked_step_ids"]
-
-    approved = client.post(
-        f"/api/3d/plans/{plan['id']}/approve",
-        json={"decision": "approve", "reason": "teste automatizado"},
-    )
-    assert approved.status_code == 200
-    assert approved.json()["status"] == "approved"
+    assert plan["status"] == "approved"
+    assert all(step["approval_required"] is False for step in plan["steps"])
+    assert all(step["tool_name"] != "project_store.create_snapshot" for step in plan["steps"])
 
     executed = client.post(f"/api/3d/plans/{plan['id']}/execute")
     assert executed.status_code == 200
@@ -72,11 +62,7 @@ def test_modeling_plan_requires_approval_and_can_execute_after_approval() -> Non
     assert execution_payload["plan"]["status"] == "completed"
     assert len(execution_payload["executed_step_ids"]) == len(plan["steps"])
     for step in execution_payload["plan"]["steps"]:
-        if step["tool_name"] == "project_store.create_snapshot":
-            assert step["output_json"]["transport"] == "local"
-            assert step["output_json"]["snapshot_id"].startswith("m3d_snapshot_")
-        else:
-            assert step["output_json"]["transport"] == "mock"
+        assert step["output_json"]["transport"] == "mock"
 
 
 def test_blender_plan_uses_mcp_boundary_without_desktop_adapter(monkeypatch) -> None:
@@ -87,7 +73,7 @@ def test_blender_plan_uses_mcp_boundary_without_desktop_adapter(monkeypatch) -> 
         "/api/3d/plans",
         json={
             "prompt": "Crie um cubo visual com bevel no Blender.",
-            "mode": "approval_required",
+            "mode": "safe_auto",
             "software_override": "blender",
         },
     )
@@ -95,12 +81,7 @@ def test_blender_plan_uses_mcp_boundary_without_desktop_adapter(monkeypatch) -> 
     assert created.status_code == 200
     plan = created.json()
     assert plan["software_choice"] == "blender"
-
-    approved = client.post(
-        f"/api/3d/plans/{plan['id']}/approve",
-        json={"decision": "approve", "reason": "teste automatizado"},
-    )
-    assert approved.status_code == 200
+    assert all(step["tool_name"] != "project_store.create_snapshot" for step in plan["steps"])
 
     executed = client.post(f"/api/3d/plans/{plan['id']}/execute")
     assert executed.status_code == 200
@@ -323,12 +304,6 @@ def test_modeling_tool_calls_persisted_during_execution() -> None:
     plan = created.json()
     plan_id = plan["id"]
 
-    approved = client.post(
-        f"/api/3d/plans/{plan_id}/approve",
-        json={"decision": "approve", "reason": "teste"},
-    )
-    assert approved.status_code == 200
-
     executed = client.post(f"/api/3d/plans/{plan_id}/execute")
     assert executed.status_code == 200
     body = executed.json()
@@ -396,16 +371,11 @@ def test_modeling_export_artifacts_create_platform_files_and_versions(
         json={
             "prompt": "Exporte um STL no Blender.",
             "project_id": project_id,
-            "mode": "approval_required",
+            "mode": "safe_auto",
             "software_override": "blender",
         },
     )
     plan = created.json()
-    client.post(
-        f"/api/3d/plans/{plan['id']}/approve",
-        json={"decision": "approve", "reason": "teste"},
-    )
-
     executed = client.post(f"/api/3d/plans/{plan['id']}/execute")
     assert executed.status_code == 200
     export_steps = [
@@ -477,16 +447,12 @@ def test_modeling_failure_is_logged_with_error_envelope_fields(monkeypatch) -> N
         "/api/3d/plans",
         json={
             "prompt": "Crie um cubo simples no Blender.",
-            "mode": "approval_required",
+            "mode": "safe_auto",
             "software_override": "blender",
         },
     )
     plan = created.json()
     plan_id = plan["id"]
-    client.post(
-        f"/api/3d/plans/{plan_id}/approve",
-        json={"decision": "approve", "reason": "teste"},
-    )
     executed = client.post(f"/api/3d/plans/{plan_id}/execute")
     assert executed.status_code == 200
     assert executed.json()["plan"]["status"] == "failed"
@@ -675,5 +641,47 @@ def test_modeling_policy_classifies_tier2_tools_correctly() -> None:
     assert by_tool["blender.measure_object"].approval_required is False
     # repair_non_manifold é HIGH_RISK → approval mesmo com risk_level low
     assert by_tool["blender.repair_non_manifold"].approval_required is True
-    # apply_subdivision: low risk, fora de HIGH_RISK/READ_ONLY → mantém o que foi declarado
+    # apply_subdivision: alteração normal allowlistada → autoexecução no fluxo fluido
     assert by_tool["blender.apply_subdivision"].approval_required is False
+
+
+def test_modeling_policy_autoexecutes_normal_changes_but_blocks_high_risk() -> None:
+    from app.core.contracts import (
+        ModelingExecutionMode,
+        ModelingPlan,
+        ModelingPlanStep,
+        ModelingRiskLevel,
+        ModelingSoftware,
+    )
+    from app.modeling.policy import apply_modeling_policy
+
+    plan = ModelingPlan(
+        prompt="fluxo fluido",
+        software_choice=ModelingSoftware.blender,
+        mode=ModelingExecutionMode.safe_auto,
+        steps=[
+            ModelingPlanStep(
+                seq=1,
+                title="Adicionar cubo",
+                software=ModelingSoftware.blender,
+                tool_name="blender.create_mesh_primitive",
+                risk_level=ModelingRiskLevel.medium,
+                approval_required=True,
+            ),
+            ModelingPlanStep(
+                seq=2,
+                title="Boolean destructive",
+                software=ModelingSoftware.blender,
+                tool_name="blender.apply_boolean",
+                risk_level=ModelingRiskLevel.medium,
+                approval_required=False,
+            ),
+        ],
+    )
+
+    enforced = apply_modeling_policy(plan)
+    by_tool = {step.tool_name: step for step in enforced.steps}
+    assert by_tool["blender.create_mesh_primitive"].approval_required is False
+    assert by_tool["blender.apply_boolean"].approval_required is True
+    assert enforced.approval_required is True
+    assert enforced.status == "waiting_approval"

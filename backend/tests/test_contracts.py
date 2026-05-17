@@ -79,6 +79,7 @@ def test_modeling_3d_context_is_exclusive_with_other_structured_modes() -> None:
         modeling_3d={"enabled": True, "software_override": "auto"},
     )
     assert payload.modeling_3d.enabled is True
+    assert payload.modeling_3d.mode == "safe_auto"
     assert payload.modeling_3d.software_override is None
 
     with pytest.raises(ValidationError):

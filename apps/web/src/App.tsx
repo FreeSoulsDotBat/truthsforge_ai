@@ -865,9 +865,7 @@ function App() {
       .slice(0, 8);
   }, [activeMention, mentionOptions]);
   const executionLabels = [
-    modeling3dEnabled
-      ? `MCP 3D (${modeling3dSoftware === "auto" ? "auto" : modeling3dSoftware}, ${modeling3dMode})`
-      : null,
+    modeling3dEnabled ? `MCP 3D (${modeling3dSoftware === "auto" ? "auto" : modeling3dSoftware}, fluido)` : null,
     reasoningOverride === "long" ? "Raciocínio longo" : null,
     reasoningSummary ? "Resumo oficial" : null,
     deepResearch ? "Pesquisa OpenAI" : null,
@@ -923,6 +921,12 @@ function App() {
       setReasoningSummary(false);
     }
   }, [reasoningSummary, reasoningSummaryUnavailable, setReasoningSummary]);
+
+  useEffect(() => {
+    if (modeling3dMode === "approval_required") {
+      setModeling3dMode("safe_auto");
+    }
+  }, [modeling3dMode, setModeling3dMode]);
 
   useEffect(() => {
     if (!selectedKnowledgeBase) {
@@ -2447,8 +2451,7 @@ function App() {
                                   title="Modo MCP 3D"
                                 >
                                   <option value="plan_only">planejar</option>
-                                  <option value="approval_required">aprovação</option>
-                                  <option value="safe_auto">seguro auto</option>
+                                  <option value="safe_auto">fluido</option>
                                 </select>
                               </label>
                             </>

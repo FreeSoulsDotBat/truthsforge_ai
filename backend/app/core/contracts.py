@@ -410,7 +410,7 @@ class ChatSessionContextUpdate(BaseModel):
 
 class ChatModeling3DContext(BaseModel):
     enabled: bool = False
-    mode: ModelingExecutionMode = ModelingExecutionMode.approval_required
+    mode: ModelingExecutionMode = ModelingExecutionMode.safe_auto
     software_override: ModelingSoftware | None = None
 
     @model_validator(mode="after")
@@ -679,7 +679,7 @@ class ModelingCapability(BaseModel):
 
 class ModelingCapabilities(BaseModel):
     mode: Literal["local_mcp"] = "local_mcp"
-    default_execution_mode: ModelingExecutionMode = ModelingExecutionMode.approval_required
+    default_execution_mode: ModelingExecutionMode = ModelingExecutionMode.safe_auto
     safety_notes: list[str] = Field(default_factory=list)
     adapters: list[ModelingCapability] = Field(default_factory=list)
 
@@ -754,7 +754,7 @@ class ModelingPlanCreate(BaseModel):
     prompt: str = Field(min_length=1)
     project_id: str | None = None
     conversation_id: str | None = None
-    mode: ModelingExecutionMode = ModelingExecutionMode.approval_required
+    mode: ModelingExecutionMode = ModelingExecutionMode.safe_auto
     software_override: ModelingSoftware | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=12)
 
