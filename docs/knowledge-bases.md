@@ -54,6 +54,10 @@ O ranqueamento inicial e interno e nao usa uma segunda chamada de LLM.
 
 A inteligencia contextual vem da combinacao de embeddings + metadados + regras de escopo. Uma LLM reranker pode ser adicionada depois, mas ficara opt-in porque gera custo adicional.
 
+## Conteúdo sensível e provedores externos
+
+Documentos indexados podem entrar em prompts enviados a OpenAI, Anthropic ou Google quando esses provedores estiverem configurados e a base estiver no escopo permitido. Conteúdo sensível deve ser identificado por marcação manual e heurística automática, com auditoria do uso em contexto.
+
 ## Importacao do ChatGPT
 
 Ao importar um export do ChatGPT, as conversas entram no historico e os assets uteis entram em `Arquivos`. Arquivos informativos do proprio export, como `conversations.json`, `shared_conversations.json`, `user.json` e `user_settings.json`, nao viram arquivos de biblioteca para evitar ruido.

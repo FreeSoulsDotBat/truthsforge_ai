@@ -77,18 +77,18 @@ O repositório já possui arquitetura, decisões, roadmap, readiness e módulo 3
 - QUANDO um arquivo entrar no sistema, O SISTEMA DEVE registrá-lo na biblioteca de arquivos.
 - QUANDO o usuário optar por indexar um arquivo ou importação, O SISTEMA DEVE extrair conteúdo, criar chunks, vincular metadados e enviá-los ao índice vetorial.
 - QUANDO uma base de conhecimento estiver ativa para um projeto ou agente, O SISTEMA DEVE buscar apenas no escopo permitido antes de montar contexto para a LLM.
-- QUANDO o conteúdo for sensível, O SISTEMA DEVE exigir decisão explícita antes de envio para provedores externos.
+- QUANDO o conteúdo for sensível, O SISTEMA DEVE registrar classificação manual ou heurística antes de usá-lo em contexto.
 
 ### Agentes, ferramentas e segurança
 
 - QUANDO um agente solicitar o uso de uma ferramenta sensível, O SISTEMA DEVE aplicar a policy configurada por agente ou domínio.
-- QUANDO uma ação envolver escrita local, execução de código ou integrações de maior risco, O SISTEMA DEVE exigir aprovação humana, registrar auditoria e expor resultado rastreável.
+- QUANDO uma ação envolver alteração ou deleção local, execução de código mutável ou integrações de maior risco, O SISTEMA DEVE exigir aprovação humana, registrar auditoria e expor resultado rastreável.
 - QUANDO a ferramenta for somente leitura e classificada como segura, O SISTEMA PODE executá-la automaticamente se a policy permitir.
 
 ### Modelagem 3D
 
 - QUANDO o usuário abrir um fluxo 3D, O SISTEMA DEVE operar por plano estruturado, execução incremental e auditoria.
-- QUANDO uma etapa 3D for mutável ou high-risk, O SISTEMA DEVE exigir aprovação humana.
+- QUANDO uma etapa 3D alterar ou deletar o workspace, ou for high-risk, O SISTEMA DEVE exigir aprovação humana.
 - ANTES de executar uma mudança significativa no workspace 3D, O SISTEMA DEVE permitir snapshot e rollback.
 - QUANDO houver export ou validação de printability, O SISTEMA DEVE registrar tool calls e artefatos gerados.
 
@@ -96,7 +96,7 @@ O repositório já possui arquitetura, decisões, roadmap, readiness e módulo 3
 
 - QUANDO o frontend web for empacotado para desktop, O SISTEMA DEVE continuar tratando o desktop como centro local do produto.
 - QUANDO o mobile acessar o backend, O SISTEMA DEVE operar como cliente pareado do desktop.
-- ENQUANTO o mobile estiver sem servidor acessível, O SISTEMA DEVE degradar de forma clara, com cache offline somente leitura quando essa capacidade estiver pronta.
+- ENQUANTO o mobile estiver sem servidor acessível, O SISTEMA DEVE degradar de forma clara, com cache offline completo quando essa capacidade estiver pronta.
 
 ## Requisitos não funcionais
 
@@ -113,13 +113,16 @@ O repositório já possui arquitetura, decisões, roadmap, readiness e módulo 3
 - Toda mudança relevante DEVE ter validação automatizada compatível com backend e frontend impactados.
 - Toda mudança de contrato DEVE atualizar documentação e/ou spec correspondente.
 - Toda task concluída DEVE poder ser rastreada até um item do `tasks.md` quando fizer parte do roadmap SDD.
+- Antes de alterar a plataforma, o executor DEVE confirmar com o dono do produto o nome da branch e a mensagem de commit em formato semântico.
+- Toda entrega relevante DEVE incluir o checklist obrigatório de `docs/delivery-checklist.md`.
 
 ### Segurança, privacidade e custo
 
 - Chaves e segredos DEVEM ficar no backend ou storage local protegido, nunca no browser.
 - O acesso remoto fora da máquina local DEVE priorizar VPN/pareamento, não exposição pública ingênua.
 - O sistema DEVE continuar a explicitar custos estimados e registrar auditoria mínima das chamadas.
-- Operações com MCP, scripts e comandos DEVEM seguir least privilege e aprovação explícita quando sensíveis.
+- Operações com MCP, scripts e comandos DEVEM seguir least privilege; adições podem executar sem aprovação quando a policy permitir, mas alterações e deleções DEVEM exigir aprovação humana.
+- Tools de escrita ou execução DEVEM operar em diretório isolado por projeto, com timeout, limites, auditoria e rollback obrigatório.
 - Decisões tomadas por agentes DEVEM ser rastreáveis em spec, task, PR ou handoff, sem depender da memória interna de uma ferramenta específica.
 
 ## Critérios de sucesso do baseline

@@ -58,7 +58,7 @@ O backend esta organizado por dominios:
 - `workers`: filas em memoria para importacao do ChatGPT e indexacao de arquivos, com recuperacao/backfill de pendencias. Redis/Valkey permanece pronto para cache/fila distribuida futura.
 - `modeling`: MCP local para Blender/Fusion, snapshots, tool calls, printability e artefatos 3D.
 
-O store principal do modo containerizado e Postgres. O JSON-backed store permanece como fallback local para testes ou quando o banco nao estiver disponivel; ele nao e caminho de producao, sync ou backup.
+O store principal do modo containerizado e Postgres. Para o desenvolvimento principal e validacao do produto completo, Postgres + Qdrant + Valkey sao obrigatorios. O JSON-backed store permanece como fallback local para testes ou quando o banco nao estiver disponivel; ele nao e caminho de producao, sync ou backup.
 
 ## Dados
 
@@ -83,6 +83,14 @@ O RAG nao envia todos os arquivos de uma base para a LLM. O backend usa as bases
 
 Pastas de projetos sao organizacao visual e escopo humano. Quando citadas no chat, elas podem atuar como filtro opcional para restringir a busca, mas a fonte primaria de contexto sao as bases de conhecimento.
 
+Documentos indexados podem compor prompts enviados aos provedores externos configurados, respeitando escopo e bases ativas. Conteudo sensivel deve ser identificado por marcacao manual e heuristica automatica, com rastreabilidade em auditoria.
+
+## Agentes, tools e memoria
+
+JUDITE deve evoluir como orquestradora de workflows multi-etapa: delega contexto para agentes especialistas, coordena checkpoints humanos e registra decisoes. Agentes podem executar adicoes sem aprovacao quando a policy permitir; alteracoes e delecoes exigem aprovacao humana.
+
+Tools com escrita ou execucao devem operar em diretorio isolado por projeto, com rede permitida no MVP, timeout, limites de tamanho, auditoria e rollback obrigatorio. A memoria duravel deve cobrir preferencias do usuario, decisoes, historico resumido, contexto por projeto e demais sinais uteis.
+
 ## Mobile
 
-O Android sera quase totalmente cliente do backend desktop. O caminho padrao fora de casa e Tailscale/WireGuard, evitando porta publica. O modo offline inicial deve ser cache local somente leitura com indicador visual de servidor indisponivel.
+O Android sera quase totalmente cliente do backend desktop. O pareamento inicial deve usar QR code local. No MVP mobile nao havera autenticacao de usuario; o cliente pareado pode manter cache offline completo. O caminho padrao fora de casa e Tailscale/WireGuard, evitando porta publica.

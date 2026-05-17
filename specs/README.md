@@ -28,6 +28,15 @@ Ela organiza intenção, decisão técnica e trabalho em aberto com rastreabilid
 ## Uso
 
 - `specs/repo-foundation/` descreve o baseline atual do produto.
-- Specs futuras devem seguir o padrão `specs/<slug-da-feature>/`.
+- Specs por domínio seguem o padrão `specs/<slug-do-dominio>/` e devem ser criadas para frentes que excedam ajuste pontual.
 - Toda task relevante deve nascer de uma spec ou atualizar uma spec existente.
 - Quando mais de uma IA atuar na mesma frente, registre contexto de continuidade em `handoff.md`.
+
+## Specs de domínio aprovadas
+
+- `specs/agents-tools/`
+- `specs/rag-sensitive-data/`
+- `specs/mobile-pairing/`
+- `specs/artifacts-export/`
+- `specs/modeling-3d-fusion/`
+- `specs/observability-quality/`

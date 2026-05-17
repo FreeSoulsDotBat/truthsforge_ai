@@ -26,6 +26,9 @@ agente principal, o agente solicitado ou agentes de apoio não tiverem acesso ao
 `project_id`, a chamada retorna `403`. O contexto RAG da execução usa o projeto
 ativo validado e as bases habilitadas para aquele projeto/agente.
 
+Chamadas de chat, custos, uso de documentos em contexto e decisões de agentes
+devem permanecer auditáveis conforme `specs/observability-quality/`.
+
 ## Configuracao
 
 - `GET /api/models`

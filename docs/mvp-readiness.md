@@ -19,6 +19,7 @@ Status em 2026-05-14.
 - Geracao de imagem via OpenAI Images API, Deep Research via Responses API e resumo oficial de raciocinio opt-in.
 - Modo multiagente por contexto: agente principal/orquestrador, agente solicitado e agentes de apoio entram no prompt e na auditoria.
 - Modelagem 3D local por MCP com Blender real quando configurado, Fusion 360 por add-in loopback quando instalado, snapshots, rollback, tool calls e printability.
+- Governança SDD com checklist obrigatório de entrega, confirmação prévia de branch/commit semântico e specs separadas por domínio.
 
 ## Lacunas que ainda fazem parte do MVP funcional
 
@@ -26,7 +27,7 @@ Status em 2026-05-14.
 - Criar fluxo automatico assistido para transformar historico importado do ChatGPT em bases de conhecimento revisadas.
 - Implementar sandbox real para `python.run` e `filesystem.write`; hoje o runtime avalia permissao, exige aprovacao quando necessario e retorna erro seguro para essas ferramentas.
 - Memoria duravel da JUDITE/agentes e workflows LangGraph reais com checkpoints humanos.
-- Autenticação/pareamento para acesso mobile fora da máquina local.
+- Pareamento mobile por QR local, cache offline completo e acesso fora da máquina local por rede privada/VPN.
 - Testes de interface com navegador real e screenshots/recordings em desktop/mobile.
 - Provider registry preenchido/revisado com IDs reais de modelos e custos atuais escolhidos pelo usuário.
 - Configuração real de chaves OpenAI, Anthropic e Google pelo usuário.
