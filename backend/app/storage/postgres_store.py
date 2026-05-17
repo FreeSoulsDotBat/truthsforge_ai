@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
+from time import sleep
 from typing import Any, TypeVar
 
 import psycopg
@@ -61,6 +63,25 @@ from app.storage.dev_store import _dump_model, default_seed_data
 
 T = TypeVar("T")
 
+logger = logging.getLogger(__name__)
+
+_POSTGRES_CONNECT_ATTEMPTS = 8
+_POSTGRES_CONNECT_RETRY_DELAY_SECONDS = 1.0
+_POSTGRES_RETRYABLE_CONNECT_ERROR_SNIPPETS = (
+    "connection refused",
+    "connection timed out",
+    "could not translate host name",
+    "failed to resolve host",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "the database system is starting up",
+)
+
+
+def _is_retryable_connect_error(error: psycopg.OperationalError) -> bool:
+    message = str(error).lower()
+    return any(snippet in message for snippet in _POSTGRES_RETRYABLE_CONNECT_ERROR_SNIPPETS)
+
 
 class PostgresStore:
     """Postgres-backed store for the local-first MVP.
@@ -77,7 +98,21 @@ class PostgresStore:
         self.reconcile_chatgpt_session_timestamps()
 
     def _connect(self) -> psycopg.Connection:
-        return psycopg.connect(self.database_url, row_factory=dict_row)
+        for attempt in range(1, _POSTGRES_CONNECT_ATTEMPTS + 1):
+            try:
+                return psycopg.connect(self.database_url, row_factory=dict_row)
+            except psycopg.OperationalError as error:
+                if attempt == _POSTGRES_CONNECT_ATTEMPTS or not _is_retryable_connect_error(error):
+                    raise
+                logger.warning(
+                    "Postgres connection attempt %s/%s failed: %s",
+                    attempt,
+                    _POSTGRES_CONNECT_ATTEMPTS,
+                    error,
+                )
+                sleep(_POSTGRES_CONNECT_RETRY_DELAY_SECONDS)
+
+        raise RuntimeError("Postgres connection retry loop exited unexpectedly")
 
     def init_schema(self) -> None:
         statements = [
