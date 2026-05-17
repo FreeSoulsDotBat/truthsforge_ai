@@ -21,6 +21,11 @@
 - `token`: fragmento de texto.
 - `done`: conclusao do stream.
 
+O backend valida o projeto ativo antes de criar ou atualizar a sessão: se o
+agente principal, o agente solicitado ou agentes de apoio não tiverem acesso ao
+`project_id`, a chamada retorna `403`. O contexto RAG da execução usa o projeto
+ativo validado e as bases habilitadas para aquele projeto/agente.
+
 ## Configuracao
 
 - `GET /api/models`

@@ -492,6 +492,53 @@ def test_chat_stream_audit_records_cost_and_context_metadata() -> None:
     )
 
 
+def test_agent_cannot_stream_in_project_outside_runtime_scope() -> None:
+    client = TestClient(app)
+    project_a = client.post(
+        "/api/projects",
+        json={"name": f"Projeto permitido {uuid4().hex}", "description": "permitido"},
+    )
+    project_b = client.post(
+        "/api/projects",
+        json={"name": f"Projeto bloqueado {uuid4().hex}", "description": "bloqueado"},
+    )
+    assert project_a.status_code == 200
+    assert project_b.status_code == 200
+    project_a_id = project_a.json()["id"]
+    project_b_id = project_b.json()["id"]
+
+    agent = client.post(
+        "/api/agents",
+        json={
+            "name": f"Agente escopo {uuid4().hex}",
+            "description": "Agente restrito a um projeto",
+            "system_prompt": "Responda somente para testes.",
+            "allowed_project_ids": [project_a_id],
+        },
+    )
+    assert agent.status_code == 200
+
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "nao deve acessar projeto bloqueado",
+            "agent_id": agent.json()["id"],
+            "project_id": project_b_id,
+        },
+    )
+
+    assert response.status_code == 403
+    assert "não tem acesso ao projeto ativo" in response.text
+
+    sessions = client.get("/api/chat/sessions")
+    assert sessions.status_code == 200
+    assert all(
+        session["project_id"] != project_b_id
+        or session["title"] != "nao deve acessar projeto bloqueado"[:48]
+        for session in sessions.json()
+    )
+
+
 def test_attached_document_from_another_project_is_rejected() -> None:
     client = TestClient(app)
     project_a = client.post(

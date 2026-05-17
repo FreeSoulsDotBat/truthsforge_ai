@@ -137,7 +137,10 @@ def _read_storage_bytes(
 
     root = allowed_root.resolve()
     if is_zip_storage_path(storage_path):
-        archive_path, entry_name = parse_zip_storage_path(storage_path)
+        try:
+            archive_path, entry_name = parse_zip_storage_path(storage_path)
+        except ValueError:
+            return b""
         archive_path = archive_path.resolve()
         if not archive_path.is_relative_to(root) or not archive_path.is_file():
             return b""
@@ -145,7 +148,7 @@ def _read_storage_bytes(
             with zipfile.ZipFile(archive_path) as archive:
                 with archive.open(entry_name) as handle:
                     return handle.read(max_bytes) if max_bytes is not None else handle.read()
-        except (KeyError, zipfile.BadZipFile):
+        except (KeyError, OSError, zipfile.BadZipFile):
             return b""
 
     path = Path(storage_path).resolve()

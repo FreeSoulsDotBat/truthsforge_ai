@@ -123,3 +123,9 @@ def test_zip_text_entries_can_be_read_without_extraction() -> None:
     )
 
     assert "Texto de base" in content
+
+
+def test_zip_text_reader_returns_empty_for_malformed_storage_path() -> None:
+    content = read_text_content("zip://sem-separador", settings.data_dir)
+
+    assert content == ""

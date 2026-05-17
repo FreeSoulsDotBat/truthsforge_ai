@@ -314,6 +314,17 @@ def _runtime_allowed_project_ids(
     return allowed or {general_project_id}
 
 
+def _validate_active_project_scope(
+    *, active_project_id: str, runtime_allowed_project_ids: set[str]
+) -> None:
+    if active_project_id in runtime_allowed_project_ids:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="O agente selecionado não tem acesso ao projeto ativo desta conversa.",
+    )
+
+
 def _metadata_project_id(metadata: dict[str, Any] | None) -> str:
     if isinstance(metadata, dict):
         raw_project_id = metadata.get("project_id")
@@ -1141,8 +1152,35 @@ def _runtime_status(stage: str, label: str, detail: str | None = None) -> str:
 async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
     store = get_store()
     general_project_id = _general_project_id(store)
-    session = store.get_or_create_session(payload)
-    effective_project_id = payload.project_id or session.project_id or general_project_id
+    session = (
+        store.get_chat_session(payload.session_id)
+        if payload.session_id and hasattr(store, "get_chat_session")
+        else None
+    )
+    agents = store.list_agents()
+    primary_agent, target_agent, support_agents = select_orchestration_agents(
+        agents=agents,
+        selected_agent_id=payload.agent_id or (session.agent_id if session else None),
+        requested_agent_ids=payload.agent_ids,
+        multi_agent_mode=payload.multi_agent_mode,
+    )
+    projects = store.list_projects() if hasattr(store, "list_projects") else []
+    projects_by_id = {project.id: project for project in projects}
+    runtime_allowed_project_ids = _runtime_allowed_project_ids(
+        [primary_agent, target_agent, *support_agents],
+        general_project_id=general_project_id,
+    )
+    known_project_ids = {project.id for project in projects}
+    requested_project_id = payload.project_id or (session.project_id if session else None)
+    effective_project_id = requested_project_id or general_project_id
+    if known_project_ids and effective_project_id not in known_project_ids:
+        effective_project_id = general_project_id
+    _validate_active_project_scope(
+        active_project_id=effective_project_id,
+        runtime_allowed_project_ids=runtime_allowed_project_ids,
+    )
+    if session is None:
+        session = store.get_or_create_session(payload)
     effective_folder_id = payload.folder_id if payload.folder_id is not None else session.folder_id
     if (
         effective_project_id != session.project_id or effective_folder_id != session.folder_id
@@ -1156,38 +1194,21 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
         )
         store.upsert_chat_session(session)
     session = _clear_empty_draft_flag(store, session)
-    agents = store.list_agents()
-    primary_agent, target_agent, support_agents = select_orchestration_agents(
-        agents=agents,
-        selected_agent_id=payload.agent_id or session.agent_id,
-        requested_agent_ids=payload.agent_ids,
-        multi_agent_mode=payload.multi_agent_mode,
-    )
-    projects = store.list_projects() if hasattr(store, "list_projects") else []
-    projects_by_id = {project.id: project for project in projects}
-    known_project_ids = {project.id for project in projects}
     normalized_context_project_ids = _normalize_project_ids(
         [effective_project_id],
         fallback_project_id=session.project_id or general_project_id,
         known_project_ids=known_project_ids,
     )
-    allowed_project_ids = _agent_allowed_project_ids(
-        primary_agent, general_project_id=general_project_id
-    )
-    runtime_allowed_project_ids = _runtime_allowed_project_ids(
-        [primary_agent, target_agent, *support_agents],
-        general_project_id=general_project_id,
-    )
     effective_context_project_ids = [
         project_id
         for project_id in normalized_context_project_ids
-        if project_id in allowed_project_ids
+        if project_id in runtime_allowed_project_ids
     ]
     if not effective_context_project_ids:
         effective_context_project_ids = (
             [general_project_id]
-            if general_project_id in allowed_project_ids
-            else list(allowed_project_ids)[:1]
+            if general_project_id in runtime_allowed_project_ids
+            else list(runtime_allowed_project_ids)[:1]
         )
     effective_context_project_ids = effective_context_project_ids[:1]
     knowledge_bases = store.list_knowledge_bases() if hasattr(store, "list_knowledge_bases") else []
@@ -1197,7 +1218,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
         else []
     )
     effective_knowledge_base_ids = _knowledge_base_ids_for_runtime(
-        project_id=effective_project_id,
+        project_id=effective_context_project_ids[0],
         projects_by_id=projects_by_id,
         primary_agent=primary_agent,
         target_agent=target_agent,

@@ -1406,7 +1406,9 @@ function App() {
       tags: agentDraft.tags.map((tag) => tag.trim()).filter(Boolean),
       tools_allowed: agentDraft.tools_allowed.map((tool) => tool.trim()).filter(Boolean),
       allowed_project_ids:
-        agentDraft.allowed_project_ids.length > 0 ? agentDraft.allowed_project_ids.slice(0, 3) : [generalProjectId],
+        agentDraft.allowed_project_ids.length > 0
+          ? agentDraft.allowed_project_ids.filter((projectId, index, list) => list.indexOf(projectId) === index)
+          : [generalProjectId],
       knowledge_base_ids: agentDraft.knowledge_base_ids.filter(
         (knowledgeBaseId, index, list) =>
           list.indexOf(knowledgeBaseId) === index &&
