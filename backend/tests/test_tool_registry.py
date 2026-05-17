@@ -1,0 +1,245 @@
+"""Tests for :mod:`app.modeling.tool_registry`, the single source of truth
+for the 3D modeling allowlist (ADR-013).
+
+These tests pin the behaviour of the registry and the predicates so that
+future edits cannot silently widen the allowlist or accidentally expose a
+``run_script`` tool to the LLM planner.
+"""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from app.core.contracts import ModelingRiskLevel
+from app.modeling.tool_registry import (
+    BLENDER_TOOLS,
+    BLOCKED_TOOL_PREFIXES,
+    FUSION_TOOLS,
+    HIGH_RISK_TOOL_NAMES,
+    PLANNER_TOOLSET,
+    READ_ONLY_TOOL_NAMES,
+    TOOL_REGISTRY,
+    ToolCategory,
+    ToolDescriptor,
+    ToolSoftware,
+    descriptor,
+    descriptors,
+    is_blocked,
+    is_high_risk,
+    is_known,
+    is_read_only,
+    requires_approval,
+)
+
+
+# ---------------------------------------------------------------------------
+# Registry shape
+# ---------------------------------------------------------------------------
+
+
+def test_registry_keys_match_descriptor_names() -> None:
+    for name, entry in TOOL_REGISTRY.items():
+        assert name == entry.name
+        assert isinstance(entry, ToolDescriptor)
+
+
+def test_registry_covers_every_documented_tool() -> None:
+    expected = {
+        "blender.measure_object",
+        "blender.validate_mesh",
+        "blender.validate_printability",
+        "blender.create_mesh_primitive",
+        "blender.export_stl",
+        "blender.export_obj",
+        "blender.export_3mf",
+        "blender.apply_bevel",
+        "blender.apply_subdivision",
+        "blender.apply_solidify",
+        "blender.assign_material",
+        "blender.apply_boolean",
+        "blender.repair_non_manifold",
+        "blender.run_script",
+        "fusion.validate_dimensions",
+        "fusion.validate_printability",
+        "fusion.open_design",
+        "fusion.create_sketch",
+        "fusion.add_rectangle",
+        "fusion.add_circle",
+        "fusion.export_step",
+        "fusion.export_stl",
+        "fusion.export_3mf",
+        "fusion.extrude_profile",
+        "fusion.set_parameter",
+        "fusion.run_script",
+        "project_store.restore_snapshot",
+        "project_store.list_snapshots",
+    }
+    assert expected.issubset(set(TOOL_REGISTRY))
+
+
+def test_descriptor_lookup_returns_none_for_unknown_tools() -> None:
+    assert descriptor("blender.no_such_tool") is None
+    assert is_known("fusion.imaginary") is False
+    assert is_known("blender.apply_boolean") is True
+
+
+def test_descriptors_iterates_in_registry_order() -> None:
+    names = [entry.name for entry in descriptors()]
+    assert names == list(TOOL_REGISTRY.keys())
+
+
+def test_descriptor_is_immutable() -> None:
+    entry = TOOL_REGISTRY["blender.apply_boolean"]
+    with pytest.raises(ValidationError):
+        entry.name = "blender.apply_boolean_v2"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Derived collections
+# ---------------------------------------------------------------------------
+
+
+def test_planner_toolset_excludes_orchestrator_internal_tools() -> None:
+    assert "project_store.restore_snapshot" not in PLANNER_TOOLSET
+    assert "project_store.list_snapshots" not in PLANNER_TOOLSET
+
+
+def test_planner_toolset_excludes_run_script_tools() -> None:
+    assert "blender.run_script" not in PLANNER_TOOLSET
+    assert "fusion.run_script" not in PLANNER_TOOLSET
+
+
+def test_planner_toolset_matches_v1_allowlist() -> None:
+    """The visible-to-planner allowlist is exactly the 24 tools v1 exposed."""
+
+    expected_v1 = {
+        "blender.create_mesh_primitive",
+        "blender.apply_bevel",
+        "blender.apply_boolean",
+        "blender.apply_subdivision",
+        "blender.apply_solidify",
+        "blender.assign_material",
+        "blender.measure_object",
+        "blender.repair_non_manifold",
+        "blender.validate_mesh",
+        "blender.validate_printability",
+        "blender.export_stl",
+        "blender.export_obj",
+        "blender.export_3mf",
+        "fusion.open_design",
+        "fusion.create_sketch",
+        "fusion.add_rectangle",
+        "fusion.add_circle",
+        "fusion.extrude_profile",
+        "fusion.set_parameter",
+        "fusion.export_step",
+        "fusion.export_stl",
+        "fusion.export_3mf",
+        "fusion.validate_dimensions",
+        "fusion.validate_printability",
+    }
+    assert set(PLANNER_TOOLSET) == expected_v1
+
+
+def test_blender_tools_lists_every_blender_descriptor_except_run_script() -> None:
+    # The adapter export already strips ``blender.run_script`` (see
+    # ``blender_adapter.py``); the registry-level list keeps the descriptor
+    # so policy/audit can still classify it.
+    blender_entries = {
+        entry.name for entry in descriptors() if entry.software is ToolSoftware.blender
+    }
+    assert blender_entries == set(BLENDER_TOOLS) | {"blender.run_script"}
+
+
+def test_fusion_tools_lists_every_fusion_descriptor_except_run_script() -> None:
+    fusion_entries = {
+        entry.name for entry in descriptors() if entry.software is ToolSoftware.fusion
+    }
+    assert fusion_entries == set(FUSION_TOOLS) | {"fusion.run_script"}
+
+
+def test_read_only_set_matches_v1() -> None:
+    expected = {
+        "blender.measure_object",
+        "blender.validate_mesh",
+        "blender.validate_printability",
+        "fusion.validate_dimensions",
+        "fusion.validate_printability",
+        "project_store.list_snapshots",
+    }
+    assert set(READ_ONLY_TOOL_NAMES) == expected
+
+
+def test_high_risk_set_matches_v1() -> None:
+    expected = {
+        "blender.apply_boolean",
+        "blender.repair_non_manifold",
+        "blender.run_script",
+        "fusion.run_script",
+        "project_store.restore_snapshot",
+    }
+    assert set(HIGH_RISK_TOOL_NAMES) == expected
+
+
+def test_blocked_prefixes_unchanged() -> None:
+    assert BLOCKED_TOOL_PREFIXES == (
+        "shell.",
+        "filesystem.delete",
+        "python.exec",
+        "network.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Predicates
+# ---------------------------------------------------------------------------
+
+
+def test_is_blocked_matches_prefixes() -> None:
+    assert is_blocked("shell.rm")
+    assert is_blocked("filesystem.delete")
+    assert is_blocked("python.exec")
+    assert is_blocked("network.fetch")
+    assert not is_blocked("blender.apply_boolean")
+    assert not is_blocked("filesystem.write")
+
+
+def test_is_read_only_only_true_for_read_only_category() -> None:
+    assert is_read_only("blender.measure_object")
+    assert is_read_only("fusion.validate_printability")
+    assert not is_read_only("blender.apply_bevel")
+    assert not is_read_only("blender.no_such_tool")
+
+
+def test_is_high_risk_only_true_for_high_risk_category() -> None:
+    assert is_high_risk("blender.apply_boolean")
+    assert is_high_risk("project_store.restore_snapshot")
+    assert not is_high_risk("blender.apply_bevel")
+    assert not is_high_risk("blender.no_such_tool")
+
+
+def test_requires_approval_decision_table() -> None:
+    # high_risk tool → always requires approval, no matter the declared risk
+    assert requires_approval("blender.apply_boolean", ModelingRiskLevel.low)
+    assert requires_approval("blender.apply_boolean", "high")
+    # read_only tool → never requires approval, even if marked high
+    assert not requires_approval("blender.measure_object", ModelingRiskLevel.high)
+    # additive/mutative tool at low risk → no approval
+    assert not requires_approval("blender.apply_bevel", ModelingRiskLevel.low)
+    # additive/mutative tool escalated to high → approval
+    assert requires_approval("blender.apply_bevel", ModelingRiskLevel.high)
+    # blocked prefix → approval regardless of registry membership
+    assert requires_approval("shell.rm", ModelingRiskLevel.low)
+    # unknown tool, low risk → no approval (caller is expected to reject the
+    # step earlier, via planner allowlist enforcement)
+    assert not requires_approval("blender.no_such_tool", ModelingRiskLevel.low)
+    # ``None`` risk level still respects category-based rules
+    assert requires_approval("blender.apply_boolean", None)
+    assert not requires_approval("blender.measure_object", None)
+
+
+def test_categories_are_disjoint_for_known_tools() -> None:
+    read_only = {e.name for e in descriptors() if e.category is ToolCategory.read_only}
+    high_risk = {e.name for e in descriptors() if e.category is ToolCategory.high_risk}
+    assert not (read_only & high_risk)

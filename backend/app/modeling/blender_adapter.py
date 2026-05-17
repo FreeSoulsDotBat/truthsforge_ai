@@ -9,23 +9,15 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.contracts import ModelingErrorEnvelope, ModelingPlanStep
+from app.modeling.tool_registry import BLENDER_TOOLS as _REGISTRY_BLENDER_TOOLS
 from app.modeling.workspace import safe_segment, workspace_dir
 
-BLENDER_TOOLS = [
-    "blender.create_mesh_primitive",
-    "blender.apply_bevel",
-    "blender.apply_boolean",
-    "blender.apply_subdivision",
-    "blender.apply_solidify",
-    "blender.assign_material",
-    "blender.measure_object",
-    "blender.repair_non_manifold",
-    "blender.validate_mesh",
-    "blender.validate_printability",
-    "blender.export_stl",
-    "blender.export_obj",
-    "blender.export_3mf",
-]
+# ``BLENDER_TOOLS`` is derived from :mod:`app.modeling.tool_registry`
+# (ADR-013) and intentionally **excludes** ``blender.run_script`` — the
+# adapter must never receive a free-script step, even if the registry
+# describes it for audit/policy purposes. The legacy export below is kept
+# so callers that import ``BLENDER_TOOLS`` from this module keep working.
+BLENDER_TOOLS = [name for name in _REGISTRY_BLENDER_TOOLS if name != "blender.run_script"]
 
 
 def _tail(value: str, limit: int = 4000) -> str:

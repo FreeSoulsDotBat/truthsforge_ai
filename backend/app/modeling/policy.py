@@ -1,3 +1,20 @@
+"""Safety policy applied to a freshly built :class:`ModelingPlan` before it
+can be executed.
+
+ADR-013 promotes :mod:`app.modeling.tool_registry` to single source of truth
+for the allowlist. ``BLOCKED_TOOL_PREFIXES``, ``READ_ONLY_TOOL_NAMES`` and
+``HIGH_RISK_TOOL_NAMES`` are re-exported here so legacy callers keep
+working, but they always reflect the registry — there is no second copy to
+drift from.
+
+In v1 this module also tracked the ``ModelingExecutionMode``
+(``plan_only`` / ``approval_required`` / ``safe_auto``). v2 collapses those
+into a single chat-first flow, but during Ondas 1–3 the modes remain in the
+contracts so the existing routes keep behaving the same. Once Onda 2
+removes the modes the conditional on :class:`ModelingExecutionMode` can be
+dropped entirely.
+"""
+
 from __future__ import annotations
 
 from app.core.contracts import (
@@ -7,40 +24,38 @@ from app.core.contracts import (
     ModelingRiskLevel,
     ModelingStepStatus,
 )
+from app.modeling.tool_registry import (
+    BLOCKED_TOOL_PREFIXES,
+    HIGH_RISK_TOOL_NAMES,
+    READ_ONLY_TOOL_NAMES,
+    is_blocked as _is_blocked,
+    is_high_risk as _is_high_risk,
+    is_read_only as _is_read_only,
+)
 
-BLOCKED_TOOL_PREFIXES = ("shell.", "filesystem.delete", "python.exec", "network.")
-
-# Tools that never mutate the workspace; safe to auto-execute in any mode.
-READ_ONLY_TOOL_NAMES = {
-    "blender.measure_object",
-    "blender.validate_mesh",
-    "blender.validate_printability",
-    "fusion.validate_dimensions",
-    "fusion.validate_printability",
-    "project_store.list_snapshots",
-}
-
-HIGH_RISK_TOOL_NAMES = {
-    "fusion.run_script",
-    "blender.run_script",
-    "project_store.restore_snapshot",
-    # Boolean operations are non-reversible once the modifier is applied; they
-    # mutate the geometry topology and may delete the auxiliary object.
-    "blender.apply_boolean",
-    # Repair changes vertex/edge/face topology globally; cannot be undone without
-    # a snapshot restore.
-    "blender.repair_non_manifold",
-}
+__all__ = [
+    "BLOCKED_TOOL_PREFIXES",
+    "HIGH_RISK_TOOL_NAMES",
+    "READ_ONLY_TOOL_NAMES",
+    "apply_modeling_policy",
+]
 
 
 def apply_modeling_policy(plan: ModelingPlan) -> ModelingPlan:
-    """Apply local safety defaults before any MCP call can be executed."""
+    """Apply local safety defaults before any MCP call can be executed.
+
+    The function is idempotent: running it twice over the same plan
+    produces the same result. It only mutates step ``status`` /
+    ``approval_required`` / ``error`` and the plan ``status`` /
+    ``approval_required``.
+    """
+
     steps = []
     for step in plan.steps:
-        blocked = step.tool_name.startswith(BLOCKED_TOOL_PREFIXES)
-        is_read_only = step.tool_name in READ_ONLY_TOOL_NAMES
+        blocked = _is_blocked(step.tool_name)
+        is_read_only = _is_read_only(step.tool_name)
         is_high_risk = (
-            step.risk_level == ModelingRiskLevel.high or step.tool_name in HIGH_RISK_TOOL_NAMES
+            step.risk_level == ModelingRiskLevel.high or _is_high_risk(step.tool_name)
         )
         requires_approval = not is_read_only and is_high_risk
         next_status = step.status

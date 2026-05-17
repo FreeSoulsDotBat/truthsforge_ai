@@ -43,20 +43,16 @@ from app.modeling.mcp_servers.protocol import (
     encode_message,
 )
 
+from app.modeling.tool_registry import FUSION_TOOLS as _REGISTRY_FUSION_TOOLS
+
 logger = logging.getLogger(__name__)
 
-FUSION_TOOLS: tuple[str, ...] = (
-    "fusion.open_design",
-    "fusion.create_sketch",
-    "fusion.add_rectangle",
-    "fusion.add_circle",
-    "fusion.extrude_profile",
-    "fusion.set_parameter",
-    "fusion.export_step",
-    "fusion.export_stl",
-    "fusion.export_3mf",
-    "fusion.validate_dimensions",
-    "fusion.validate_printability",
+# ``FUSION_TOOLS`` is derived from :mod:`app.modeling.tool_registry`
+# (ADR-013) and intentionally **excludes** ``fusion.run_script`` — the
+# adapter never accepts a free-script step from the planner. The descriptor
+# exists in the registry for audit/policy purposes only.
+FUSION_TOOLS: tuple[str, ...] = tuple(
+    name for name in _REGISTRY_FUSION_TOOLS if name != "fusion.run_script"
 )
 
 # Methods that the add-in always exposes regardless of tool surface.
