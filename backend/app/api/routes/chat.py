@@ -1383,7 +1383,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
             default_prompt_title = payload.message.strip()[:48].lower()
             if normalized_title in DEFAULT_CHAT_TITLES or not normalized_title:
                 should_update_title = True
-            elif session.metadata.get("is_empty_draft") is True:
+            elif (session.metadata or {}).get("is_empty_draft") is True:
                 should_update_title = True
             else:
                 should_update_title = normalized_title == default_prompt_title
