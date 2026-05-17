@@ -865,7 +865,11 @@ function App() {
       .slice(0, 8);
   }, [activeMention, mentionOptions]);
   const executionLabels = [
-    modeling3dEnabled ? `MCP 3D (${modeling3dSoftware === "auto" ? "auto" : modeling3dSoftware}, fluido)` : null,
+    modeling3dEnabled
+      ? `MCP 3D (${modeling3dSoftware === "auto" ? "auto" : modeling3dSoftware}, ${
+          modeling3dMode === "plan_only" ? "planejar" : "fluido"
+        })`
+      : null,
     reasoningOverride === "long" ? "Raciocínio longo" : null,
     reasoningSummary ? "Resumo oficial" : null,
     deepResearch ? "Pesquisa OpenAI" : null,
