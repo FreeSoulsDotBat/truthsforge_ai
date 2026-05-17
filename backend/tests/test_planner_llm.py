@@ -289,7 +289,8 @@ def test_create_heuristic_plan_still_available_as_alias() -> None:
     plan = create_structured_plan(payload)
     heuristic = create_heuristic_plan(payload)
     assert plan.software_choice == heuristic.software_choice
-    assert len(plan.steps) == len(heuristic.steps) == 4
+    assert len(plan.steps) == len(heuristic.steps)
+    assert [step.tool_name for step in plan.steps] == [step.tool_name for step in heuristic.steps]
 
 
 def test_plan_records_planner_source_and_fallback_reason(monkeypatch) -> None:

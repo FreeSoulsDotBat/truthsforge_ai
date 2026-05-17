@@ -344,6 +344,96 @@ def test_modeling_tool_calls_persisted_during_execution() -> None:
     assert all(item["status"] == "ok" for item in records)
 
 
+def test_modeling_export_artifacts_create_platform_files_and_versions(
+    monkeypatch, tmp_path
+) -> None:
+    from app.modeling import service as service_module
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    project_id = "prj_artifacts"
+    plan_id = "m3d_plan_artifacts"
+    artifact = (
+        tmp_path / "modeling" / "projects" / project_id / "plans" / plan_id / "exports" / "part.stl"
+    )
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"solid test")
+
+    class ExportClient:
+        def capabilities(self):  # pragma: no cover - not used in this test
+            return {}
+
+        def is_connected(self, software):  # pragma: no cover
+            return True
+
+        def transport(self, software):  # pragma: no cover
+            return "stdio"
+
+        def adapter_status(self, software):  # pragma: no cover
+            return "available"
+
+        def detail(self, software):  # pragma: no cover
+            return "ok"
+
+        def execute_step(self, step, *, plan_id=None, project_id=None):
+            return {
+                "ok": True,
+                "mcp_server": "blender_mcp",
+                "transport": "stdio",
+                "tool_name": step.tool_name,
+                "software": step.software.value,
+                "message": "STL exportado.",
+                "artifact_paths": [str(artifact)],
+            }
+
+    from app.api.routes import modeling as modeling_route
+
+    fake_service = service_module.ModelingService(store=get_store(), mcp_client=ExportClient())
+    monkeypatch.setattr(modeling_route, "get_modeling_service", lambda store: fake_service)
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/3d/plans",
+        json={
+            "prompt": "Exporte um STL no Blender.",
+            "project_id": project_id,
+            "mode": "approval_required",
+            "software_override": "blender",
+        },
+    )
+    plan = created.json()
+    client.post(
+        f"/api/3d/plans/{plan['id']}/approve",
+        json={"decision": "approve", "reason": "teste"},
+    )
+
+    executed = client.post(f"/api/3d/plans/{plan['id']}/execute")
+    assert executed.status_code == 200
+    export_steps = [
+        step
+        for step in executed.json()["plan"]["steps"]
+        if step["tool_name"] == "blender.export_stl"
+    ]
+    assert export_steps
+    output = export_steps[0]["output_json"]
+    assert output["platform_file_ids"]
+    assert output["model_version_ids"]
+
+    store = get_store()
+    versions = store.list_modeling_model_versions(project_id=project_id)
+    assert any(version.id in output["model_version_ids"] for version in versions)
+    assert versions[0].file_ids
+    assert versions[0].export_format == "stl"
+
+    tool_calls = client.get(f"/api/3d/tool-calls?plan_id={plan['id']}").json()
+    export_call = next(item for item in tool_calls if item["tool_name"] == "blender.export_stl")
+    assert export_call["artifact_file_ids"] == output["platform_file_ids"]
+    assert export_call["model_version_ids"] == output["model_version_ids"]
+
+    listed_versions = client.get(f"/api/3d/model-versions?project_id={project_id}")
+    assert listed_versions.status_code == 200
+    assert any(item["id"] == versions[0].id for item in listed_versions.json())
+
+
 def test_modeling_failure_is_logged_with_error_envelope_fields(monkeypatch) -> None:
     from app.modeling import service as service_module
 

@@ -63,6 +63,7 @@ import {
   type ChatMessageAttachment,
   initialAssistantStatus,
   localAssistantMessage,
+  withModelingPlan,
   withReasoningSummary,
   withRuntimeStatus
 } from "./features/chat/chat-domain";
@@ -105,6 +106,9 @@ import type {
   KnowledgeBaseUpsert,
   DocumentSearchResult,
   ModelConfig,
+  ModelingExecutionMode,
+  ModelingPlan,
+  ModelingSoftware,
   PlatformFile,
   PlatformFileIndexingStatus,
   PlatformFileUpdate,
@@ -247,6 +251,9 @@ function App() {
     imageModelId,
     reasoningSummary,
     multiAgentMode,
+    modeling3dEnabled,
+    modeling3dMode,
+    modeling3dSoftware,
     shortcutMenuOpen,
     shortcutSubmenu,
     executionMenuOpen,
@@ -267,6 +274,9 @@ function App() {
     setImageModelId,
     setReasoningSummary,
     setMultiAgentMode,
+    setModeling3dEnabled,
+    setModeling3dMode,
+    setModeling3dSoftware,
     setShortcutMenuOpen,
     setShortcutSubmenu,
     setExecutionMenuOpen,
@@ -289,6 +299,9 @@ function App() {
       imageModelId: state.imageModelId,
       reasoningSummary: state.reasoningSummary,
       multiAgentMode: state.multiAgentMode,
+      modeling3dEnabled: state.modeling3dEnabled,
+      modeling3dMode: state.modeling3dMode,
+      modeling3dSoftware: state.modeling3dSoftware,
       shortcutMenuOpen: state.shortcutMenuOpen,
       shortcutSubmenu: state.shortcutSubmenu,
       executionMenuOpen: state.executionMenuOpen,
@@ -309,6 +322,9 @@ function App() {
       setImageModelId: state.setImageModelId,
       setReasoningSummary: state.setReasoningSummary,
       setMultiAgentMode: state.setMultiAgentMode,
+      setModeling3dEnabled: state.setModeling3dEnabled,
+      setModeling3dMode: state.setModeling3dMode,
+      setModeling3dSoftware: state.setModeling3dSoftware,
       setShortcutMenuOpen: state.setShortcutMenuOpen,
       setShortcutSubmenu: state.setShortcutSubmenu,
       setExecutionMenuOpen: state.setExecutionMenuOpen,
@@ -717,7 +733,8 @@ function App() {
     activeAgentInputCost > 0 &&
     activeAgentOutputCost !== null &&
     activeAgentOutputCost > 0;
-  const reasoningSummaryUnavailable = activeAgentProvider !== "openai" || deepResearch || responseMode === "image";
+  const reasoningSummaryUnavailable =
+    activeAgentProvider !== "openai" || deepResearch || responseMode === "image" || modeling3dEnabled;
   const activeAgentModelLabel =
     activeAgent?.llm_config?.provider_model_id ??
     activeAgentBaseModel?.provider_model_id ??
@@ -848,6 +865,9 @@ function App() {
       .slice(0, 8);
   }, [activeMention, mentionOptions]);
   const executionLabels = [
+    modeling3dEnabled
+      ? `MCP 3D (${modeling3dSoftware === "auto" ? "auto" : modeling3dSoftware}, ${modeling3dMode})`
+      : null,
     reasoningOverride === "long" ? "Raciocínio longo" : null,
     reasoningSummary ? "Resumo oficial" : null,
     deepResearch ? "Pesquisa OpenAI" : null,
@@ -1041,7 +1061,8 @@ function App() {
       deepResearch,
       responseMode,
       multiAgentMode,
-      reasoningSummary
+      reasoningSummary,
+      modeling3dEnabled
     });
 
     try {
@@ -1123,7 +1144,12 @@ function App() {
           reasoning_summary: reasoningSummary ? "auto" : "off",
           multi_agent_mode: multiAgentMode,
           attached_document_ids: attachedDocumentIds,
-          attached_file_ids: uploadedFileIds
+          attached_file_ids: uploadedFileIds,
+          modeling_3d: {
+            enabled: modeling3dEnabled,
+            mode: modeling3dMode,
+            software_override: modeling3dSoftware === "auto" ? null : modeling3dSoftware
+          }
         },
         {
           onMeta: (meta) => {
@@ -1183,13 +1209,29 @@ function App() {
               })
             );
           },
+          onEvent: (eventName, data) => {
+            if (eventName !== "modeling_plan") return;
+            const plan = data.plan as ModelingPlan | undefined;
+            if (!plan) return;
+            setSessions((current) =>
+              current.map((session) => {
+                if (session.id !== sessionId) return session;
+                const messages = session.messages.map((item, index) =>
+                  index === session.messages.length - 1 && item.role === "assistant"
+                    ? withModelingPlan(item, plan)
+                    : item
+                );
+                return { ...session, messages };
+              })
+            );
+          },
           onToken: (token) => {
             setSessions((current) =>
               current.map((session) => {
                 if (session.id !== sessionId) return session;
                 const messages = session.messages.map((item, index) =>
                   index === session.messages.length - 1 && item.role === "assistant"
-                    ? { ...item, content: item.content + token }
+                    ? { ...item, content: item.content ? item.content + token : token }
                     : item
                 );
                 return { ...session, messages };
@@ -1957,6 +1999,9 @@ function App() {
     setImageModelId(null);
     setReasoningSummary(false);
     setMultiAgentMode(false);
+    setModeling3dEnabled(false);
+    setModeling3dMode("approval_required");
+    setModeling3dSoftware("auto");
     setShortcutMenuOpen(false);
     setShortcutSubmenu(null);
     setExecutionMenuOpen(false);
@@ -2379,6 +2424,38 @@ function App() {
                               </select>
                             </label>
                           )}
+                          {modeling3dEnabled && (
+                            <>
+                              <label className="inline-flex h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted">
+                                <span>Software 3D</span>
+                                <select
+                                  value={modeling3dSoftware}
+                                  onChange={(event) => setModeling3dSoftware(event.target.value as ModelingSoftware)}
+                                  className="h-6 rounded border border-forge-line bg-[#080908] px-2 text-forge-text"
+                                  aria-label="Software MCP 3D"
+                                  title="Software MCP 3D"
+                                >
+                                  <option value="auto">auto</option>
+                                  <option value="blender">Blender</option>
+                                  <option value="fusion">Fusion 360</option>
+                                </select>
+                              </label>
+                              <label className="inline-flex h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted">
+                                <span>Modo 3D</span>
+                                <select
+                                  value={modeling3dMode}
+                                  onChange={(event) => setModeling3dMode(event.target.value as ModelingExecutionMode)}
+                                  className="h-6 rounded border border-forge-line bg-[#080908] px-2 text-forge-text"
+                                  aria-label="Modo MCP 3D"
+                                  title="Modo MCP 3D"
+                                >
+                                  <option value="plan_only">planejar</option>
+                                  <option value="approval_required">aprovação</option>
+                                  <option value="safe_auto">seguro auto</option>
+                                </select>
+                              </label>
+                            </>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-1">
@@ -2396,6 +2473,18 @@ function App() {
                                 className="scrollbar-slim absolute right-0 z-50 max-h-[55vh] w-72 overflow-y-auto rounded-md border border-forge-line bg-[#111313] p-1 shadow-2xl"
                                 style={{ top: "auto", bottom: "calc(100% + 4px)" }}
                               >
+                                <ExecutionMenuItem
+                                  label="MCP 3D"
+                                  active={modeling3dEnabled}
+                                  title="Usa o chat para criar plano estruturado Blender/Fusion via MCP."
+                                  onClick={() => {
+                                    setModeling3dEnabled((current) => !current);
+                                    setResponseMode("text");
+                                    setDeepResearch(false);
+                                    setReasoningSummary(false);
+                                    setMultiAgentMode(false);
+                                  }}
+                                />
                                 <ExecutionMenuItem
                                   label="Raciocínio longo"
                                   active={reasoningOverride === "long"}
@@ -2421,6 +2510,7 @@ function App() {
                                     setDeepResearch((current) => !current);
                                     setResponseMode("text");
                                     setReasoningSummary(false);
+                                    setModeling3dEnabled(false);
                                   }}
                                 />
                                 <ExecutionMenuItem
@@ -2430,12 +2520,16 @@ function App() {
                                     setResponseMode((current) => (current === "image" ? "text" : "image"));
                                     setDeepResearch(false);
                                     setReasoningSummary(false);
+                                    setModeling3dEnabled(false);
                                   }}
                                 />
                                 <ExecutionMenuItem
                                   label="Multiagente"
                                   active={multiAgentMode}
-                                  onClick={() => setMultiAgentMode((current) => !current)}
+                                  onClick={() => {
+                                    setMultiAgentMode((current) => !current);
+                                    setModeling3dEnabled(false);
+                                  }}
                                 />
                                 <button
                                   type="button"
@@ -2682,7 +2776,13 @@ function App() {
                         onClick={(event) => setDraftCursor((event.target as HTMLTextAreaElement).selectionStart ?? 0)}
                         onKeyUp={(event) => setDraftCursor((event.target as HTMLTextAreaElement).selectionStart ?? 0)}
                         rows={1}
-                        placeholder={loadState === "offline" ? "Servidor indisponível" : "Mensagem para JUDITE"}
+                        placeholder={
+                          loadState === "offline"
+                            ? "Servidor indisponível"
+                            : modeling3dEnabled
+                              ? "Descreva o modelo 3D para Blender/Fusion via MCP"
+                              : "Mensagem para JUDITE"
+                        }
                         disabled={loadState === "offline"}
                         className="max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-forge-text placeholder:text-forge-muted focus:outline-none"
                       />
@@ -2984,7 +3084,18 @@ function App() {
               onCreateFolder={() => void createProjectFolder()}
             />
           ) : activeView === "modeling" ? (
-            <ModelingDashboard projects={projects} />
+            <ModelingDashboard
+              projects={projects}
+              onOpenChat={() => {
+                setActiveView("chat");
+                setActivePanel("contexto");
+                setModeling3dEnabled(true);
+                setMultiAgentMode(false);
+                setDeepResearch(false);
+                setReasoningSummary(false);
+                setResponseMode("text");
+              }}
+            />
           ) : activeView === "files" ? (
             <FilesDashboard
               documents={documents}

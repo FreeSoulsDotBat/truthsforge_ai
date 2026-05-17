@@ -40,6 +40,28 @@ PRINTABILITY_CHECKS = {
 OVERHANG_THRESHOLD_DEG = 45.0
 THIN_FACE_AREA_M2 = 1.0e-6
 
+PRINTABILITY_RECOMMENDATIONS = {
+    "bounding_box": "Revisar escala e dimensões mínimas do perfil de impressora.",
+    "volume": "Reparar malha/corpo fechado antes de exportar para impressão.",
+    "normals": "Recalcular normais antes do export final.",
+    "non_manifold": "Reparar arestas não-manifold antes da impressão.",
+    "loose_parts": "Limpar geometria solta ou separar peças intencionalmente.",
+    "thickness_approx": "Aumentar espessura mínima ou aplicar solidify.",
+    "overhang_approx": "Reorientar peça ou planejar suportes no slicer.",
+}
+
+
+def _issue(check: str, severity: str, message: str, detail: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "check": check,
+        "severity": severity,
+        "message": message,
+        "detail": detail,
+        "recommendation": PRINTABILITY_RECOMMENDATIONS.get(
+            check, "Revisar o aviso antes de aprovar execução/export final."
+        ),
+    }
+
 
 def _job_path_from_argv(argv: list[str]) -> Path:
     if "--" not in argv:
@@ -461,91 +483,89 @@ def _printability_for_object(obj: Any, checks: set[str]) -> dict[str, Any]:
             metrics["non_manifold_edges"] = count
             if count:
                 issues.append(
-                    {
-                        "check": "non_manifold",
-                        "severity": "error",
-                        "message": f"{count} aresta(s) não-manifold em {obj.name}.",
-                        "detail": {"object": obj.name, "edge_count": count},
-                    }
+                    _issue(
+                        "non_manifold",
+                        "error",
+                        f"{count} aresta(s) não-manifold em {obj.name}.",
+                        {"object": obj.name, "edge_count": count},
+                    )
                 )
         if "loose_parts" in checks:
             parts = _count_loose_parts(mesh)
             metrics["loose_parts"] = parts
             if parts > 1:
                 issues.append(
-                    {
-                        "check": "loose_parts",
-                        "severity": "warning",
-                        "message": f"{obj.name} possui {parts} pedaços desconectados.",
-                        "detail": {"object": obj.name, "parts": parts},
-                    }
+                    _issue(
+                        "loose_parts",
+                        "warning",
+                        f"{obj.name} possui {parts} pedaços desconectados.",
+                        {"object": obj.name, "parts": parts},
+                    )
                 )
             loose = _count_loose_verts(mesh)
             if loose:
                 issues.append(
-                    {
-                        "check": "loose_parts",
-                        "severity": "warning",
-                        "message": f"{loose} vértice(s) soltos em {obj.name}.",
-                        "detail": {"object": obj.name, "loose_verts": loose},
-                    }
+                    _issue(
+                        "loose_parts",
+                        "warning",
+                        f"{loose} vértice(s) soltos em {obj.name}.",
+                        {"object": obj.name, "loose_verts": loose},
+                    )
                 )
         if "normals" in checks:
             inverted = _count_inverted_normals(mesh)
             metrics["inverted_normals_estimate"] = inverted
             if inverted and inverted >= max(4, len(mesh.faces) // 8):
                 issues.append(
-                    {
-                        "check": "normals",
-                        "severity": "warning",
-                        "message": (
+                    _issue(
+                        "normals",
+                        "warning",
+                        (
                             f"Heurística sugere {inverted} face(s) "
                             f"com normal invertida em {obj.name}."
                         ),
-                        "detail": {"object": obj.name, "inverted_estimate": inverted},
-                    }
+                        {"object": obj.name, "inverted_estimate": inverted},
+                    )
                 )
         if "overhang_approx" in checks:
             overhangs = _count_overhang_faces(mesh)
             metrics["overhang_face_estimate"] = overhangs
             if overhangs:
                 issues.append(
-                    {
-                        "check": "overhang_approx",
-                        "severity": "info",
-                        "message": (
+                    _issue(
+                        "overhang_approx",
+                        "info",
+                        (
                             f"{overhangs} face(s) abaixo de "
                             f"{OVERHANG_THRESHOLD_DEG:.0f}° em {obj.name}; pode exigir suporte."
                         ),
-                        "detail": {
+                        {
                             "object": obj.name,
                             "face_count": overhangs,
                             "threshold_deg": OVERHANG_THRESHOLD_DEG,
                         },
-                    }
+                    )
                 )
         if "thickness_approx" in checks:
             thin = _count_thin_faces(mesh)
             metrics["thin_face_estimate"] = thin
             if thin:
                 issues.append(
-                    {
-                        "check": "thickness_approx",
-                        "severity": "info",
-                        "message": (
-                            f"{thin} face(s) muito pequena(s) em {obj.name}; possível parede fina."
-                        ),
-                        "detail": {"object": obj.name, "face_count": thin},
-                    }
+                    _issue(
+                        "thickness_approx",
+                        "info",
+                        f"{thin} face(s) muito pequena(s) em {obj.name}; possível parede fina.",
+                        {"object": obj.name, "face_count": thin},
+                    )
                 )
         if "volume" in checks and metrics.get("volume_mm3", 0) <= 0:
             issues.append(
-                {
-                    "check": "volume",
-                    "severity": "warning",
-                    "message": f"Volume não positivo em {obj.name}; geometria pode estar aberta.",
-                    "detail": {"object": obj.name},
-                }
+                _issue(
+                    "volume",
+                    "warning",
+                    f"Volume não positivo em {obj.name}; geometria pode estar aberta.",
+                    {"object": obj.name},
+                )
             )
     finally:
         mesh.free()
@@ -580,6 +600,13 @@ def _validate_printability(input_json: dict[str, Any]) -> dict[str, Any]:
 
     weights = {"error": 0.5, "warning": 0.2, "info": 0.05}
     score = min(1.0, sum(weights.get(issue["severity"], 0.05) for issue in issues))
+    recommendations = list(
+        dict.fromkeys(
+            str(issue.get("recommendation"))
+            for issue in issues
+            if str(issue.get("recommendation") or "").strip()
+        )
+    )
     return {
         "message": (
             f"Printability validada em {len(targets)} objeto(s); "
@@ -589,6 +616,7 @@ def _validate_printability(input_json: dict[str, Any]) -> dict[str, Any]:
         "checks_executed": sorted(checks),
         "issues": issues,
         "metrics": metrics,
+        "recommendations": recommendations,
         "risk_score": round(score, 3),
         "printer_profile": input_json.get("printer_profile"),
     }

@@ -73,6 +73,43 @@ def test_reasoning_summary_is_only_for_regular_text_chat() -> None:
         ChatStreamRequest(message="pesquise", deep_research=True, reasoning_summary="auto")
 
 
+def test_modeling_3d_context_is_exclusive_with_other_structured_modes() -> None:
+    payload = ChatStreamRequest(
+        message="crie um suporte 3d",
+        modeling_3d={"enabled": True, "software_override": "auto"},
+    )
+    assert payload.modeling_3d.enabled is True
+    assert payload.modeling_3d.software_override is None
+
+    with pytest.raises(ValidationError):
+        ChatStreamRequest(
+            message="crie uma peça e uma imagem",
+            response_mode="image",
+            modeling_3d={"enabled": True},
+        )
+
+    with pytest.raises(ValidationError):
+        ChatStreamRequest(
+            message="pesquise uma peça",
+            deep_research=True,
+            modeling_3d={"enabled": True},
+        )
+
+    with pytest.raises(ValidationError):
+        ChatStreamRequest(
+            message="raciocine e modele",
+            reasoning_summary="auto",
+            modeling_3d={"enabled": True},
+        )
+
+    with pytest.raises(ValidationError):
+        ChatStreamRequest(
+            message="modele com agentes",
+            multi_agent_mode=True,
+            modeling_3d={"enabled": True},
+        )
+
+
 def test_chat_attachments_have_hard_limits() -> None:
     with pytest.raises(ValidationError):
         ChatStreamRequest(

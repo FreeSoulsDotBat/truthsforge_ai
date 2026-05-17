@@ -4,8 +4,14 @@ O módulo 3D nasce como um bounded context local para conectar JUDITE e agentes 
 
 ## Estado atual
 
-- Backend FastAPI expõe `/api/3d/*`.
-- UI web ganhou a aba `3D`.
+- Backend FastAPI expõe `/api/3d/*` para execução, approval, snapshots,
+  rollback, tool calls e printability.
+- A experiência primária de criação agora começa no chat: o frontend envia
+  `modeling_3d` em `POST /api/chat/stream`, o backend cria um plano MCP 3D
+  vinculado à conversa e devolve um card de plano na resposta da JUDITE.
+- A aba `3D` deixa de ser o ponto principal de criação e passa a servir como
+  configuração/diagnóstico dos adapters MCP, histórico de planos, execução,
+  snapshots, rollback e printability.
 - O planner chama a OpenAI Responses API com Structured Outputs (`strict: true`)
   para gerar planos a partir de prompt natural; cai automaticamente para um planner
   heurístico determinístico em qualquer falha (sem chave, modelo inválido, JSON corrompido,
@@ -16,6 +22,41 @@ O módulo 3D nasce como um bounded context local para conectar JUDITE e agentes 
 - Ações mutáveis exigem aprovação humana por padrão.
 - Scripts livres, shell e operações destrutivas seguem fora do caminho feliz.
 - Artefatos gerados pelo Blender/Fusion, como `.blend`, `.stl`, `.obj`, `.3mf` e `.step`, entram em `Arquivos` como `generated` quando retornados pelo adapter.
+
+## Experiência chat-first
+
+O usuário modela 3D como conversa: ativa **MCP 3D** no menu de execução do
+composer, escolhe software (`auto`, `blender` ou `fusion`) e modo
+(`plan_only`, `approval_required` ou `safe_auto`), escreve o prompt e revisa o
+plano renderizado na própria conversa.
+
+O contrato do chat recebe:
+
+```json
+{
+  "message": "Crie um suporte com base retangular e export STL",
+  "modeling_3d": {
+    "enabled": true,
+    "mode": "approval_required",
+    "software_override": "blender"
+  }
+}
+```
+
+Quando `modeling_3d.enabled=true`, `ChatStreamRequest` não pode usar geração
+de imagem, Deep Research ou resumo oficial de raciocínio no mesmo request. O
+backend cria a mensagem do usuário, chama `ModelingService.create_plan` com
+`conversation_id` da sessão, emite SSE `modeling_plan` e persiste a resposta da
+JUDITE com:
+
+- `metadata.response_mode = "modeling_3d"`
+- `metadata.modeling_plan_id`
+- `metadata.modeling_plan`
+
+O frontend usa esse metadata para renderizar o card **Plano 3D MCP** dentro da
+bolha da JUDITE. A continuidade operacional permanece na aba `3D`: aprovar
+plano/etapas, executar MCP, criar/restaurar snapshots, validar printability e
+ver tool calls auditadas.
 
 ## Blender local
 
@@ -85,6 +126,8 @@ Isso é proposital: a LLM cria intenção e plano, mas não injeta Python livre 
   está conectado, devolve um relatório placeholder identificado pelo `summary`.
 - `GET /api/3d/printability-reports`: lista relatórios persistidos, com filtros opcionais
   `plan_id` e `file_id`.
+- `GET /api/3d/model-versions`: lista exports 3D versionados, com filtro opcional
+  `project_id`.
 
 ## Snapshots e rollback
 
@@ -132,7 +175,7 @@ Toda execução de etapa gera um `ModelingToolCall` persistido em `modeling_tool
 - `mcp_server`, `tool_name`, `software`, `transport`
 - `request_json` (input do step) e `response_json` (output bruto do adapter)
 - `status` (`ok`, `error`, `blocked`)
-- `duration_ms`, `artifact_paths`
+- `duration_ms`, `artifact_paths`, `artifact_file_ids`, `model_version_ids`
 - Quando há falha: `error_code`, `error_message`, `retryable`,
   `safe_to_retry_after_snapshot_restore`
 
@@ -175,13 +218,13 @@ O LLM só pode escolher entre:
 - `blender.{create_mesh_primitive, apply_bevel, apply_boolean, apply_subdivision,
   apply_solidify, assign_material, measure_object, repair_non_manifold, validate_mesh,
   validate_printability, export_stl, export_obj, export_3mf}`
-- `fusion.{create_sketch, extrude_profile, validate_dimensions, validate_printability}`
+- `fusion.{open_design, create_sketch, add_rectangle, add_circle, extrude_profile,
+  set_parameter, export_step, export_stl, export_3mf, validate_dimensions,
+  validate_printability}`
 
-O planner usa apenas o subconjunto Fusion acima. O add-in real tambem expoe
-`fusion.open_design`, `fusion.add_rectangle`, `fusion.add_circle`,
-`fusion.set_parameter`, `fusion.export_step`, `fusion.export_stl` e
-`fusion.export_3mf`, mas essas tools ainda nao sao escolhidas automaticamente
-pelo planner LLM.
+O fallback heurístico para Fusion também usa o contrato real: abre/cria design,
+cria sketch, adiciona perfil retangular dimensionado, extruda, valida
+printability e exporta STL como artifact versionado.
 
 ## Printability via bmesh
 
@@ -200,7 +243,8 @@ A tool `blender.validate_printability` roda dentro do runner Blender em backgrou
 
 O `risk_score` (0–1) agrega severidades com pesos: `error=0.5`, `warning=0.2`, `info=0.05`,
 saturado em 1.0. Cada execução vira um `ModelingPrintabilityReport` persistido em
-`modeling_printability_reports`, com `metrics` por objeto e a lista completa de `issues`.
+`modeling_printability_reports`, com `metrics` por objeto, lista completa de
+`issues`, `recommendation` por issue e `recommendations` deduplicadas para a UI.
 
 A arquitetura separa três níveis de printability — geométrica (MVP),
 intermediária (overhang/orientação/encaixes) e avançada (slicer, material, warping).
@@ -211,12 +255,45 @@ informativo. Os demais níveis continuam incrementais.
 
 - `modeling_tool_calls`: trilha completa de tool calls (Postgres + dev store).
 - `modeling_printability_reports`: relatórios geométricos do `blender.validate_printability`.
-- `modeling_model_versions`: reservada para versões nomeadas de modelos derivados.
+- `modeling_model_versions`: versões nomeadas de exports derivados de tool calls
+  com `artifact_paths`.
 
-## UI da aba 3D
+## Artifacts e versionamento de modelos
 
-A aba 3D do dashboard expõe o fluxo completo do módulo:
+Quando um adapter real devolve `artifact_paths`, o `ModelingService` só registra
+arquivos que estejam dentro de `settings.data_dir` e existam no disco. Cada
+arquivo válido:
 
+1. vira `PlatformFile` com `source="generated"`, tags `["3d", "modeling", software]`,
+   `checksum_sha256`, content type 3D (`model/stl`, `model/3mf`, `model/obj`,
+   `application/x-blender` ou fallback por extensão) e metadata com
+   `project_id`, `conversation_id`, `plan_id`, `step_id`, `software` e
+   `tool_name`;
+2. vira `ModelingModelVersion` com `source_file_id`, `file_ids`,
+   `export_format`, `plan_id`, `step_id`, `software`, label legível e metadata
+   de auditoria;
+3. retorna IDs no output da etapa (`platform_file_ids`, `model_version_ids`) e
+   também no `ModelingToolCall` persistido (`artifact_file_ids`,
+   `model_version_ids`).
+
+Se a tool for chamada novamente para o mesmo `storage_path`, o arquivo existente
+é reutilizado e a versão já associada ao `source_file_id` não é duplicada.
+
+## UI de chat e painel 3D
+
+O chat é a experiência principal de criação 3D. O menu de execução permite
+ativar MCP 3D, escolher software/modo e enviar o prompt para JUDITE; a resposta
+mostra o plano estruturado como card dentro da conversa.
+
+A aba 3D do dashboard expõe configuração, diagnóstico e continuidade operacional:
+
+- **Header MCP** explica que novos modelos começam no chat e oferece atalho
+  "Abrir chat MCP 3D".
+- **Adapters MCP** distingue explicitamente `mock`, `adapter ausente`,
+  `execução real` e `erro`, além de mostrar transporte, status, detalhe e tools
+  expostas por Blender/Fusion.
+- **Planos recentes** lista planos criados no chat ou por API, permitindo
+  selecionar um plano para operação.
 - **Header do plano** mostra software, confiança, status, e um badge `planner: IA`
   ou `planner: heurístico`; quando há fallback, o `fallback_reason` aparece em âmbar.
 - **Cards de etapa** trazem botões "Aprovar etapa" e "Rejeitar etapa" quando a etapa está em
@@ -229,10 +306,13 @@ A aba 3D do dashboard expõe o fluxo completo do módulo:
   o auto-snapshot pré-restore proteja o estado, a operação sobrescreve o workspace.
 - **Painel "Tool calls"** exibe as 12 chamadas mais recentes filtradas pelo plano selecionado,
   com `tool_name`, server, transporte, duração; em erro destaca `error_code`/mensagem e marca
-  `retryable` quando aplicável.
+  `retryable` quando aplicável. Quando há export, mostra contagem de paths,
+  arquivos registrados e versões geradas.
+- **Painel "Model versions / exports"** lista exports versionados do plano
+  selecionado, com formato, quantidade de arquivos, timestamp e notas do adapter.
 - **Painel "Printability"** mostra os 6 relatórios mais recentes do plano com `risk_score`,
-  contagem de issues por severidade e as 4 primeiras issues detalhadas (severidade `error`
-  pintada em vermelho).
+  contagem de issues por severidade, recomendações deduplicadas e as 4 primeiras
+  issues detalhadas (severidade `error` pintada em vermelho).
 
 A aprovação por etapa é granular: você pode aprovar `blender.create_mesh_primitive` e rejeitar
 `blender.apply_boolean`, por exemplo. O executor pula etapas rejeitadas e marca o plano como
@@ -443,7 +523,7 @@ Fluxo:
 2. Esses summaries entram em `compute_printability_report(bodies, checks,
    printer_profile)`, que aplica os checks abaixo e devolve
    `{message, objects_inspected, checks_executed, issues, metrics,
-   risk_score, printer_profile}` — mesma forma da resposta Blender.
+   recommendations, risk_score, printer_profile}` — mesma forma da resposta Blender.
 
 Checks suportados:
 

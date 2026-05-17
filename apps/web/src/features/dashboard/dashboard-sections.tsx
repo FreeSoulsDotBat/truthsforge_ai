@@ -2,6 +2,7 @@ import {
   Activity,
   Archive,
   Bot,
+  CheckCircle2,
   ExternalLink,
   FileText,
   FolderTree,
@@ -15,6 +16,7 @@ import {
   Save,
   Settings2,
   ShieldCheck,
+  TriangleAlert,
   Trash2,
   Undo2,
   Users
@@ -59,7 +61,7 @@ import type {
   KnowledgeBaseDocument,
   KnowledgeBaseUpsert,
   ModelingCapabilities,
-  ModelingExecutionMode,
+  ModelingModelVersion,
   ModelingPlan,
   ModelingPlanStep,
   ModelingPrintabilityReport,
@@ -74,6 +76,35 @@ import type {
   ProviderModel,
   ProviderName
 } from "../../types/api";
+
+function adapterState(adapter: { connected: boolean; transport: string; status: string }) {
+  if (adapter.connected && adapter.transport !== "mock") {
+    return {
+      label: "execução real",
+      className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+      icon: <CheckCircle2 size={12} />
+    };
+  }
+  if (adapter.transport === "mock") {
+    return {
+      label: "mock",
+      className: "border-forge-amber/30 bg-forge-amber/10 text-forge-amber",
+      icon: <TriangleAlert size={12} />
+    };
+  }
+  if (adapter.status === "failed" || adapter.status === "error") {
+    return {
+      label: "erro",
+      className: "border-forge-red/30 bg-forge-red/10 text-forge-red",
+      icon: <TriangleAlert size={12} />
+    };
+  }
+  return {
+    label: "adapter ausente",
+    className: "border-forge-line bg-[#171716] text-forge-muted",
+    icon: <TriangleAlert size={12} />
+  };
+}
 
 export function AgentDashboard({
   agents,
@@ -773,11 +804,8 @@ export function AgentDashboard({
   );
 }
 
-export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
+export function ModelingDashboard({ projects, onOpenChat }: { projects: ProjectRecord[]; onOpenChat: () => void }) {
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
-  const [prompt, setPrompt] = useState("");
-  const [mode, setMode] = useState<ModelingExecutionMode>("approval_required");
-  const [softwareOverride, setSoftwareOverride] = useState<ModelingSoftware>("auto");
   const [projectId, setProjectId] = useState<string>("");
   const [isBusy, setIsBusy] = useState(false);
   const [status, setStatus] = useState("");
@@ -823,36 +851,25 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
     enabled: !!selectedPlan,
     staleTime: 10_000
   });
+  const modelVersionsQuery = useQuery({
+    queryKey: ["modeling-model-versions", selectedPlan?.project_id ?? "__all__"],
+    queryFn: () => api.modelingModelVersions(selectedPlan?.project_id ? { project_id: selectedPlan.project_id } : {}),
+    enabled: !!selectedPlan,
+    staleTime: 10_000
+  });
 
   const snapshotsForPlan = useMemo<ModelingSnapshot[]>(() => snapshotsQuery.data ?? [], [snapshotsQuery.data]);
   const toolCalls = toolCallsQuery.data ?? [];
   const printabilityReports = printabilityQuery.data ?? [];
+  const modelVersions = useMemo<ModelingModelVersion[]>(
+    () => (modelVersionsQuery.data ?? []).filter((version) => version.plan_id === selectedPlan?.id),
+    [modelVersionsQuery.data, selectedPlan?.id]
+  );
   const [pendingRestoreSnapshotId, setPendingRestoreSnapshotId] = useState<string | null>(null);
   const pendingRestoreSnapshot = useMemo<ModelingSnapshot | null>(() => {
     if (!pendingRestoreSnapshotId) return null;
     return snapshotsForPlan.find((snap) => snap.id === pendingRestoreSnapshotId) ?? null;
   }, [pendingRestoreSnapshotId, snapshotsForPlan]);
-
-  async function createPlan() {
-    if (!prompt.trim()) return;
-    setIsBusy(true);
-    setStatus("Gerando plano 3D estruturado...");
-    try {
-      const plan = await api.createModelingPlan({
-        prompt,
-        mode,
-        project_id: projectId || null,
-        software_override: softwareOverride === "auto" ? null : softwareOverride
-      });
-      setSelectedPlanId(plan.id);
-      await modelingQuery.refetch();
-      setStatus("Plano criado. Revise as etapas antes de executar.");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Falha ao criar plano 3D.");
-    } finally {
-      setIsBusy(false);
-    }
-  }
 
   async function approveSelectedPlan() {
     if (!selectedPlan) return;
@@ -881,6 +898,8 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
       const result = await api.executeModelingPlan(selectedPlan.id);
       setSelectedPlanId(result.plan.id);
       await modelingQuery.refetch();
+      await toolCallsQuery.refetch();
+      await modelVersionsQuery.refetch();
       setStatus(
         result.blocked_step_ids.length
           ? "Execução parcial: ainda há etapas aguardando aprovação."
@@ -1014,6 +1033,12 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
                 </Button>
               </div>
             </div>
+            <div className="mt-4 rounded-md border border-forge-amber/30 bg-[#18150f] p-3 text-sm text-forge-muted">
+              A criação de modelos agora começa no chat: ative{" "}
+              <span className="font-semibold text-forge-text">MCP 3D</span>, descreva o prompt para JUDITE e revise o
+              plano gerado na conversa. Este painel fica como configuração, diagnóstico de adapters, histórico,
+              snapshots, rollback, execução MCP e printability.
+            </div>
             <div className="mt-4 grid gap-3 md:grid-cols-3">
               <Field label="Projeto">
                 <select
@@ -1029,53 +1054,15 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
                   ))}
                 </select>
               </Field>
-              <Field label="Software">
-                <select
-                  value={softwareOverride}
-                  onChange={(event) => setSoftwareOverride(event.target.value as ModelingSoftware)}
-                  className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-sm text-forge-text"
-                >
-                  <option value="auto">roteamento automático</option>
-                  <option value="fusion">Fusion 360</option>
-                  <option value="blender">Blender</option>
-                </select>
-              </Field>
-              <Field label="Modo">
-                <select
-                  value={mode}
-                  onChange={(event) => setMode(event.target.value as ModelingExecutionMode)}
-                  className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-sm text-forge-text"
-                >
-                  <option value="plan_only">planejar apenas</option>
-                  <option value="approval_required">executar com aprovação</option>
-                  <option value="safe_auto">ações seguras automáticas</option>
-                </select>
-              </Field>
+              <InfoRow label="Experiência principal" value="Chat com MCP 3D" />
+              <InfoRow label="Função desta página" value="Configuração e diagnóstico" />
             </div>
-            <Field
-              label="Prompt de modelagem"
-              className="mt-3"
-              tip="Descreva a peça, unidade, medidas, tolerâncias, formato desejado e saída esperada. Exemplo: crie um suporte paramétrico de 85x40x20 mm com furo central de 5 mm."
-            >
-              <textarea
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                rows={5}
-                placeholder="Ex: crie um suporte paramétrico para fone com base 85 mm, chanfros suaves e export STL."
-                className="min-h-32 w-full resize-y rounded-md border border-forge-line bg-[#0e0f0e] px-3 py-2 text-sm leading-6 text-forge-text"
-              />
-            </Field>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <p className="text-xs text-forge-muted">
-                A primeira versão cria plano auditável e chama adapters MCP em modo mock.
+                Planos criados pelo chat aparecem em “Planos recentes” e continuam executáveis aqui.
               </p>
-              <Button
-                className="h-9 border-forge-amber/60 bg-[#24211b]"
-                disabled={isBusy || !prompt.trim()}
-                onClick={() => void createPlan()}
-              >
-                {isBusy ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
-                Gerar plano
+              <Button className="h-9 border-forge-amber/60 bg-[#24211b]" onClick={onOpenChat}>
+                Abrir chat MCP 3D
               </Button>
             </div>
             {status && (
@@ -1148,8 +1135,22 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
                 <div key={adapter.software} className="rounded-md border border-forge-line bg-[#0e0f0e] p-3 text-xs">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-semibold">{adapter.software}</span>
-                    <Badge>{adapter.transport}</Badge>
+                    <div className="flex flex-wrap gap-1">
+                      <Badge>{adapter.transport}</Badge>
+                      <span
+                        className={[
+                          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                          adapterState(adapter).className
+                        ].join(" ")}
+                      >
+                        {adapterState(adapter).icon}
+                        {adapterState(adapter).label}
+                      </span>
+                    </div>
                   </div>
+                  <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-forge-muted">
+                    status: {adapter.status}
+                  </p>
                   <p className="mt-2 leading-5 text-forge-muted">{adapter.detail}</p>
                   <div className="mt-2 flex flex-wrap gap-1">
                     {adapter.tools.map((tool) => (
@@ -1189,6 +1190,27 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
               {!plans.length && <EmptyPanel text="Nenhum plano 3D criado ainda." />}
             </div>
           </div>
+
+          {selectedPlan && (
+            <div className="rounded-md border border-forge-line bg-[#141615] p-3">
+              <PanelTitle icon={<FileText size={18} />} title="Model versions / exports" />
+              <div className="mt-3 space-y-2">
+                {modelVersions.length === 0 && <EmptyPanel text="Nenhum export versionado deste plano ainda." />}
+                {modelVersions.slice(0, 8).map((version) => (
+                  <div key={version.id} className="rounded-md border border-forge-line bg-[#0e0f0e] p-3 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="line-clamp-1 font-semibold">{version.label}</span>
+                      <Badge>{version.export_format ?? version.software}</Badge>
+                    </div>
+                    <p className="mt-1 text-forge-muted">
+                      {version.file_ids.length} arquivo(s) · {formatTimestamp(version.created_at)}
+                    </p>
+                    {version.notes && <p className="mt-1 line-clamp-2 text-forge-muted">{version.notes}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {selectedPlan && (
             <div className="rounded-md border border-forge-line bg-[#141615] p-3">
@@ -1242,7 +1264,10 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
                       </p>
                     )}
                     {call.artifact_paths.length > 0 && (
-                      <p className="mt-1 line-clamp-1 text-forge-muted">Artefatos: {call.artifact_paths.length}</p>
+                      <p className="mt-1 line-clamp-1 text-forge-muted">
+                        Artefatos: {call.artifact_paths.length} path(s), {call.artifact_file_ids.length} arquivo(s),{" "}
+                        {call.model_version_ids.length} versão(ões)
+                      </p>
                     )}
                   </div>
                 ))}
@@ -1268,6 +1293,15 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
                       </Badge>
                     </div>
                     <p className="mt-1 line-clamp-2 text-forge-muted">{report.summary}</p>
+                    {report.recommendations.length > 0 && (
+                      <ul className="mt-2 space-y-1 text-forge-muted">
+                        {report.recommendations.slice(0, 3).map((recommendation) => (
+                          <li key={`${report.id}-${recommendation}`} className="rounded bg-[#141615] p-2">
+                            {recommendation}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                     {report.issues.length > 0 && (
                       <ul className="mt-2 space-y-1">
                         {report.issues.slice(0, 4).map((issue, index) => (
@@ -1279,6 +1313,9 @@ export function ModelingDashboard({ projects }: { projects: ProjectRecord[] }) {
                             ].join(" ")}
                           >
                             <span className="font-semibold">[{issue.severity}]</span> {issue.check}: {issue.message}
+                            {issue.recommendation && (
+                              <span className="mt-1 block text-forge-muted">{issue.recommendation}</span>
+                            )}
                           </li>
                         ))}
                       </ul>

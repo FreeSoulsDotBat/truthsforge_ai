@@ -42,8 +42,8 @@ O backend e uma aplicacao FastAPI. Ele expoe rotas REST e streaming SSE para o c
 O frontend React e a primeira experiencia do usuario.
 
 - Sidebar esquerda: sessoes, historico paginado, projetos/pastas e novo chat.
-- Centro: chat com streaming, anexos, modos de execucao e upload rapido.
-- Painel direito: contexto, custos, RAG, auditoria, prompts, configuracao, arquivos, bases, projetos, agentes e 3D.
+- Centro: chat com streaming, anexos, modos de execucao, MCP 3D opcional e upload rapido.
+- Painel direito: contexto, custos, RAG, auditoria, prompts, configuracao, arquivos, bases, projetos, agentes e painel 3D de diagnóstico/continuidade.
 - Configuracoes: API keys por provedor e registry editavel de modelos.
 - Arquivos: biblioteca bruta de arquivos enviados, recebidos, gerados ou importados, com paginacao, filtros, preview/download e status de indexacao.
 - Bases: colecoes curadas de documentos indexados para RAG.
@@ -84,12 +84,13 @@ O SDD vive em `specs/` e organiza intenção, plano, tasks e handoff sem substit
 1. Usuario envia mensagem no React.
 2. Frontend chama `POST /api/chat/stream`.
 3. Backend resolve agente principal, agente solicitado, agentes de apoio e bases atreladas.
-4. Backend escolhe o modelo pelo Model Registry.
-5. Cost Governor estima custo antes da chamada.
-6. LLM Gateway chama o provedor real ou fallback dev. Modos especiais podem usar Deep Research, geracao de imagem ou resumo oficial.
-7. Imagens geradas e anexos viram `PlatformFile` em `Arquivos` e podem ser indexados.
-8. Backend envia tokens via SSE.
-9. Mensagens, metadados e auditoria sao salvos no store.
+4. Se `modeling_3d.enabled=true`, o backend cria um plano MCP 3D vinculado à conversa e devolve metadata/card de plano na resposta.
+5. Caso contrário, backend escolhe o modelo pelo Model Registry.
+6. Cost Governor estima custo antes da chamada.
+7. LLM Gateway chama o provedor real ou fallback dev. Modos especiais podem usar Deep Research, geracao de imagem ou resumo oficial.
+8. Imagens geradas e anexos viram `PlatformFile` em `Arquivos` e podem ser indexados.
+9. Backend envia tokens via SSE.
+10. Mensagens, metadados e auditoria sao salvos no store.
 
 ## Fluxo de RAG
 

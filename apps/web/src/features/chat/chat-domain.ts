@@ -1,5 +1,5 @@
 import type { StreamStatusEvent } from "../../lib/api";
-import type { ChatMessage } from "../../types/api";
+import type { ChatMessage, ModelingPlan } from "../../types/api";
 
 export type ChatMessageMetadata = {
   runtime_status?: StreamStatusEvent;
@@ -9,6 +9,9 @@ export type ChatMessageMetadata = {
   attached_file_ids?: string[];
   attached_document_ids?: string[];
   attached_files?: ChatMessageAttachment[];
+  response_mode?: "modeling_3d" | string;
+  modeling_plan_id?: string;
+  modeling_plan?: ModelingPlan;
 };
 
 export type ChatMessageAttachment = {
@@ -26,14 +29,19 @@ export const initialAssistantStatus = ({
   deepResearch,
   responseMode,
   multiAgentMode,
-  reasoningSummary
+  reasoningSummary,
+  modeling3dEnabled
 }: {
   reasoningOverride: "default" | "long";
   deepResearch: boolean;
   responseMode: "text" | "image";
   multiAgentMode: boolean;
   reasoningSummary: boolean;
+  modeling3dEnabled?: boolean;
 }): StreamStatusEvent => {
+  if (modeling3dEnabled) {
+    return { stage: "modeling_3d", label: "Planejando 3D", detail: "Preparando MCP local." };
+  }
   if (deepResearch) {
     return { stage: "deep_research", label: "Preparando pesquisa", detail: "Validando custos e fontes." };
   }
@@ -100,6 +108,18 @@ export function withReasoningSummary(message: ChatMessage, chunk: string): ChatM
       ...(message.metadata ?? {}),
       reasoning_summary: `${metadata.reasoning_summary ?? ""}${chunk}`,
       reasoning_summary_enabled: true
+    }
+  };
+}
+
+export function withModelingPlan(message: ChatMessage, plan: ModelingPlan): ChatMessage {
+  return {
+    ...message,
+    metadata: {
+      ...(message.metadata ?? {}),
+      response_mode: "modeling_3d",
+      modeling_plan: plan,
+      modeling_plan_id: plan.id
     }
   };
 }
