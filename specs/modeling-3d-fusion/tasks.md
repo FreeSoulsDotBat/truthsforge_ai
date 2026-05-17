@@ -11,4 +11,7 @@
 - [x] [P1] [devin] Expandir printability mínima com recomendações acionáveis.
 - [x] [P1] [devin] Ampliar planner Fusion para tools seguras de design/sketch/export.
 - [x] [P1] [devin] Corrigir exclusividade MCP 3D vs multiagente e persistência de título no chat.
-- [ ] [P1] [any] Testar plano/aprovação/execução/snapshot/rollback/export.
+- [x] [P1] [devin] Tornar o fluxo 3D do chat fluido, com autoexecução para adições/alterações normais allowlistadas.
+- [x] [P1] [devin] Remover snapshot automático do planner/card no fluxo fluido.
+- [ ] [P1] [any] Testar prompt no chat, plano fluido, autoexecução e export com Blender/Fusion reais.
+- [ ] [P1] [any] Testar aprovação de etapa destrutiva/high-risk e rollback manual por snapshot.

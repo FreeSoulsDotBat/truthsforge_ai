@@ -122,7 +122,10 @@ class ModelingService:
         return ModelingCapabilities(
             safety_notes=[
                 "MCP roda localmente; nenhum MCP remoto fica exposto no MVP.",
-                "Ações mutáveis em Blender/Fusion exigem aprovação humana por padrão.",
+                (
+                    "Adições e alterações normais autoexecutam; deleções, "
+                    "ações destrutivas e high-risk exigem aprovação."
+                ),
                 "Scripts livres e comandos de shell ficam bloqueados até revisão explícita.",
             ],
             adapters=[
@@ -337,6 +340,15 @@ class ModelingService:
 
     def execute_plan(self, plan_id: str) -> ModelingExecutionResult:
         plan = self._get_plan_or_raise(plan_id)
+        if plan.status == ModelingPlanStatus.draft:
+            blocked_step_ids = [step.id for step in plan.steps]
+            return ModelingExecutionResult(
+                plan=plan,
+                executed_step_ids=[],
+                blocked_step_ids=blocked_step_ids,
+                events=["Plano em modo planejamento; aprove antes de executar."],
+                tool_call_ids=[],
+            )
         executed_step_ids: list[str] = []
         blocked_step_ids: list[str] = []
         events: list[str] = []

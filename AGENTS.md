@@ -75,9 +75,10 @@ Este repositório pode ser trabalhado por Codex, Claude Code, Devin e humanos. N
 
 ### Modelagem 3D
 
-- Preserve human-in-the-loop para alterações, deleções e ações high-risk.
+- Preserve human-in-the-loop para deleções, ações destrutivas e ações high-risk.
+- Adições e alterações normais via tools 3D allowlistadas podem autoexecutar no fluxo fluido do chat.
 - Não libere script livre, shell ou operações destrutivas no caminho feliz.
-- Snapshot, rollback, auditoria e printability são parte do contrato, não detalhe opcional.
+- Snapshots manuais, rollback, auditoria e printability são parte do contrato, não detalhe opcional.
 
 ## Qualidade obrigatória
 

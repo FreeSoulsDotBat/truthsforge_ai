@@ -6,6 +6,9 @@ from app.core.contracts import (
     CostPolicy,
     ModelCapability,
     ModelConfig,
+    ModelingPlan,
+    ModelingPlanStatus,
+    ModelingSoftware,
     ProviderModel,
     ProviderName,
 )
@@ -79,6 +82,7 @@ def test_modeling_3d_context_is_exclusive_with_other_structured_modes() -> None:
         modeling_3d={"enabled": True, "software_override": "auto"},
     )
     assert payload.modeling_3d.enabled is True
+    assert payload.modeling_3d.mode == "safe_auto"
     assert payload.modeling_3d.software_override is None
 
     with pytest.raises(ValidationError):
@@ -108,6 +112,14 @@ def test_modeling_3d_context_is_exclusive_with_other_structured_modes() -> None:
             multi_agent_mode=True,
             modeling_3d={"enabled": True},
         )
+
+
+def test_modeling_plan_defaults_to_fluid_execution() -> None:
+    plan = ModelingPlan(prompt="crie uma peça simples", software_choice=ModelingSoftware.blender)
+
+    assert plan.mode == "safe_auto"
+    assert plan.approval_required is False
+    assert plan.status == ModelingPlanStatus.approved
 
 
 def test_chat_attachments_have_hard_limits() -> None:

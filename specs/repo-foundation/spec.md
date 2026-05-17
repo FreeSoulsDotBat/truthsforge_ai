@@ -87,9 +87,10 @@ O repositório já possui arquitetura, decisões, roadmap, readiness e módulo 3
 
 ### Modelagem 3D
 
-- QUANDO o usuário abrir um fluxo 3D, O SISTEMA DEVE operar por plano estruturado, execução incremental e auditoria.
-- QUANDO uma etapa 3D alterar ou deletar o workspace, ou for high-risk, O SISTEMA DEVE exigir aprovação humana.
-- ANTES de executar uma mudança significativa no workspace 3D, O SISTEMA DEVE permitir snapshot e rollback.
+- QUANDO o usuário abrir um fluxo 3D, O SISTEMA DEVE operar por chat, plano estruturado, execução incremental e auditoria.
+- QUANDO uma etapa 3D for adição ou alteração normal allowlistada, O SISTEMA PODE executá-la automaticamente no modo fluido.
+- QUANDO uma etapa 3D deletar o workspace, for destrutiva ou high-risk, O SISTEMA DEVE exigir aprovação humana.
+- O SISTEMA DEVE permitir snapshot manual e rollback explícito no painel 3D, sem criar snapshot automático como etapa do plano fluido.
 - QUANDO houver export ou validação de printability, O SISTEMA DEVE registrar tool calls e artefatos gerados.
 
 ### Mobile e shells

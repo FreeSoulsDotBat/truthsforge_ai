@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -35,6 +36,7 @@ from app.core.contracts import (
     KnowledgeBaseDocument,
     ModelCapability,
     ModelConfig,
+    ModelingExecutionMode,
     ModelingPlan,
     ModelingPlanCreate,
     PlatformFile,
@@ -1194,6 +1196,19 @@ def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
 def _modeling_plan_chat_summary(plan: ModelingPlan) -> str:
     approval = "aguardando aprovação humana" if plan.approval_required else "sem aprovação pendente"
     planner = "IA" if plan.planner_source and plan.planner_source.value == "llm" else "heurístico"
+    if plan.status.value == "completed":
+        next_step = "Execução concluída. Use o painel 3D para detalhes, snapshots e printability."
+    elif plan.status.value == "failed":
+        next_step = "Houve falha na execução. Revise os erros no painel 3D."
+    elif plan.mode == ModelingExecutionMode.plan_only:
+        next_step = "Revise o card do plano e execute pelo painel 3D quando quiser continuar."
+    elif plan.approval_required:
+        next_step = "Revise o card do plano; só etapas destrutivas/high-risk ficam bloqueadas."
+    else:
+        next_step = (
+            "Vou executar automaticamente as etapas allowlistadas; "
+            "use o painel 3D para acompanhar detalhes."
+        )
     lines = [
         "Criei um plano 3D estruturado para MCP local.",
         "",
@@ -1205,9 +1220,7 @@ def _modeling_plan_chat_summary(plan: ModelingPlan) -> str:
     ]
     if plan.rationale:
         lines.extend(["", f"Racional: {plan.rationale}"])
-    lines.extend(
-        ["", "Próximo passo: revise o card do plano nesta conversa antes de aprovar ou executar."]
-    )
+    lines.extend(["", f"Próximo passo: {next_step}"])
     return "\n".join(lines)
 
 
@@ -1336,8 +1349,9 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 "Planejando modelo 3D",
                 "Enviando o prompt ao planner MCP 3D com contexto do chat.",
             )
+            modeling_service = get_modeling_service(store)
             try:
-                plan = await get_modeling_service(store).create_plan_async(
+                plan = await modeling_service.create_plan_async(
                     ModelingPlanCreate(
                         prompt=payload.message,
                         project_id=effective_project_id,
@@ -1355,6 +1369,33 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 yield _sse("error", {"message": error_message, "reason": str(exc)})
                 yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
                 return
+
+            execution = None
+            if payload.modeling_3d.mode != ModelingExecutionMode.plan_only:
+                try:
+                    yield _runtime_status(
+                        "modeling_3d_execute",
+                        "Executando MCP 3D",
+                        "Etapas allowlistadas serão executadas sem aprovação manual.",
+                    )
+                    execution = await asyncio.to_thread(modeling_service.execute_plan, plan.id)
+                    plan = execution.plan
+                except Exception as exc:  # noqa: BLE001 - keep plan linked on execution failure
+                    plan_metadata = _modeling_plan_metadata(plan)
+                    error_message = f"Plano 3D criado, mas a execução MCP falhou: {exc}"
+                    assistant_message.content = error_message
+                    assistant_message.metadata["modeling_plan"] = plan_metadata
+                    assistant_message.metadata["modeling_plan_id"] = plan.id
+                    assistant_message.metadata["provider_error"] = str(exc)
+                    assistant_message.metadata["execution_error"] = str(exc)
+                    store.add_message(assistant_message)
+                    yield _sse("modeling_plan", {"plan": plan_metadata})
+                    yield _sse("error", {"message": error_message, "reason": str(exc)})
+                    yield _sse(
+                        "done",
+                        {"session_id": session.id, "message_id": assistant_message.id},
+                    )
+                    return
 
             plan_metadata = _modeling_plan_metadata(plan)
             assistant_message.content = _modeling_plan_chat_summary(plan)
@@ -1382,10 +1423,19 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 yield _sse("session_title", {"session_id": session.id, "title": title})
             yield _runtime_status(
                 "modeling_3d_plan",
-                "Plano 3D criado",
-                f"{len(plan.steps)} etapas para {plan.software_choice.value}.",
+                "Plano 3D pronto",
+                (
+                    f"{len(plan.steps)} etapas para {plan.software_choice.value}; "
+                    f"status {plan.status.value}."
+                ),
             )
             yield _sse("modeling_plan", {"plan": plan_metadata})
+            if execution is not None:
+                yield _runtime_status(
+                    "modeling_3d_execute",
+                    "Execução MCP 3D concluída",
+                    f"{len(execution.executed_step_ids)} etapa(s) executada(s).",
+                )
             yield _sse("token", {"content": assistant_message.content})
             yield _runtime_status("done", "Concluído")
             record_audit_event(

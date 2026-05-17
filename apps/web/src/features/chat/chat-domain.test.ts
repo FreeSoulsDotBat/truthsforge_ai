@@ -20,11 +20,11 @@ function buildPlan(): ModelingPlan {
     project_id: "project_1",
     conversation_id: "session_1",
     prompt: "Crie um suporte 3D",
-    mode: "approval_required",
+    mode: "safe_auto",
     software_choice: "blender",
     confidence: 0.82,
-    approval_required: true,
-    status: "waiting_approval",
+    approval_required: false,
+    status: "completed",
     rationale: "Plano seguro com etapas auditáveis.",
     assumptions: [],
     risks: [],
@@ -37,8 +37,8 @@ function buildPlan(): ModelingPlan {
         software: "blender",
         tool_name: "blender.create_mesh_primitive",
         risk_level: "medium",
-        approval_required: true,
-        status: "waiting_approval",
+        approval_required: false,
+        status: "completed",
         input_json: {},
         output_json: {},
         error: null,
@@ -63,7 +63,7 @@ describe("chat-domain modeling 3D helpers", () => {
     expect(message.metadata?.modeling_plan).toMatchObject({
       id: "plan_1",
       software_choice: "blender",
-      status: "waiting_approval"
+      status: "completed"
     });
   });
 

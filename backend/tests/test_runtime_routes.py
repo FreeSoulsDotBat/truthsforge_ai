@@ -519,7 +519,7 @@ def test_chat_stream_can_create_modeling_plan_inline() -> None:
             "agent_id": agent.json()["id"],
             "modeling_3d": {
                 "enabled": True,
-                "mode": "approval_required",
+                "mode": "safe_auto",
                 "software_override": "blender",
             },
         },
@@ -544,8 +544,68 @@ def test_chat_stream_can_create_modeling_plan_inline() -> None:
     assert plan["conversation_id"] == session["id"]
     assert plan["project_id"] == project_id
     assert plan["software_choice"] == "blender"
-    assert plan["status"] == "waiting_approval"
+    assert plan["status"] == "completed"
     assert plan["steps"]
+    assert all(step["tool_name"] != "project_store.create_snapshot" for step in plan["steps"])
+    assert all(step["approval_required"] is False for step in plan["steps"])
+
+
+def test_chat_stream_preserves_modeling_plan_when_inline_execution_fails(monkeypatch) -> None:
+    from app.api.routes import chat as chat_route
+    from app.modeling import service as service_module
+    from app.storage.store import get_store
+
+    class FailingInlineService(service_module.ModelingService):
+        def execute_plan(self, plan_id: str):
+            raise RuntimeError("falha inline simulada")
+
+    failing_service = FailingInlineService(store=get_store())
+    monkeypatch.setattr(chat_route, "get_modeling_service", lambda store: failing_service)
+
+    client = TestClient(app)
+    project = client.post(
+        "/api/projects",
+        json={"name": f"Projeto execução falha {uuid4().hex}", "description": "3D"},
+    )
+    assert project.status_code == 200
+    project_id = project.json()["id"]
+    allowed_agent = client.post(
+        "/api/agents",
+        json={
+            "name": f"JUDITE execução falha {uuid4().hex}",
+            "description": "Orquestradora 3D de teste",
+            "system_prompt": "Planeje modelagem 3D.",
+            "role": "orchestrator",
+            "allowed_project_ids": [project_id],
+        },
+    )
+    assert allowed_agent.status_code == 200
+
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "Crie no Blender um suporte simples.",
+            "project_id": project_id,
+            "agent_id": allowed_agent.json()["id"],
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "safe_auto",
+                "software_override": "blender",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert "event: modeling_plan" in response.text
+    assert "Plano 3D criado, mas a execução MCP falhou" in response.text
+    sessions = client.get("/api/chat/sessions")
+    session = next(item for item in sessions.json() if item["project_id"] == project_id)
+    details = client.get(f"/api/chat/sessions/{session['id']}")
+    assistant = details.json()["messages"][-1]
+    metadata = assistant["metadata"]
+    assert metadata["modeling_plan_id"] == metadata["modeling_plan"]["id"]
+    assert metadata["modeling_plan"]["status"] == "approved"
+    assert metadata["execution_error"] == "falha inline simulada"
 
 
 def test_agent_cannot_stream_in_project_outside_runtime_scope() -> None:

@@ -88,7 +88,7 @@ const initialState: AppStoreState = {
   reasoningSummary: false,
   multiAgentMode: false,
   modeling3dEnabled: false,
-  modeling3dMode: "approval_required",
+  modeling3dMode: "safe_auto",
   modeling3dSoftware: "auto",
   shortcutMenuOpen: false,
   shortcutSubmenu: null,
