@@ -1349,8 +1349,8 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 "Planejando modelo 3D",
                 "Enviando o prompt ao planner MCP 3D com contexto do chat.",
             )
+            modeling_service = get_modeling_service(store)
             try:
-                modeling_service = get_modeling_service(store)
                 plan = await modeling_service.create_plan_async(
                     ModelingPlanCreate(
                         prompt=payload.message,
@@ -1361,15 +1361,6 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                         knowledge_base_ids=effective_knowledge_base_ids,
                     )
                 )
-                execution = None
-                if payload.modeling_3d.mode != ModelingExecutionMode.plan_only:
-                    yield _runtime_status(
-                        "modeling_3d_execute",
-                        "Executando MCP 3D",
-                        "Etapas allowlistadas serão executadas sem aprovação manual.",
-                    )
-                    execution = await asyncio.to_thread(modeling_service.execute_plan, plan.id)
-                    plan = execution.plan
             except Exception as exc:  # noqa: BLE001 - stream must surface domain failures
                 error_message = f"Não consegui criar o plano 3D via MCP: {exc}"
                 assistant_message.content = error_message
@@ -1378,6 +1369,33 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 yield _sse("error", {"message": error_message, "reason": str(exc)})
                 yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
                 return
+
+            execution = None
+            if payload.modeling_3d.mode != ModelingExecutionMode.plan_only:
+                try:
+                    yield _runtime_status(
+                        "modeling_3d_execute",
+                        "Executando MCP 3D",
+                        "Etapas allowlistadas serão executadas sem aprovação manual.",
+                    )
+                    execution = await asyncio.to_thread(modeling_service.execute_plan, plan.id)
+                    plan = execution.plan
+                except Exception as exc:  # noqa: BLE001 - keep plan linked on execution failure
+                    plan_metadata = _modeling_plan_metadata(plan)
+                    error_message = f"Plano 3D criado, mas a execução MCP falhou: {exc}"
+                    assistant_message.content = error_message
+                    assistant_message.metadata["modeling_plan"] = plan_metadata
+                    assistant_message.metadata["modeling_plan_id"] = plan.id
+                    assistant_message.metadata["provider_error"] = str(exc)
+                    assistant_message.metadata["execution_error"] = str(exc)
+                    store.add_message(assistant_message)
+                    yield _sse("modeling_plan", {"plan": plan_metadata})
+                    yield _sse("error", {"message": error_message, "reason": str(exc)})
+                    yield _sse(
+                        "done",
+                        {"session_id": session.id, "message_id": assistant_message.id},
+                    )
+                    return
 
             plan_metadata = _modeling_plan_metadata(plan)
             assistant_message.content = _modeling_plan_chat_summary(plan)
