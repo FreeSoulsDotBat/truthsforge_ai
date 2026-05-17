@@ -12,6 +12,7 @@ import secrets
 import socket
 import socketserver
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +120,94 @@ def _write_discovery(tmp_path: Path, port: int, token: str) -> Path:
     return path
 
 
+# ------------------------------------------------------ fake Autodesk HTTP MCP
+
+
+class _FakeAutodeskMCPHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib hook
+        server: _FakeAutodeskMCPServer = self.server  # type: ignore[assignment]
+        length = int(self.headers.get("Content-Length") or 0)
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        method = payload.get("method")
+        request_id = payload.get("id")
+        params = payload.get("params") or {}
+        server.requests.append(payload)
+
+        if method == "initialize":
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "serverInfo": {"name": "MCP Server Adapter", "version": "1.0.0"},
+                    "capabilities": {"tools": {"listChanged": False}},
+                },
+            }
+        elif method == "tools/list":
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "tools": [
+                        {"name": "fusion_mcp_execute", "description": "execute", "inputSchema": {}},
+                        {"name": "fusion_mcp_read", "description": "read", "inputSchema": {}},
+                    ]
+                },
+            }
+        elif method == "tools/call":
+            server.tool_calls.append(params)
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(server.tool_result),
+                        }
+                    ]
+                },
+            }
+        else:
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32601, "message": f"missing {method}"},
+            }
+
+        raw = json.dumps(response).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        return
+
+
+class _FakeAutodeskMCPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, tool_result: dict[str, Any] | None = None) -> None:
+        super().__init__(("127.0.0.1", 0), _FakeAutodeskMCPHandler)
+        self.requests: list[dict[str, Any]] = []
+        self.tool_calls: list[dict[str, Any]] = []
+        self.tool_result = tool_result or {"ok": True, "message": "executado", "artifact_paths": []}
+
+
+def _spawn_fake_autodesk_mcp(
+    tool_result: dict[str, Any] | None = None,
+) -> tuple[_FakeAutodeskMCPServer, str]:
+    server = _FakeAutodeskMCPServer(tool_result)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    return server, f"http://{host}:{port}/mcp"
+
+
 def _step(tool_name: str = "fusion.create_sketch") -> ModelingPlanStep:
     return ModelingPlanStep(
         seq=1,
@@ -166,8 +255,30 @@ def test_adapter_status_connects_to_fake_addin(tmp_path) -> None:
         adapter = FusionDesktopAdapter(discovery_path=discovery, timeout_seconds=2.0)
         status = adapter.status()
         assert status.connected is True
-        assert status.transport == "loopback"
+        assert status.transport == "local"
         assert status.addin_pid == 1234
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_adapter_status_prefers_official_fusion_mcp_http(tmp_path) -> None:
+    server, url = _spawn_fake_autodesk_mcp()
+    try:
+        discovery = _write_discovery(tmp_path, 65000, "legacy-token")
+        adapter = FusionDesktopAdapter(
+            discovery_path=discovery,
+            autodesk_mcp_url=url,
+            enable_autodesk_mcp=True,
+            timeout_seconds=2.0,
+            status_cache_seconds=0.0,
+        )
+        status = adapter.status()
+        assert status.connected is True
+        assert status.transport == "http"
+        assert status.status == "available"
+        assert status.mcp_url == url
+        assert "MCP Server Adapter" in status.detail
     finally:
         server.shutdown()
         server.server_close()
@@ -182,6 +293,65 @@ def test_adapter_status_refuses_bad_token(tmp_path) -> None:
         status = adapter.status()
         assert status.connected is False
         assert status.status == "adapter_offline"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_adapter_execute_routes_allowlisted_tool_to_official_mcp_with_backend_script() -> None:
+    server, url = _spawn_fake_autodesk_mcp(
+        {"ok": True, "message": "sketch criado", "artifact_paths": []}
+    )
+    try:
+        adapter = FusionDesktopAdapter(
+            autodesk_mcp_url=url,
+            enable_autodesk_mcp=True,
+            timeout_seconds=2.0,
+            status_cache_seconds=0.0,
+        )
+        out = adapter.execute(_step(), plan_id="plan-1", project_id="project_general")
+        assert out["ok"] is True
+        assert out["transport"] == "http"
+        assert out["message"] == "sketch criado"
+
+        assert server.tool_calls
+        params = server.tool_calls[-1]
+        assert params["name"] == "fusion_mcp_execute"
+        assert params["_meta"]["plan_id"] == "plan-1"
+        assert params["_meta"]["project_id"] == "project_general"
+        assert params["arguments"]["featureType"] == "script"
+
+        script = params["arguments"]["object"]["script"]
+        assert "def run(_context: str):" in script
+        assert 'TOOL_NAME = "fusion.create_sketch"' in script
+        assert "fusion.run_script" not in script
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_adapter_execute_returns_error_envelope_when_official_mcp_script_fails() -> None:
+    server, url = _spawn_fake_autodesk_mcp(
+        {
+            "ok": False,
+            "error_code": "fusion.no_active_design",
+            "message": "Nenhum design ativo",
+            "retryable": True,
+        }
+    )
+    try:
+        adapter = FusionDesktopAdapter(
+            autodesk_mcp_url=url,
+            enable_autodesk_mcp=True,
+            timeout_seconds=2.0,
+            status_cache_seconds=0.0,
+        )
+        out = adapter.execute(_step())
+        assert out["ok"] is False
+        assert out["transport"] == "http"
+        assert out["error_code"] == "fusion.no_active_design"
+        assert out["retryable"] is True
+        assert out["host_details"]["mcp_url"] == url
     finally:
         server.shutdown()
         server.server_close()
@@ -287,7 +457,7 @@ def test_local_mcp_client_routes_in_process_fusion_through_adapter(monkeypatch, 
         adapter = FusionDesktopAdapter(discovery_path=discovery, timeout_seconds=5.0)
         client = LocalMCPClient(transport_mode="in_process", fusion_adapter=adapter)
         out = client.execute_step(_step(), plan_id="p", project_id="prj")
-        assert out["transport"] == "loopback"
+        assert out["transport"] == "local"
         assert out["message"] == "real"
     finally:
         server.shutdown()
@@ -403,7 +573,7 @@ def test_adapter_execute_failure_invalidates_status_cache(tmp_path) -> None:
     # really kicks in when execute() fails.
     adapter._cached_status = FusionAdapterStatus(  # type: ignore[attr-defined]
         connected=True,
-        transport="loopback",
+        transport="local",
         status="available",
         detail="forjado",
         discovery_path=str(discovery),

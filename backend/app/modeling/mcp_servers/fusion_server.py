@@ -2,11 +2,13 @@
 
 Behaviour:
 
-- When the desktop add-in is detected (loopback bridge available), proxy
-  ``tools/call`` to ``FusionDesktopAdapter`` which talks JSON-RPC to the add-in.
-- Otherwise, return a mock envelope identifying the missing bridge so the UI
-  surfaces the right reason — same shape as the in-process mock the rest of the
-  stack already understands.
+- When Autodesk's local Fusion MCP Server is reachable, proxy allowlisted
+  ``tools/call`` requests through ``FusionDesktopAdapter`` over HTTP.
+- When only the legacy desktop add-in is detected, proxy through its loopback
+  bridge.
+- Otherwise, return a mock envelope identifying the missing bridge/MCP server so
+  the UI surfaces the right reason — same shape as the in-process mock the rest
+  of the stack already understands.
 
 The wire format is identical to ``blender_server`` for parity.
 """
@@ -88,6 +90,7 @@ def make_status_handler(adapter: FusionDesktopAdapter):
             "transport": status.transport,
             "status": status.status,
             "detail": status.detail,
+            "mcp_url": status.mcp_url,
             "discovery_path": status.discovery_path,
             "addin_pid": status.addin_pid,
             "tools": list(FUSION_TOOLS),
@@ -111,5 +114,6 @@ if __name__ == "__main__":  # pragma: no cover
 
 
 # Backwards-compatible aliases for tests imported in PR #5.
-handle_tool_call = make_handler(FusionDesktopAdapter())
-handle_status = make_status_handler(FusionDesktopAdapter())
+_compat_adapter = FusionDesktopAdapter(enable_autodesk_mcp=False)
+handle_tool_call = make_handler(_compat_adapter)
+handle_status = make_status_handler(_compat_adapter)

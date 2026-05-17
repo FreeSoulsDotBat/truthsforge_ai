@@ -87,6 +87,27 @@ $env:TRUTHS_FORGE_BLENDER_EXECUTABLE="C:\Program Files\Blender Foundation\Blende
 
 O backend executa apenas ferramentas Blender allowlistadas em background e salva `.blend`/`.stl` em `.local/modeling`, registrando os artefatos em `Arquivos`.
 
+Para testar o Fusion 360 real, abra o Fusion, habilite **Fusion MCP Server** e
+confirme a porta exibida pelo aplicativo:
+
+```text
+http://127.0.0.1:27182/mcp
+```
+
+O backend usa esse endpoint por padrão via `TRUTHS_FORGE_FUSION_MCP_URL`. No
+Docker de desenvolvimento, o compose aponta para `http://host.docker.internal:27182/mcp`
+para alcançar o Fusion aberto no Windows. Se a porta mudar no aplicativo,
+ajuste a variável:
+
+```powershell
+$env:TRUTHS_FORGE_FUSION_MCP_URL="http://127.0.0.1:27182/mcp"
+```
+
+Mesmo usando o MCP oficial do Fusion, o backend continua bloqueando script livre
+de LLM: ele só traduz tools `fusion.*` allowlistadas para scripts determinísticos
+do próprio backend. O add-in legado em `apps/fusion-addin/` permanece como
+fallback por discovery file/socket local.
+
 Comando manual equivalente:
 
 ```powershell

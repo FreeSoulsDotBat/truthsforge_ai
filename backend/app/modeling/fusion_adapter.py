@@ -1,21 +1,21 @@
-"""Bridge between the backend and the Fusion 360 desktop add-in.
+"""Bridge between the backend and local Fusion 360 MCP surfaces.
 
-The add-in runs inside the Fusion 360 process (its embedded Python). At startup
-it writes a discovery file under ``settings.state_dir / "fusion-bridge.json"``
-containing ``{"host", "port", "token", "pid"}`` and listens on the loopback
-interface for line-delimited JSON-RPC messages. This adapter speaks that wire
-format and reuses the same ``ModelingErrorEnvelope``/audit conventions as the
-rest of the modeling stack.
+Preferred path: Autodesk's built-in Fusion MCP Server on
+``TRUTHS_FORGE_FUSION_MCP_URL`` (default ``http://127.0.0.1:27182/mcp``). That
+server exposes a generic Python execution tool, so this adapter never forwards
+model-generated scripts. It translates the existing ``fusion.*`` allowlist into
+backend-owned deterministic scripts and sends only those via JSON-RPC over HTTP.
 
-Design rules (Autodesk docs):
+Legacy fallback: the Truth's Forge Fusion add-in under ``apps/fusion-addin``.
+At startup it writes a discovery file under
+``settings.state_dir / "fusion-bridge.json"`` containing
+``{"host", "port", "token", "pid"}`` and listens on loopback for line-delimited
+JSON-RPC messages. This keeps older local setups working while the official MCP
+port becomes the default.
 
-- The add-in routes every Fusion-API touch back to the main thread via custom
-  events. The backend never makes API calls directly; it only sends ``tools/call``
-  intents.
-- The token is ephemeral (regenerated on add-in startup) and lives only on the
-  local disk; the loopback socket is the trust boundary.
-- The discovery file is the single source of truth for "is the add-in alive?".
-  Stale files left behind by a crash are detected because the TCP connect refuses.
+Both paths reuse the same ``ModelingErrorEnvelope``/audit conventions as the
+rest of the modeling stack. Stale discovery files left behind by a crash are
+detected because the TCP connect refuses.
 """
 
 from __future__ import annotations
@@ -30,9 +30,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlunparse
+
+import httpx
 
 from app.core.config import settings
 from app.core.contracts import ModelingPlanStep, ModelingSoftware, now_utc
+from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
 from app.modeling.mcp_servers.protocol import (
     build_request,
     decode_message,
@@ -60,6 +64,9 @@ PROTOCOL_AUTH = "auth"
 PROTOCOL_TOOLS_LIST = "tools/list"
 PROTOCOL_TOOLS_CALL = "tools/call"
 PROTOCOL_STATUS = "status"
+AUTODESK_MCP_EXECUTE_TOOL = "fusion_mcp_execute"
+AUTODESK_MCP_READ_TOOL = "fusion_mcp_read"
+AUTODESK_MCP_REQUIRED_TOOLS = {AUTODESK_MCP_EXECUTE_TOOL, AUTODESK_MCP_READ_TOOL}
 
 
 @dataclass(frozen=True)
@@ -76,6 +83,7 @@ class FusionAdapterStatus:
     transport: str
     status: str
     detail: str
+    mcp_url: str | None = None
     discovery_path: str | None = None
     addin_pid: int | None = None
     consecutive_failures: int = 0
@@ -117,11 +125,17 @@ class FusionDesktopAdapter:
         *,
         timeout_seconds: float = 30.0,
         host_override: str | None = None,
+        autodesk_mcp_url: str | None = None,
+        enable_autodesk_mcp: bool | None = None,
         status_cache_seconds: float | None = None,
     ) -> None:
         self._configured_discovery_path = discovery_path
         self.timeout_seconds = timeout_seconds
         self._configured_host_override = host_override
+        self._configured_autodesk_mcp_url = autodesk_mcp_url
+        self._enable_autodesk_mcp = (
+            enable_autodesk_mcp if enable_autodesk_mcp is not None else discovery_path is None
+        )
         self._status_cache_seconds = (
             status_cache_seconds if status_cache_seconds is not None else self.STATUS_CACHE_SECONDS
         )
@@ -154,6 +168,25 @@ class FusionDesktopAdapter:
             return self._configured_host_override
         env_override = os.environ.get("TRUTHS_FORGE_FUSION_BRIDGE_HOST", "").strip()
         return env_override or None
+
+    @property
+    def autodesk_mcp_url(self) -> str:
+        return (self._configured_autodesk_mcp_url or settings.fusion_mcp_url).strip()
+
+    def _autodesk_mcp_urls(self) -> list[str]:
+        if not self._enable_autodesk_mcp:
+            return []
+        primary = self.autodesk_mcp_url
+        if not primary:
+            return []
+        urls = [primary]
+        parsed = urlparse(primary)
+        if parsed.hostname in {"127.0.0.1", "localhost"}:
+            netloc = "host.docker.internal"
+            if parsed.port:
+                netloc = f"{netloc}:{parsed.port}"
+            urls.append(urlunparse(parsed._replace(netloc=netloc)))
+        return list(dict.fromkeys(urls))
 
     def _read_discovery(self) -> FusionBridgeDiscovery | None:
         path = self.discovery_path
@@ -203,6 +236,58 @@ class FusionDesktopAdapter:
                 self._last_error_message,
             )
 
+    # ---------------------------------------------------------- Autodesk MCP
+
+    def _probe_autodesk_mcp_status(self) -> tuple[FusionAdapterStatus | None, str | None]:
+        urls = self._autodesk_mcp_urls()
+        if not urls:
+            return None, None
+        errors: list[str] = []
+        for url in urls:
+            try:
+                init_result = self._call_autodesk_mcp(
+                    url,
+                    "initialize",
+                    {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "truths-forge-ai", "version": "0.1.0"},
+                    },
+                )
+                tools_result = self._call_autodesk_mcp(url, PROTOCOL_TOOLS_LIST, {})
+            except FusionBridgeError as exc:
+                errors.append(f"{url}: {exc}")
+                continue
+            tool_names = {
+                str(tool.get("name"))
+                for tool in tools_result.get("tools", [])
+                if isinstance(tool, dict)
+            }
+            if not AUTODESK_MCP_REQUIRED_TOOLS.issubset(tool_names):
+                errors.append(
+                    f"{url}: tools oficiais incompletas ({', '.join(sorted(tool_names))})"
+                )
+                continue
+            server_info = init_result.get("serverInfo") if isinstance(init_result, dict) else {}
+            server_name = (
+                str(server_info.get("name"))
+                if isinstance(server_info, dict) and server_info.get("name")
+                else "Autodesk Fusion MCP"
+            )
+            return (
+                FusionAdapterStatus(
+                    connected=True,
+                    transport="http",
+                    status="available",
+                    detail=f"{server_name} conectado em {url}.",
+                    mcp_url=url,
+                    consecutive_failures=0,
+                    effective_host=urlparse(url).hostname,
+                ),
+                None,
+            )
+        return None, "; ".join(errors) if errors else None
+
     # -------------------------------------------------------------- status
 
     def status(self) -> FusionAdapterStatus:
@@ -210,6 +295,12 @@ class FusionDesktopAdapter:
         cached = self._cached_status
         if cached is not None and now_monotonic < self._cached_status_expires_at:
             return cached
+
+        autodesk_status, autodesk_error = self._probe_autodesk_mcp_status()
+        if autodesk_status is not None:
+            self._record_success()
+            self._cache_status(autodesk_status, ttl_seconds=self._status_cache_seconds)
+            return autodesk_status
 
         discovery = self._read_discovery()
         if discovery is None:
@@ -219,13 +310,15 @@ class FusionDesktopAdapter:
                 transport="mock",
                 status="adapter_mock",
                 detail=(
-                    "Add-in do Fusion 360 não detectado. "
-                    "Abra o Fusion e ative o add-in 'Truth's Forge' para conectar."
+                    "Fusion MCP Server não respondeu"
+                    + (f" ({autodesk_error})" if autodesk_error else "")
+                    + ". Add-in/bridge legado 'Truth's Forge' também não detectado."
                 ),
+                mcp_url=self.autodesk_mcp_url if self._enable_autodesk_mcp else None,
                 discovery_path=str(self.discovery_path),
                 consecutive_failures=failures,
                 last_error_at=last_at,
-                last_error_message=last_msg,
+                last_error_message=autodesk_error or last_msg,
                 effective_host=self._host_override(),
             )
             self._cache_status(status, ttl_seconds=self._status_cache_seconds)
@@ -274,7 +367,7 @@ class FusionDesktopAdapter:
         self._record_success()
         status = FusionAdapterStatus(
             connected=True,
-            transport="loopback",
+            transport="local",
             status="available",
             detail="Add-in do Fusion 360 conectado via loopback autenticado.",
             discovery_path=str(self.discovery_path),
@@ -313,14 +406,22 @@ class FusionDesktopAdapter:
                 message=f"Ferramenta '{step.tool_name}' não permitida no adapter Fusion.",
                 retryable=False,
             )
+        status = self.status()
+        if status.connected and status.transport == "http" and status.mcp_url:
+            return self._execute_via_autodesk_mcp(
+                step,
+                status.mcp_url,
+                plan_id=plan_id,
+                project_id=project_id,
+            )
         discovery = self._read_discovery()
         if discovery is None:
             return self._error_envelope(
                 step,
                 error_code="fusion.bridge_not_configured",
                 message=(
-                    "Add-in do Fusion 360 não detectado. "
-                    "Abra o Fusion e ative o add-in 'Truth's Forge'."
+                    "Fusion MCP Server não respondeu e bridge legado do Fusion 360 "
+                    "não foi detectado."
                 ),
                 retryable=True,
             )
@@ -358,9 +459,169 @@ class FusionDesktopAdapter:
                 retryable=False,
             )
         self._record_success()
+        if result.get("transport") == "loopback":
+            result = {**result, "transport": "local"}
         return result
 
+    def _execute_via_autodesk_mcp(
+        self,
+        step: ModelingPlanStep,
+        mcp_url: str,
+        *,
+        plan_id: str | None,
+        project_id: str | None,
+    ) -> dict[str, Any]:
+        try:
+            script = build_autodesk_fusion_script(step.tool_name, dict(step.input_json))
+            raw_result = self._call_autodesk_mcp(
+                mcp_url,
+                PROTOCOL_TOOLS_CALL,
+                {
+                    "name": AUTODESK_MCP_EXECUTE_TOOL,
+                    "arguments": {
+                        "featureType": "script",
+                        "object": {"script": script},
+                    },
+                    "_meta": {
+                        "plan_id": plan_id,
+                        "project_id": project_id,
+                        "step_id": step.id,
+                        "step_seq": step.seq,
+                        "step_title": step.title,
+                        "software": ModelingSoftware.fusion.value,
+                        "risk_level": step.risk_level.value,
+                        "approval_required": step.approval_required,
+                    },
+                },
+            )
+            payload = self._extract_mcp_content_json(raw_result)
+        except (FusionBridgeError, ValueError) as exc:
+            self._record_failure(str(exc))
+            self.invalidate_status_cache()
+            return self._error_envelope(
+                step,
+                error_code="fusion.autodesk_mcp_error",
+                message=str(exc),
+                retryable=True,
+                host_details={"mcp_url": mcp_url},
+                transport="http",
+            )
+
+        if not isinstance(payload, dict):
+            return self._error_envelope(
+                step,
+                error_code="fusion.autodesk_mcp_invalid_payload",
+                message="Fusion MCP Server devolveu conteúdo sem objeto JSON parseável.",
+                retryable=False,
+                host_details={"mcp_url": mcp_url, "raw_result": raw_result},
+                transport="http",
+            )
+
+        if payload.get("ok") is False:
+            return self._error_envelope(
+                step,
+                error_code=str(payload.get("error_code") or "fusion.autodesk_script_error"),
+                message=str(payload.get("message") or "Script determinístico falhou no Fusion."),
+                retryable=bool(payload.get("retryable", True)),
+                host_details={"mcp_url": mcp_url, "payload": payload},
+                transport="http",
+            )
+
+        self._record_success()
+        return {
+            "ok": True,
+            "mcp_server": "fusion_mcp",
+            "transport": "http",
+            "tool_name": step.tool_name,
+            "software": ModelingSoftware.fusion.value,
+            "message": str(payload.get("message") or "Comando executado no Fusion MCP Server."),
+            "input": step.input_json,
+            "result": payload,
+            "artifact_paths": list(payload.get("artifact_paths") or []),
+        }
+
     # ----------------------------------------------------------- networking
+
+    def _call_autodesk_mcp(
+        self,
+        url: str,
+        method: str,
+        params: dict[str, Any] | None,
+    ) -> Any:
+        with self._lock:
+            self._next_request_id += 1
+            request_id = f"fusion-http-{method.replace('/', '-')}-{self._next_request_id}"
+
+        request_payload = build_request(request_id, method, params)
+        try:
+            with httpx.Client(timeout=self.timeout_seconds) as client:
+                response = client.post(
+                    url,
+                    json=request_payload,
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise FusionBridgeError(
+                f"Fusion MCP HTTP indisponível: {exc}",
+                data={"url": url},
+            ) from exc
+
+        response_payload = self._decode_autodesk_http_response(response)
+        if response_payload.get("id") != request_id:
+            raise FusionBridgeError(
+                f"Fusion MCP devolveu id divergente: esperado {request_id}, "
+                f"recebido {response_payload.get('id')!r}.",
+                data={"url": url},
+            )
+        if "error" in response_payload:
+            error = response_payload["error"] or {}
+            raise FusionBridgeError(
+                str(error.get("message") or "Erro desconhecido no Fusion MCP."),
+                code=error.get("code"),
+                data=error.get("data"),
+            )
+        result = response_payload.get("result")
+        return result if isinstance(result, dict) else {}
+
+    @staticmethod
+    def _decode_autodesk_http_response(response: httpx.Response) -> dict[str, Any]:
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" not in content_type:
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise FusionBridgeError("Fusion MCP devolveu JSON sem objeto raiz.")
+            return payload
+
+        for line in response.text.splitlines():
+            if not line.startswith("data:"):
+                continue
+            raw = line.removeprefix("data:").strip()
+            if not raw or raw == "[DONE]":
+                continue
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                return payload
+        raise FusionBridgeError("Fusion MCP SSE não trouxe payload data JSON.")
+
+    @staticmethod
+    def _extract_mcp_content_json(result: dict[str, Any]) -> dict[str, Any] | None:
+        content = result.get("content")
+        if not isinstance(content, list):
+            return result
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                continue
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        return None
 
     def _call(
         self,
@@ -429,11 +690,12 @@ class FusionDesktopAdapter:
         message: str,
         retryable: bool,
         host_details: dict[str, Any] | None = None,
+        transport: str = "local",
     ) -> dict[str, Any]:
         return {
             "ok": False,
             "mcp_server": "fusion_mcp",
-            "transport": "loopback",
+            "transport": transport,
             "tool_name": step.tool_name,
             "software": ModelingSoftware.fusion.value,
             "error_code": error_code,
