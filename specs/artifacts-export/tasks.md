@@ -3,6 +3,7 @@
 - [ ] [P1] [any] Definir contrato de artifact versionado.
 - [ ] [P1] [any] Implementar canvas inicial.
 - [ ] [P1] [any] Implementar export Markdown.
+- [ ] [P1] [any] Implementar export código.
 - [ ] [P1] [any] Implementar export JSON.
 - [ ] [P1] [any] Implementar export HTML.
 - [ ] [P1] [any] Implementar export Mermaid.
