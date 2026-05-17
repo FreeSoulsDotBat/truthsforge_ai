@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -1195,7 +1196,11 @@ def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
 def _modeling_plan_chat_summary(plan: ModelingPlan) -> str:
     approval = "aguardando aprovação humana" if plan.approval_required else "sem aprovação pendente"
     planner = "IA" if plan.planner_source and plan.planner_source.value == "llm" else "heurístico"
-    if plan.approval_required:
+    if plan.status.value == "completed":
+        next_step = "Execução concluída. Use o painel 3D para detalhes, snapshots e printability."
+    elif plan.status.value == "failed":
+        next_step = "Houve falha na execução. Revise os erros no painel 3D."
+    elif plan.approval_required:
         next_step = "Revise o card do plano; só etapas destrutivas/high-risk ficam bloqueadas."
     elif plan.mode == ModelingExecutionMode.plan_only:
         next_step = "Revise o card do plano e execute pelo painel 3D quando quiser continuar."
@@ -1363,7 +1368,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                         "Executando MCP 3D",
                         "Etapas allowlistadas serão executadas sem aprovação manual.",
                     )
-                    execution = modeling_service.execute_plan(plan.id)
+                    execution = await asyncio.to_thread(modeling_service.execute_plan, plan.id)
                     plan = execution.plan
             except Exception as exc:  # noqa: BLE001 - stream must surface domain failures
                 error_message = f"Não consegui criar o plano 3D via MCP: {exc}"
