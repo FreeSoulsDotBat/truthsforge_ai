@@ -147,8 +147,7 @@ export function AgentDashboard({
     const knownProjectIds = new Set(selectableAgentProjects.map((project) => project.id));
     const normalized = (agentDraft.allowed_project_ids.length ? agentDraft.allowed_project_ids : [generalProjectId])
       .filter((projectId, index, list) => list.indexOf(projectId) === index)
-      .filter((projectId) => knownProjectIds.has(projectId))
-      .slice(0, 3);
+      .filter((projectId) => knownProjectIds.has(projectId));
     return normalized.length ? normalized : [generalProjectId];
   }, [agentDraft.allowed_project_ids, generalProjectId, selectableAgentProjects]);
 
@@ -391,26 +390,23 @@ export function AgentDashboard({
                 label="Projetos permitidos"
                 required
                 className="mt-3"
-                tip="Define quais projetos este agente pode usar como contexto no chat. Você pode habilitar até 3 projetos, incluindo o Geral."
+                tip="Define quais projetos este agente pode usar como contexto no chat."
               >
                 <div className="grid gap-2 md:grid-cols-2">
                   {selectableAgentProjects.map((project) => {
                     const checked = normalizedAllowedProjectIds.includes(project.id);
-                    const maxReached = normalizedAllowedProjectIds.length >= 3;
                     return (
                       <label
                         key={project.id}
                         className={[
                           "flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm transition",
-                          checked ? "border-forge-amber/60 bg-[#24211b]" : "border-forge-line bg-[#0e0f0e]",
-                          !checked && maxReached ? "opacity-60" : ""
+                          checked ? "border-forge-amber/60 bg-[#24211b]" : "border-forge-line bg-[#0e0f0e]"
                         ].join(" ")}
                       >
                         <span className="inline-flex items-center gap-2">
                           <input
                             type="checkbox"
                             checked={checked}
-                            disabled={!checked && maxReached}
                             onChange={(event) =>
                               onSetAgentDraft((current) => {
                                 const currentIds = current.allowed_project_ids.length
@@ -419,9 +415,9 @@ export function AgentDashboard({
                                 const nextIds = event.target.checked
                                   ? [...currentIds, project.id]
                                   : currentIds.filter((projectId) => projectId !== project.id);
-                                const normalizedNext = nextIds
-                                  .filter((projectId, index, list) => list.indexOf(projectId) === index)
-                                  .slice(0, 3);
+                                const normalizedNext = nextIds.filter(
+                                  (projectId, index, list) => list.indexOf(projectId) === index
+                                );
                                 return {
                                   ...current,
                                   allowed_project_ids: normalizedNext.length ? normalizedNext : [generalProjectId]
@@ -437,7 +433,7 @@ export function AgentDashboard({
                   })}
                 </div>
                 <p className="mt-2 text-xs text-forge-muted">
-                  Selecionados: {normalizedAllowedProjectIds.length} de 3.
+                  Projetos selecionados: {normalizedAllowedProjectIds.length}.
                 </p>
               </Field>
               <Field
