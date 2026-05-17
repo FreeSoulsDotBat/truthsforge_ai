@@ -99,6 +99,31 @@ def test_blender_plan_uses_mcp_boundary_without_desktop_adapter(monkeypatch) -> 
     assert all(step["output_json"]["transport"] == "mock" for step in blender_steps)
 
 
+def test_modeling_plan_only_draft_does_not_execute_directly(monkeypatch) -> None:
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/3d/plans",
+        json={
+            "prompt": "Planeje um cubo visual no Blender.",
+            "mode": "plan_only",
+            "software_override": "blender",
+        },
+    )
+    assert created.status_code == 200
+    plan = created.json()
+    assert plan["status"] == "draft"
+
+    executed = client.post(f"/api/3d/plans/{plan['id']}/execute")
+    assert executed.status_code == 200
+    execution_payload = executed.json()
+    assert execution_payload["plan"]["status"] == "draft"
+    assert execution_payload["executed_step_ids"] == []
+    assert set(execution_payload["blocked_step_ids"]) == {step["id"] for step in plan["steps"]}
+    assert "modo planejamento" in execution_payload["events"][0]
+
+
 def test_modeling_snapshot_records_manifest() -> None:
     client = TestClient(app)
     response = client.post(
