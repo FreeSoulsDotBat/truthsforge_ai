@@ -35,6 +35,8 @@ from app.core.contracts import (
     KnowledgeBaseDocument,
     ModelCapability,
     ModelConfig,
+    ModelingPlan,
+    ModelingPlanCreate,
     PlatformFile,
     PlatformFileCreate,
     PlatformFileUpdate,
@@ -59,6 +61,7 @@ from app.llm_gateway.providers import (
     ProviderStreamEvent,
     token_event,
 )
+from app.modeling.service import get_modeling_service
 from app.rag.embeddings import embed_text
 from app.rag.indexing import ensure_document_for_platform_file
 from app.rag.vector_store import QdrantVectorStore
@@ -1148,6 +1151,66 @@ def _runtime_status(stage: str, label: str, detail: str | None = None) -> str:
     return _sse("status", payload)
 
 
+def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
+    return {
+        "id": plan.id,
+        "project_id": plan.project_id,
+        "conversation_id": plan.conversation_id,
+        "prompt": plan.prompt,
+        "mode": plan.mode.value,
+        "software_choice": plan.software_choice.value,
+        "confidence": plan.confidence,
+        "approval_required": plan.approval_required,
+        "status": plan.status.value,
+        "rationale": plan.rationale,
+        "assumptions": plan.assumptions,
+        "risks": plan.risks,
+        "knowledge_base_ids": plan.knowledge_base_ids,
+        "planner_source": plan.planner_source.value if plan.planner_source else None,
+        "fallback_reason": plan.fallback_reason,
+        "created_at": plan.created_at.isoformat(),
+        "updated_at": plan.updated_at.isoformat(),
+        "steps": [
+            {
+                "id": step.id,
+                "seq": step.seq,
+                "title": step.title,
+                "software": step.software.value,
+                "tool_name": step.tool_name,
+                "risk_level": step.risk_level.value,
+                "approval_required": step.approval_required,
+                "status": step.status.value,
+                "input_json": step.input_json,
+                "output_json": step.output_json,
+                "error": step.error,
+                "approved_at": step.approved_at.isoformat() if step.approved_at else None,
+                "completed_at": step.completed_at.isoformat() if step.completed_at else None,
+            }
+            for step in plan.steps
+        ],
+    }
+
+
+def _modeling_plan_chat_summary(plan: ModelingPlan) -> str:
+    approval = "aguardando aprovação humana" if plan.approval_required else "sem aprovação pendente"
+    planner = "IA" if plan.planner_source and plan.planner_source.value == "llm" else "heurístico"
+    lines = [
+        "Criei um plano 3D estruturado para MCP local.",
+        "",
+        f"- Software: {plan.software_choice.value}",
+        f"- Modo: {plan.mode.value}",
+        f"- Status: {plan.status.value} ({approval})",
+        f"- Planner: {planner}",
+        f"- Etapas: {len(plan.steps)}",
+    ]
+    if plan.rationale:
+        lines.extend(["", f"Racional: {plan.rationale}"])
+    lines.extend(
+        ["", "Próximo passo: revise o card do plano nesta conversa antes de aprovar ou executar."]
+    )
+    return "\n".join(lines)
+
+
 @router.post("/stream")
 async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
     store = get_store()
@@ -1227,6 +1290,110 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
         session_ids=session.context_knowledge_base_ids,
         knowledge_bases=knowledge_bases,
     )
+    if payload.modeling_3d.enabled:
+        user_message = ChatMessage(
+            session_id=session.id,
+            role="user",
+            content=payload.message,
+            metadata={
+                "modeling_3d": {
+                    "enabled": True,
+                    "mode": payload.modeling_3d.mode.value,
+                    "software_override": payload.modeling_3d.software_override.value
+                    if payload.modeling_3d.software_override
+                    else None,
+                }
+            },
+        )
+        store.add_message(user_message)
+        updated_context_session = session.model_copy(
+            update={
+                "context_project_ids": effective_context_project_ids,
+                "context_document_ids": [],
+                "context_knowledge_base_ids": effective_knowledge_base_ids,
+                "updated_at": now_utc(),
+            }
+        )
+        if hasattr(store, "upsert_chat_session"):
+            store.upsert_chat_session(updated_context_session)
+        session = updated_context_session
+
+        assistant_message = ChatMessage(
+            session_id=session.id,
+            role="assistant",
+            content="",
+            metadata={
+                "provider": "modeling_3d",
+                "persona": "JUDITE",
+                "response_mode": "modeling_3d",
+            },
+        )
+
+        async def modeling_events() -> AsyncIterator[str]:
+            yield _sse("meta", {"session_id": session.id, "message_id": assistant_message.id})
+            yield _runtime_status(
+                "modeling_3d",
+                "Planejando modelo 3D",
+                "Enviando o prompt ao planner MCP 3D com contexto do chat.",
+            )
+            try:
+                plan = await get_modeling_service(store).create_plan_async(
+                    ModelingPlanCreate(
+                        prompt=payload.message,
+                        project_id=effective_project_id,
+                        conversation_id=session.id,
+                        mode=payload.modeling_3d.mode,
+                        software_override=payload.modeling_3d.software_override,
+                        knowledge_base_ids=effective_knowledge_base_ids,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - stream must surface domain failures
+                error_message = f"Não consegui criar o plano 3D via MCP: {exc}"
+                assistant_message.content = error_message
+                assistant_message.metadata["provider_error"] = str(exc)
+                store.add_message(assistant_message)
+                yield _sse("error", {"message": error_message, "reason": str(exc)})
+                yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
+                return
+
+            plan_metadata = _modeling_plan_metadata(plan)
+            assistant_message.content = _modeling_plan_chat_summary(plan)
+            assistant_message.metadata["modeling_plan"] = plan_metadata
+            assistant_message.metadata["modeling_plan_id"] = plan.id
+            store.add_message(assistant_message)
+            yield _runtime_status(
+                "modeling_3d_plan",
+                "Plano 3D criado",
+                f"{len(plan.steps)} etapas para {plan.software_choice.value}.",
+            )
+            yield _sse("modeling_plan", {"plan": plan_metadata})
+            yield _sse("token", {"content": assistant_message.content})
+            yield _runtime_status("done", "Concluído")
+            record_audit_event(
+                AuditEvent(
+                    event_type="chat.modeling_3d_plan",
+                    model_id=None,
+                    tokens_in=estimate_tokens(payload.message),
+                    tokens_out=estimate_tokens(assistant_message.content),
+                    estimated_cost_brl=0,
+                    metadata={
+                        "session_id": session.id,
+                        "plan_id": plan.id,
+                        "project_id": effective_project_id,
+                        "context_project_ids": effective_context_project_ids,
+                        "context_knowledge_base_ids": effective_knowledge_base_ids,
+                        "software": plan.software_choice.value,
+                        "mode": plan.mode.value,
+                        "planner_source": plan.planner_source.value
+                        if plan.planner_source
+                        else None,
+                    },
+                )
+            )
+            yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
+
+        return StreamingResponse(modeling_events(), media_type="text/event-stream")
+
     registry = ModelRegistry()
     model = registry.get_for_agent(primary_agent, fallback_model_id=session.model_id)
     if payload.response_mode == "image":

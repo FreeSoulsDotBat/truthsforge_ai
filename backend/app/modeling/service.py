@@ -46,7 +46,7 @@ from app.core.contracts import (
 from app.files.library import content_type_for_name, safe_filename
 from app.llm_gateway.gateway import LLMGateway
 from app.modeling.mcp_client import LocalMCPClient
-from app.modeling.planner import create_heuristic_plan, create_llm_plan
+from app.modeling.planner import create_heuristic_plan, create_llm_plan, create_llm_plan_async
 from app.modeling.policy import apply_modeling_policy
 from app.modeling.workspace import (
     copy_into_snapshot,
@@ -166,6 +166,18 @@ class ModelingService:
         plan = plan.model_copy(
             update={"planner_source": source, "fallback_reason": fallback_reason}
         )
+        return self._persist_plan(plan, source, fallback_reason)
+
+    async def create_plan_async(self, payload: ModelingPlanCreate) -> ModelingPlan:
+        plan, source, fallback_reason = await self._build_plan_async(payload)
+        plan = plan.model_copy(
+            update={"planner_source": source, "fallback_reason": fallback_reason}
+        )
+        return self._persist_plan(plan, source, fallback_reason)
+
+    def _persist_plan(
+        self, plan: ModelingPlan, source: ModelingPlannerSource, fallback_reason: str | None
+    ) -> ModelingPlan:
         plan = apply_modeling_policy(plan)
         self.store.upsert_modeling_plan(plan)
         metadata: dict[str, Any] = {
@@ -195,6 +207,29 @@ class ModelingService:
         try:
             knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
             plan = create_llm_plan(
+                payload,
+                gateway=self.gateway,
+                model=model,
+                knowledge_bases=knowledge_bases,
+            )
+            return plan, ModelingPlannerSource.llm, None
+        except Exception as exc:  # noqa: BLE001 - fallback is intentional
+            logger.warning("Planner LLM falhou (%s); usando fallback heurístico.", exc)
+            return create_heuristic_plan(payload), ModelingPlannerSource.heuristic, str(exc)
+
+    async def _build_plan_async(
+        self, payload: ModelingPlanCreate
+    ) -> tuple[ModelingPlan, ModelingPlannerSource, str | None]:
+        model = self._resolve_planner_model()
+        if model is None:
+            return (
+                create_heuristic_plan(payload),
+                ModelingPlannerSource.heuristic,
+                "planner_model_unavailable",
+            )
+        try:
+            knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
+            plan = await create_llm_plan_async(
                 payload,
                 gateway=self.gateway,
                 model=model,

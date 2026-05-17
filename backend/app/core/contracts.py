@@ -408,6 +408,18 @@ class ChatSessionContextUpdate(BaseModel):
     context_knowledge_base_ids: list[str] = Field(default_factory=list)
 
 
+class ChatModeling3DContext(BaseModel):
+    enabled: bool = False
+    mode: ModelingExecutionMode = ModelingExecutionMode.approval_required
+    software_override: ModelingSoftware | None = None
+
+    @model_validator(mode="after")
+    def normalize_software_override(self) -> ChatModeling3DContext:
+        if self.software_override == ModelingSoftware.auto:
+            self.software_override = None
+        return self
+
+
 class ChatStreamRequest(BaseModel):
     message: str
     session_id: str | None = None
@@ -439,6 +451,7 @@ class ChatStreamRequest(BaseModel):
     attached_file_ids: list[str] = Field(
         default_factory=list, max_length=MAX_CHAT_ATTACHMENT_FILE_IDS
     )
+    modeling_3d: ChatModeling3DContext = Field(default_factory=ChatModeling3DContext)
 
     @model_validator(mode="after")
     def validate_response_modes(self) -> ChatStreamRequest:
@@ -453,6 +466,18 @@ class ChatStreamRequest(BaseModel):
         if self.reasoning_summary != "off" and self.deep_research:
             raise ValueError(
                 "Resumo oficial de raciocínio e Deep Research são modos mutuamente exclusivos."
+            )
+        if self.modeling_3d.enabled and self.response_mode == "image":
+            raise ValueError(
+                "Modelagem 3D via MCP e geração de imagem são modos mutuamente exclusivos."
+            )
+        if self.modeling_3d.enabled and self.deep_research:
+            raise ValueError(
+                "Modelagem 3D via MCP e Deep Research são modos mutuamente exclusivos."
+            )
+        if self.modeling_3d.enabled and self.reasoning_summary != "off":
+            raise ValueError(
+                "Resumo oficial de raciocínio não é aplicado ao fluxo estruturado de modelagem 3D."
             )
         return self
 

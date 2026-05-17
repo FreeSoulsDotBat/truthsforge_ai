@@ -117,6 +117,12 @@ export interface ModelingPlanCreate {
   knowledge_base_ids?: string[];
 }
 
+export interface ChatModeling3DContext {
+  enabled: boolean;
+  mode?: ModelingExecutionMode;
+  software_override?: ModelingSoftware | null;
+}
+
 export interface ModelingApprovalRequest {
   decision: "approve" | "reject";
   reason?: string;

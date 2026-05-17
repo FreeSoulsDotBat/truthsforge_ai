@@ -75,8 +75,10 @@
 
 - [x] [P1] [any] Preservar no SDD o módulo 3D como epic própria.
 - [x] [P1] [human] Decidir que Blender real e Fusion bridge são obrigatórios para agora.
+- [x] [P1] [devin] Integrar MCP 3D ao chat como experiência primária de criação.
+- [x] [P1] [devin] Reposicionar aba 3D como configuração, diagnóstico e continuidade operacional.
+- [x] [P1] [devin] Diferenciar mock, adapter ausente, execução real e erro na UI de adapters MCP.
 - [ ] [P1] [any] Criar contrato detalhado do Fusion bridge.
-- [ ] [P1] [any] Diferenciar mock, adapter ausente, execução real e erro na UI.
 - [ ] [P1] [any] Versionar exports 3D como artifacts.
 - [ ] [P1] [any] Expandir printability mínima.
 

@@ -425,7 +425,6 @@ def test_chat_stream_audit_records_cost_and_context_metadata() -> None:
     )
     assert project.status_code == 200
     project_id = project.json()["id"]
-
     agent = client.post(
         "/api/agents",
         json={
@@ -490,6 +489,61 @@ def test_chat_stream_audit_records_cost_and_context_metadata() -> None:
     assert (
         metadata["cost"]["projected_month_spend_brl"] >= metadata["cost"]["current_month_spend_brl"]
     )
+
+
+def test_chat_stream_can_create_modeling_plan_inline() -> None:
+    client = TestClient(app)
+    project = client.post(
+        "/api/projects",
+        json={"name": f"Projeto 3D chat {uuid4().hex}", "description": "modelagem via chat"},
+    )
+    assert project.status_code == 200
+    project_id = project.json()["id"]
+    agent = client.post(
+        "/api/agents",
+        json={
+            "name": f"JUDITE 3D {uuid4().hex}",
+            "description": "Orquestradora 3D de teste",
+            "system_prompt": "Planeje modelagem 3D.",
+            "role": "orchestrator",
+            "allowed_project_ids": [project_id],
+        },
+    )
+    assert agent.status_code == 200
+
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "Crie no Blender um suporte simples com base retangular e export STL.",
+            "project_id": project_id,
+            "agent_id": agent.json()["id"],
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "approval_required",
+                "software_override": "blender",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert "event: modeling_plan" in response.text
+    assert "event: done" in response.text
+
+    sessions = client.get("/api/chat/sessions")
+    assert sessions.status_code == 200
+    session = next(item for item in sessions.json() if item["project_id"] == project_id)
+    details = client.get(f"/api/chat/sessions/{session['id']}")
+    assert details.status_code == 200
+    messages = details.json()["messages"]
+    assistant = messages[-1]
+    plan = assistant["metadata"]["modeling_plan"]
+    assert assistant["metadata"]["response_mode"] == "modeling_3d"
+    assert assistant["metadata"]["modeling_plan_id"] == plan["id"]
+    assert plan["conversation_id"] == session["id"]
+    assert plan["project_id"] == project_id
+    assert plan["software_choice"] == "blender"
+    assert plan["status"] == "waiting_approval"
+    assert plan["steps"]
 
 
 def test_agent_cannot_stream_in_project_outside_runtime_scope() -> None:

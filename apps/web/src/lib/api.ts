@@ -2,6 +2,7 @@ import type {
   Agent,
   AgentUpsert,
   AuditEvent,
+  ChatModeling3DContext,
   ChatGPTImportJob,
   ChatSession,
   ChatSessionContextUpdate,
@@ -395,6 +396,7 @@ export interface StreamChatPayload {
   multi_agent_mode?: boolean;
   attached_document_ids?: string[];
   attached_file_ids?: string[];
+  modeling_3d?: ChatModeling3DContext;
 }
 
 export interface StreamStatusEvent {
@@ -403,11 +405,14 @@ export interface StreamStatusEvent {
   detail?: string;
 }
 
+export type StreamEventPayload = Record<string, unknown>;
+
 export async function streamChat(
   payload: StreamChatPayload,
   handlers: {
     onMeta?: (data: Record<string, string>) => void;
     onStatus?: (data: StreamStatusEvent) => void;
+    onEvent?: (eventName: string, data: StreamEventPayload) => void;
     onSessionTitle?: (data: { session_id: string; title: string }) => void;
     onReasoningSummary?: (token: string) => void;
     onToken: (token: string) => void;
@@ -444,8 +449,15 @@ export async function streamChat(
         .trim();
       const dataLine = lines.find((line) => line.startsWith("data:"));
       if (!eventName || !dataLine) continue;
-      const data = JSON.parse(dataLine.replace("data:", "").trim()) as Record<string, string>;
-      if (eventName === "meta") handlers.onMeta?.(data);
+      const data = JSON.parse(dataLine.replace("data:", "").trim()) as Record<string, unknown>;
+      handlers.onEvent?.(eventName, data);
+      const stringData = Object.fromEntries(
+        Object.entries(data).map(([key, value]) => [
+          key,
+          typeof value === "string" ? value : value == null ? "" : JSON.stringify(value)
+        ])
+      );
+      if (eventName === "meta") handlers.onMeta?.(stringData);
       if (eventName === "status") handlers.onStatus?.(data as unknown as StreamStatusEvent);
       if (eventName === "session_title") {
         handlers.onSessionTitle?.({
@@ -453,11 +465,11 @@ export async function streamChat(
           title: String(data.title ?? "")
         });
       }
-      if (eventName === "reasoning_summary") handlers.onReasoningSummary?.(data.content ?? "");
-      if (eventName === "token") handlers.onToken(data.content ?? "");
+      if (eventName === "reasoning_summary") handlers.onReasoningSummary?.(String(data.content ?? ""));
+      if (eventName === "token") handlers.onToken(String(data.content ?? ""));
       if (eventName === "error") {
         sawErrorEvent = true;
-        handlers.onError?.(data);
+        handlers.onError?.(stringData);
       }
       if (eventName === "done") handlers.onDone?.();
     }

@@ -4,8 +4,14 @@ O módulo 3D nasce como um bounded context local para conectar JUDITE e agentes 
 
 ## Estado atual
 
-- Backend FastAPI expõe `/api/3d/*`.
-- UI web ganhou a aba `3D`.
+- Backend FastAPI expõe `/api/3d/*` para execução, approval, snapshots,
+  rollback, tool calls e printability.
+- A experiência primária de criação agora começa no chat: o frontend envia
+  `modeling_3d` em `POST /api/chat/stream`, o backend cria um plano MCP 3D
+  vinculado à conversa e devolve um card de plano na resposta da JUDITE.
+- A aba `3D` deixa de ser o ponto principal de criação e passa a servir como
+  configuração/diagnóstico dos adapters MCP, histórico de planos, execução,
+  snapshots, rollback e printability.
 - O planner chama a OpenAI Responses API com Structured Outputs (`strict: true`)
   para gerar planos a partir de prompt natural; cai automaticamente para um planner
   heurístico determinístico em qualquer falha (sem chave, modelo inválido, JSON corrompido,
@@ -16,6 +22,41 @@ O módulo 3D nasce como um bounded context local para conectar JUDITE e agentes 
 - Ações mutáveis exigem aprovação humana por padrão.
 - Scripts livres, shell e operações destrutivas seguem fora do caminho feliz.
 - Artefatos gerados pelo Blender/Fusion, como `.blend`, `.stl`, `.obj`, `.3mf` e `.step`, entram em `Arquivos` como `generated` quando retornados pelo adapter.
+
+## Experiência chat-first
+
+O usuário modela 3D como conversa: ativa **MCP 3D** no menu de execução do
+composer, escolhe software (`auto`, `blender` ou `fusion`) e modo
+(`plan_only`, `approval_required` ou `safe_auto`), escreve o prompt e revisa o
+plano renderizado na própria conversa.
+
+O contrato do chat recebe:
+
+```json
+{
+  "message": "Crie um suporte com base retangular e export STL",
+  "modeling_3d": {
+    "enabled": true,
+    "mode": "approval_required",
+    "software_override": "blender"
+  }
+}
+```
+
+Quando `modeling_3d.enabled=true`, `ChatStreamRequest` não pode usar geração
+de imagem, Deep Research ou resumo oficial de raciocínio no mesmo request. O
+backend cria a mensagem do usuário, chama `ModelingService.create_plan` com
+`conversation_id` da sessão, emite SSE `modeling_plan` e persiste a resposta da
+JUDITE com:
+
+- `metadata.response_mode = "modeling_3d"`
+- `metadata.modeling_plan_id`
+- `metadata.modeling_plan`
+
+O frontend usa esse metadata para renderizar o card **Plano 3D MCP** dentro da
+bolha da JUDITE. A continuidade operacional permanece na aba `3D`: aprovar
+plano/etapas, executar MCP, criar/restaurar snapshots, validar printability e
+ver tool calls auditadas.
 
 ## Blender local
 
@@ -213,10 +254,21 @@ informativo. Os demais níveis continuam incrementais.
 - `modeling_printability_reports`: relatórios geométricos do `blender.validate_printability`.
 - `modeling_model_versions`: reservada para versões nomeadas de modelos derivados.
 
-## UI da aba 3D
+## UI de chat e painel 3D
 
-A aba 3D do dashboard expõe o fluxo completo do módulo:
+O chat é a experiência principal de criação 3D. O menu de execução permite
+ativar MCP 3D, escolher software/modo e enviar o prompt para JUDITE; a resposta
+mostra o plano estruturado como card dentro da conversa.
 
+A aba 3D do dashboard expõe configuração, diagnóstico e continuidade operacional:
+
+- **Header MCP** explica que novos modelos começam no chat e oferece atalho
+  "Abrir chat MCP 3D".
+- **Adapters MCP** distingue explicitamente `mock`, `adapter ausente`,
+  `execução real` e `erro`, além de mostrar transporte, status, detalhe e tools
+  expostas por Blender/Fusion.
+- **Planos recentes** lista planos criados no chat ou por API, permitindo
+  selecionar um plano para operação.
 - **Header do plano** mostra software, confiança, status, e um badge `planner: IA`
   ou `planner: heurístico`; quando há fallback, o `fallback_reason` aparece em âmbar.
 - **Cards de etapa** trazem botões "Aprovar etapa" e "Rejeitar etapa" quando a etapa está em

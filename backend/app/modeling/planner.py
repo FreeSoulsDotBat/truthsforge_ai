@@ -225,6 +225,23 @@ def create_llm_plan(
     return _plan_from_llm_payload(payload, parsed)
 
 
+async def create_llm_plan_async(
+    payload: ModelingPlanCreate,
+    *,
+    gateway: LLMGateway,
+    model: ModelConfig,
+    knowledge_bases: list[KnowledgeBase] | None = None,
+) -> ModelingPlan:
+    messages = _build_messages(payload, knowledge_bases or [])
+    parsed = await gateway.generate_structured(
+        model=model,
+        messages=messages,
+        schema_name="modeling_execution_plan",
+        schema=EXECUTION_PLAN_SCHEMA,
+    )
+    return _plan_from_llm_payload(payload, parsed)
+
+
 def _build_messages(
     payload: ModelingPlanCreate, knowledge_bases: list[KnowledgeBase]
 ) -> list[dict[str, str]]:
