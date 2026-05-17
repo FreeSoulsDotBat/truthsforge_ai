@@ -433,7 +433,7 @@ export function AgentDashboard({
                   })}
                 </div>
                 <p className="mt-2 text-xs text-forge-muted">
-                  Selecionados: {normalizedAllowedProjectIds.length} de 3.
+                  Projetos selecionados: {normalizedAllowedProjectIds.length}.
                 </p>
               </Field>
               <Field
