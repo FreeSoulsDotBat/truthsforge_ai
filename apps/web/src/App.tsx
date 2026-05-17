@@ -2523,7 +2523,10 @@ function App() {
                                 <ExecutionMenuItem
                                   label="Multiagente"
                                   active={multiAgentMode}
-                                  onClick={() => setMultiAgentMode((current) => !current)}
+                                  onClick={() => {
+                                    setMultiAgentMode((current) => !current);
+                                    setModeling3dEnabled(false);
+                                  }}
                                 />
                                 <button
                                   type="button"
