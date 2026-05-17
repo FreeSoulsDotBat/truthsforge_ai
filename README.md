@@ -46,6 +46,8 @@ URLs:
 - Redis/Valkey UI: http://127.0.0.1:8081
 - Qdrant UI: http://127.0.0.1:6333/dashboard
 
+Se a porta `8080` ja estiver ocupada, ajuste `PGADMIN_PORT` em `infra/.env` para uma porta livre, por exemplo `PGADMIN_PORT=18080`, e rode `dev.ps1` novamente.
+
 Testes:
 
 ```powershell

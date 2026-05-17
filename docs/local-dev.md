@@ -32,6 +32,9 @@ Servicos:
 - pgAdmin/Postgres: `http://localhost:8080`
 - Redis Commander/Valkey: `http://127.0.0.1:8081`
 - Qdrant dashboard: `http://127.0.0.1:6333/dashboard`
+
+Se a porta `8080` ja estiver ocupada, ajuste `PGADMIN_PORT` em `infra/.env` para uma porta livre, por exemplo `PGADMIN_PORT=18080`, e rode `dev.ps1` novamente.
+
 - Postgres porta direta: `127.0.0.1:5432`
 - Qdrant porta direta: `127.0.0.1:6333`
 - Valkey porta direta: `127.0.0.1:6379`
