@@ -59,3 +59,37 @@ O pareamento mobile inicial deve usar QR code local. Para o MVP, não haverá au
 ## ADR-012 - 3D/Fusion obrigatório no MVP
 
 Blender real e Fusion conectado são obrigatórios para a trilha atual de modelagem 3D. Fusion deve ser tratado como spec própria do bounded context 3D, com planner, policy, snapshots, rollback, printability, exports e artifacts rastreáveis. O caminho preferido é o Fusion MCP Server local do próprio aplicativo (`/mcp` na porta exibida pelo Fusion, padrão `27182`); o bridge loopback legado permanece apenas como fallback compatível.
+
+## ADR-013 - 3D chat-first integral; remoção do painel; aprovação inline
+
+A experiência de modelagem 3D passa a ser **integralmente conduzida pelo chat**. O painel 3D do dashboard é removido. Configuração de adapters (Blender path, Fusion MCP URL, transports) migra para Configurações gerais. Diagnóstico operacional (capabilities, sessões, snapshots, tool calls, model versions, printability reports) vira modal read-only acessível pelo cabeçalho do chat 3D.
+
+Cada chat marcado como 3D segue uma **state machine única**:
+
+```
+created (title obrigatório) → discovery → planning → approved → executing → editing ↺
+                                              ↑                                ↓
+                                              └────── (rejeição) ──────────────┘
+```
+
+A flag `is_modeling_3d` é por chat, persistida e imutável após criação. Ativar 3D em um chat com histórico não-vazio abre modal que oferece criar um novo chat 3D vazio; não há cópia de mensagens entre chats.
+
+Os modos legados `plan_only`, `approval_required` e `safe_auto` são **removidos** e o backend deixa de aceitá-los. Sempre que o agente julgar que tem contexto suficiente, ele chama a tool `3d.propose_plan` e o backend transiciona o chat para `planning`. O plano aparece no chat como `ModelingPlanCard` com prosa, etapas, badges de risco, banner de aviso para etapas high-risk e dois botões: "Aprovar" e "Rejeitar" (com campo opcional de motivo). Texto livre **não** aciona execução.
+
+A aprovação global do plano cobre todas as etapas, incluindo high-risk (`apply_boolean`, `repair_non_manifold`, `restore_snapshot`, `run_script`). Não há mais aprovação step-a-step após o plano primário aprovado. Edições posteriores (estado `editing`) geram mini-planos auto-aprovados quando só contêm tools allowlistadas não-high_risk; ao tocar em high-risk, o card volta a pedir aprovação inline. Snapshots manuais, rollback explícito, allowlist e auditoria permanecem como guardrails obrigatórios.
+
+A descoberta de contexto aceita anexos com análise profunda: imagens via vision do gateway LLM e arquivos 3D (`STL`/`OBJ`/`STEP`/`3MF`/`BLEND`) via Blender headless extraindo bounding box, contagens, volume, simetria, features e sugestões iniciais.
+
+A allowlist de tools deixa de viver em três arquivos espalhados (`planner.py`, `policy.py`, adapters) e passa a derivar de uma única fonte (`backend/app/modeling/tool_registry.py`) para eliminar divergência silenciosa.
+
+A trajetória de implementação está descrita em `specs/modeling-3d-fusion/plan.md` (6 ondas: docs/ADRs → backend foundations → backend chat orchestration → frontend feature module → frontend cards/aprovação → título obrigatório → QA/handoff).
+
+## ADR-014 - Título de chat obrigatório; remoção da auto-titulação OpenAI
+
+Todo chat (3D ou não) passa a exigir título não vazio antes da primeira mensagem. O frontend bloqueia o input de envio e exige nomeação imediata; o backend rejeita `POST /api/chat/stream` com `HTTP 422` quando `chat.title` estiver ausente ou vazio.
+
+O serviço/endpoint atual que chama a OpenAI para gerar título automático é **removido**, eliminando consumo de tokens dessa chamada. A migração que torna `chats.title NOT NULL` aplica backfill `"Sem título - YYYY-MM-DD"` (derivado de `created_at`) aos chats existentes para preservar dados sem quebrar a constraint.
+
+A motivação combina três pontos: (1) economia de tokens em uma chamada que não agrega valor consistente, (2) clareza explícita de propósito do chat desde o início, (3) suporte ao novo fluxo 3D, onde o título distingue rapidamente sessões de modelagem na sidebar (junto com o `ChatModeling3DBadge`).
+
+Renomeação posterior do chat continua permitida via UI. A obrigatoriedade vale apenas para a transição "chat criado → primeira mensagem enviada".

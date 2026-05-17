@@ -4,14 +4,17 @@ O módulo 3D nasce como um bounded context local para conectar JUDITE e agentes 
 
 ## Estado atual
 
+> **Refatoração v2 em curso.** A v2 (chat-first integral) é a direção definitiva
+> definida em ADR-013. As seções abaixo descrevem a v1 ainda em produção e a v2
+> sendo entregue em 6 ondas (`specs/modeling-3d-fusion/plan.md`). Trechos
+> marcados como `[v1 — em remoção]` deixam de existir após Onda 3.
+
 - Backend FastAPI expõe `/api/3d/*` para execução, approval, snapshots,
-  rollback, tool calls e printability.
-- A experiência primária de criação agora começa no chat: o frontend envia
+  rollback, tool calls e printability. Os endpoints de criação manual de plano
+  e aprovação step-a-step são removidos na Onda 2.
+- A experiência primária de criação acontece no chat: o frontend envia
   `modeling_3d` em `POST /api/chat/stream`, o backend cria um plano MCP 3D
   vinculado à conversa e devolve um card de plano na resposta da JUDITE.
-- A aba `3D` deixa de ser o ponto principal de criação e passa a servir como
-  configuração/diagnóstico dos adapters MCP, histórico de planos, execução,
-  snapshots, rollback e printability.
 - O planner chama a OpenAI Responses API com Structured Outputs (`strict: true`)
   para gerar planos a partir de prompt natural; cai automaticamente para um planner
   heurístico determinístico em qualquer falha (sem chave, modelo inválido, JSON corrompido,
@@ -22,12 +25,134 @@ O módulo 3D nasce como um bounded context local para conectar JUDITE e agentes 
   (`http://127.0.0.1:27182/mcp` por padrão). O add-in desktop legado em
   `apps/fusion-addin/` continua como fallback; sem nenhum deles ativo,
   permanece em `mock`.
-- Adições e alterações normais em tools allowlistadas autoexecutam no fluxo fluido;
-  aprovação humana fica restrita a deleções, ações destrutivas e high-risk.
-- Scripts livres, shell e operações destrutivas seguem fora do caminho feliz.
+- Aprovação humana, snapshots manuais, allowlist e auditoria seguem como
+  guardrails obrigatórios. Scripts livres, shell e operações destrutivas
+  permanecem fora do caminho feliz.
 - Artefatos gerados pelo Blender/Fusion, como `.blend`, `.stl`, `.obj`, `.3mf` e `.step`, entram em `Arquivos` como `generated` quando retornados pelo adapter.
 
-## Experiência chat-first
+## v2 — chat-first integral
+
+A v2 trata cada chat 3D como uma sessão completa de modelagem, da descoberta
+de contexto até a execução e edição. Não existe mais painel 3D no dashboard:
+configuração migra para Configurações gerais e diagnóstico vira modal
+acessível pelo cabeçalho do chat 3D.
+
+### Identidade do chat
+
+Cada chat carrega quatro campos novos no domain:
+
+```python
+class Chat:
+    title: str                              # obrigatório (NOT NULL)
+    is_modeling_3d: bool                    # imutável após criação
+    modeling_software_preference: Literal["auto", "blender", "fusion"] | None
+    modeling_stage: Literal[
+        "discovery", "planning", "approved", "executing", "editing", "completed"
+    ]
+    modeling_plan_id: UUID | None           # plano primário aprovado (1 por chat)
+```
+
+O badge `ChatModeling3DBadge` aparece na sidebar, no header do chat e em
+qualquer card de prévia. Tooltip: "Chat de modelagem 3D".
+
+### State machine
+
+```
+created (title obrigatório) → discovery → planning → approved → executing → editing ↺
+                                              ↑                                ↓
+                                              └────── (rejeição) ──────────────┘
+```
+
+- `discovery`: o agente faz perguntas até ter contexto suficiente.
+- `planning`: o agente chama `3d.propose_plan` e o card aparece no chat.
+- `approved`: usuário clicou "Aprovar"; backend executa todas as etapas.
+- `executing`: execução em andamento; card mostra progresso.
+- `editing`: plano executado; novas mensagens viram mini-planos.
+
+A rejeição (`Rejeitar` no card) retorna o chat para `discovery` com motivo
+opcional registrado na auditoria.
+
+### Tools do agente (substitui `3d.generate_plan`)
+
+| Tool | Quando o agente chama | Efeito |
+|---|---|---|
+| `3d.ask_clarification` | Falta contexto durante descoberta | Pergunta livre ao usuário; sem registro de plano |
+| `3d.analyze_attachment` | Usuário anexou imagem ou arquivo 3D | Vision (imagens) ou Blender headless (arquivos 3D) com análise profunda |
+| `3d.propose_plan` | Agente tem contexto suficiente | Cria `ModelingPlan` `kind="primary"`, transiciona `discovery → planning`, renderiza `ModelingPlanCard` com botões aprovar/rejeitar |
+| `3d.propose_edit_plan` | Mensagem em `editing` sem high-risk | Mini-plano auto-aprovado, executa, renderiza `ModelingEditCard` compacto |
+| `3d.request_high_risk_approval` | Edição inclui tool high-risk | Mini-plano pendente; card volta a pedir aprovação inline |
+
+### Fluxo único (substitui modos `plan_only`/`approval_required`/`safe_auto`)
+
+Os três modos legados são removidos. A flag `is_modeling_3d` é binária e
+imutável após criação. Todo chat 3D segue o mesmo caminho.
+
+A aprovação global do plano cobre todas as etapas, incluindo high-risk
+(`apply_boolean`, `repair_non_manifold`, `restore_snapshot`, `run_script`).
+Não há aprovação step-a-step após o plano primário aprovado. Em edições
+posteriores, apenas tools high-risk reabrem o ciclo de aprovação inline.
+
+### Anexos com análise profunda
+
+Imagens (`png`, `jpg`, `webp`) são comprimidas, têm resolução limitada e
+seguem para o gateway LLM com capacidade vision; o resumo entra no contexto
+do chat.
+
+Arquivos 3D (`stl`, `obj`, `step`, `3mf`, `blend`) entram em análise
+profunda via Blender headless: bounding box, contagens
+(vértices/faces/edges), volume, simetria detectada, features identificáveis
+(furos, fillets aparentes, planos simétricos) e sugestões iniciais de
+planejamento. Limite inicial: 50 MB / 15 s; fallback para metadata mínima
+em caso de timeout.
+
+Endpoint: `POST /api/chat/{id}/attachments/analyze`.
+
+### Ativação 3D em chat com histórico
+
+Se o usuário tentar ativar 3D em chat não-3D com mensagens existentes, o
+frontend abre `EnableModeling3DDialog`:
+
+> "Esse chat não é de modelagem 3D. Criar um novo chat 3D agora?"
+
+Botões: "Criar novo chat 3D" e "Cancelar". O chat original permanece
+intacto; nenhuma mensagem é copiada para o novo chat.
+
+### Configuração e diagnóstico
+
+- **Configurações gerais** ganha seção "Modelagem 3D" com Blender path,
+  Fusion MCP URL, transport mode e status de cada adapter.
+- **`ModelingDiagnosticsModal`** abre pelo cabeçalho do chat 3D e mostra
+  capabilities, sessões, snapshots, tool calls recentes, model versions e
+  printability reports — todos read-only. Sem botões de aprovar, executar
+  ou criar planos.
+
+### Allowlist unificada
+
+A allowlist deixa de viver em três arquivos espalhados (`planner.py`,
+`policy.py`, adapters) e passa a derivar de
+`backend/app/modeling/tool_registry.py`:
+
+```python
+class ToolDescriptor(BaseModel):
+    name: str
+    software: Literal["blender", "fusion"]
+    category: Literal["read_only", "additive", "mutative", "destructive", "high_risk"]
+    schema: dict
+
+TOOL_REGISTRY: dict[str, ToolDescriptor] = {...}
+```
+
+`PLANNER_TOOLSET`, `HIGH_RISK_TOOL_NAMES`, `READ_ONLY_TOOL_NAMES`,
+`BLOCKED_TOOL_PREFIXES` e os arrays nos adapters passam a importar do
+registry para eliminar divergência silenciosa.
+
+## Experiência chat-first (v1 — em remoção pelas Ondas 1–3)
+
+> Esta seção descreve o contrato v1 do chat 3D. A v2 (acima) substitui o
+> campo `modeling_3d.mode` por `chats.is_modeling_3d` + state machine, e
+> substitui a tool monolítica `3d.generate_plan` pelas cinco tools
+> dedicadas. Esta descrição permanece aqui apenas como referência de
+> migração até a Onda 3 estabilizar.
 
 O usuário modela 3D como conversa: ativa **MCP 3D** no menu de execução do
 composer, escolhe software (`auto`, `blender` ou `fusion`) e usa o modo padrão
@@ -144,15 +269,14 @@ com ele por socket local autenticado. A UI diferencia `transport: "http"`
 
 ## Endpoints
 
+### Públicos (mantidos na v2)
+
 - `GET /api/3d/capabilities`: lista adapters MCP e ferramentas disponíveis.
 - `GET /api/3d/sessions`: lista sessões locais registradas.
 - `POST /api/3d/sessions/start`: inicia sessão Blender/Fusion em modo mock/local.
-- `GET /api/3d/plans`: lista planos recentes.
-- `POST /api/3d/plans`: cria plano estruturado a partir de um prompt.
-- `POST /api/3d/plans/{plan_id}/approve`: aprova ou rejeita etapas bloqueadas do plano.
-- `POST /api/3d/plans/{plan_id}/execute`: executa etapas liberadas e bloqueia somente
-  as que exigem aprovação.
-- `POST /api/3d/steps/{step_id}/approve`: aprova ou rejeita uma etapa específica.
+- `GET /api/3d/plans`: lista planos recentes (read-only, consumido por diagnóstico).
+- `POST /api/3d/plans/{plan_id}/approve`: chamado pelo botão "Aprovar" do
+  `ModelingPlanCard` no chat.
 - `GET /api/3d/snapshots`: lista snapshots persistidos, com filtros opcionais
   `plan_id` e `project_id` (filtragem server-side via JSONB).
 - `POST /api/3d/snapshots`: cria snapshot real do workspace 3D (cópia + manifesto + hash).
@@ -167,6 +291,21 @@ com ele por socket local autenticado. A UI diferencia `transport: "http"`
   `plan_id` e `file_id`.
 - `GET /api/3d/model-versions`: lista exports 3D versionados, com filtro opcional
   `project_id`.
+
+### Adicionados na v2
+
+- `POST /api/chat/{chat_id}/attachments/analyze`: dispara `ModelingAttachmentAnalyzer`
+  (vision para imagens, Blender headless para arquivos 3D).
+
+### Removidos na v2 (Onda 2)
+
+- `POST /api/3d/plans`: criação manual de plano via painel deixa de existir;
+  todo plano nasce dentro do chat via tool `3d.propose_plan`.
+- `POST /api/3d/plans/{plan_id}/execute`: execução agora é interna ao chat
+  orchestrator (disparada pela aprovação do card).
+- `POST /api/3d/steps/{step_id}/approve`: aprovação step-a-step removida.
+  Aprovação global do plano cobre todas as etapas; high-risk em edição reabre
+  aprovação inline no chat.
 
 ## Snapshots e rollback
 
@@ -316,7 +455,63 @@ arquivo válido:
 Se a tool for chamada novamente para o mesmo `storage_path`, o arquivo existente
 é reutilizado e a versão já associada ao `source_file_id` não é duplicada.
 
-## UI de chat e painel 3D
+## UI de chat 3D (v2)
+
+A interface do chat 3D é renderizada pelo feature module
+`apps/web/src/features/modeling-3d/`. Tudo passa pelo chat; **não existe mais
+painel 3D no dashboard**.
+
+### Componentes principais
+
+- **`ChatModeling3DBadge`** — ícone identificador exibido na sidebar de chats,
+  no header do chat ativo e em cards de prévia. Tooltip: "Chat de modelagem 3D".
+- **`EnableModeling3DDialog`** — modal aberto pelo menu rápido quando o usuário
+  tenta ativar 3D em chat com histórico não-vazio. Oferece "Criar novo chat 3D"
+  ou "Cancelar". Sem cópia de mensagens.
+- **`ModelingPlanCard`** (plano primário) — aparece no chat quando o agente
+  chama `3d.propose_plan`. Contém:
+  - Prosa descritiva (o que será modelado, físico e processual).
+  - Lista de etapas com `tool_name`, `risk_level` e descrição curta.
+  - Banner amarelo destacado quando há etapas high-risk.
+  - Botões "Aprovar" e "Rejeitar" (com campo opcional de motivo).
+  - Estados visuais: `pending_approval`, `executing` (spinner + progress),
+    `completed`, `failed` (com "tentar novamente" e "revisar plano").
+- **`ModelingEditCard`** (mini-plano) — versão compacta que aparece em
+  `editing`. Sem botões; só resumo do que foi executado e link para detalhes
+  no modal de diagnóstico.
+- **`ModelingDiagnosticsModal`** — read-only, acessível pelo ícone de
+  diagnóstico no cabeçalho do chat 3D. Abas: Adapters, Snapshots, Tool calls,
+  Model versions, Printability reports.
+
+### Configurações gerais (sem painel dedicado)
+
+A seção "Modelagem 3D" em Configurações gerais expõe:
+
+- Caminho do executável Blender (`TRUTHS_FORGE_BLENDER_EXECUTABLE`).
+- URL do Fusion MCP Server (`TRUTHS_FORGE_FUSION_MCP_URL`).
+- Transport MCP (`TRUTHS_FORGE_MCP_TRANSPORT`: `in_process` ou `stdio`).
+- Timeout por etapa (`TRUTHS_FORGE_MODELING_TIMEOUT_SECONDS`, padrão 90).
+- Status atual de cada adapter (mock, adapter ausente, execução real, erro)
+  com detalhes técnicos: transporte, host efetivo, falhas consecutivas, último
+  erro.
+
+### Aprovação
+
+A aprovação acontece exclusivamente pelos botões inline no `ModelingPlanCard`.
+Resposta textual livre **não** aciona execução. Uma vez aprovado, o plano
+primário cobre todas as etapas, incluindo high-risk. Rejeição (com motivo
+opcional) volta o chat para `discovery` e o agente retoma a conversa.
+
+Em edições, mini-planos sem high-risk autoexecutam e renderizam
+`ModelingEditCard` compacto. Se a edição tocar em high-risk, o card retorna a
+pedir aprovação inline.
+
+## UI de chat e painel 3D (v1 — em remoção pelas Ondas 3–4)
+
+> Esta seção descreve a interface v1 (painel 3D do dashboard com aprovação
+> step-a-step). Toda a interface descrita abaixo é desligada na Onda 3. A
+> aprovação por etapa via painel deixa de existir. Mantida aqui apenas como
+> referência de migração.
 
 O chat é a experiência principal de criação 3D. O menu de execução permite
 ativar MCP 3D, escolher software/modo e enviar o prompt para JUDITE; a resposta
@@ -629,9 +824,16 @@ demais (>200 linhas ou hooks dedicados).
 
 ## Próximos incrementos
 
+A refatoração v2 (`specs/modeling-3d-fusion/plan.md`) é a próxima entrega
+maior. Após v2 concluída:
+
 1. Próximas tools Blender ficariam em tier 3 (animação básica, modifiers avançados).
    O tier atual já cobre primitivas, bevel/boolean/subdivision/solidify/material,
    medição, reparo, export e printability.
+2. Expansão da análise profunda de anexos 3D (detecção de simetria avançada,
+   features paramétricas reconhecíveis, recomendações de orientação para print).
+3. DAG não-linear de planos (passos paralelos, dependências explícitas) — fora
+   do escopo da v2.
 
 ## Limite de segurança
 
