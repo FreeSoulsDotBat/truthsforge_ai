@@ -1200,10 +1200,10 @@ def _modeling_plan_chat_summary(plan: ModelingPlan) -> str:
         next_step = "Execução concluída. Use o painel 3D para detalhes, snapshots e printability."
     elif plan.status.value == "failed":
         next_step = "Houve falha na execução. Revise os erros no painel 3D."
-    elif plan.approval_required:
-        next_step = "Revise o card do plano; só etapas destrutivas/high-risk ficam bloqueadas."
     elif plan.mode == ModelingExecutionMode.plan_only:
         next_step = "Revise o card do plano e execute pelo painel 3D quando quiser continuar."
+    elif plan.approval_required:
+        next_step = "Revise o card do plano; só etapas destrutivas/high-risk ficam bloqueadas."
     else:
         next_step = (
             "Vou executar automaticamente as etapas allowlistadas; "
