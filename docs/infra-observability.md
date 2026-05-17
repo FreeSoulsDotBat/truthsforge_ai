@@ -23,7 +23,7 @@ Use estes dados para entrar no pgAdmin:
 
 O email default usa dominio `.dev` porque o pgAdmin rejeita dominios locais especiais como `.local` na conta inicial.
 
-Use `localhost:8080` para abrir a UI. Em algumas instalacoes Windows, `127.0.0.1:8080` pode estar ocupado por servicos locais do PostgreSQL/EnterpriseDB.
+Use `localhost:8080` para abrir a UI. Em algumas instalacoes Windows, `127.0.0.1:8080` pode estar ocupado por servicos locais do PostgreSQL/EnterpriseDB. Se isso acontecer, ajuste `PGADMIN_PORT` em `infra/.env` para uma porta livre, por exemplo `PGADMIN_PORT=18080`, e rode `dev.ps1` novamente.
 
 Se o login disser usuario ou senha invalidos depois de mudar `infra/.env`, rode `.\scripts\reset-pgadmin.ps1`. O pgAdmin guarda usuarios em um volume Docker persistente e nao reaplica automaticamente `PGADMIN_DEFAULT_EMAIL`/`PGADMIN_DEFAULT_PASSWORD` quando o volume ja existe.
 
