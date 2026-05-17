@@ -2479,6 +2479,7 @@ function App() {
                                     setResponseMode("text");
                                     setDeepResearch(false);
                                     setReasoningSummary(false);
+                                    setMultiAgentMode(false);
                                   }}
                                 />
                                 <ExecutionMenuItem

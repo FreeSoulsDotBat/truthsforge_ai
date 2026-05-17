@@ -23,6 +23,7 @@ import type {
   ModelingApprovalRequest,
   ModelingCapabilities,
   ModelingExecutionResult,
+  ModelingModelVersion,
   ModelingPlan,
   ModelingPlanCreate,
   ModelingPrintabilityReport,
@@ -372,6 +373,12 @@ export const api = {
     return request<ModelingPrintabilityReport[]>(
       suffix ? `/api/3d/printability-reports?${suffix}` : "/api/3d/printability-reports"
     );
+  },
+  modelingModelVersions: (params: { project_id?: string } = {}) => {
+    const search = new URLSearchParams();
+    if (params.project_id) search.set("project_id", params.project_id);
+    const suffix = search.toString();
+    return request<ModelingModelVersion[]>(suffix ? `/api/3d/model-versions?${suffix}` : "/api/3d/model-versions");
   }
 };
 

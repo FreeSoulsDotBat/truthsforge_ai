@@ -188,6 +188,8 @@ export interface ModelingToolCall {
   safe_to_retry_after_snapshot_restore: boolean;
   duration_ms?: number | null;
   artifact_paths: string[];
+  artifact_file_ids: string[];
+  model_version_ids: string[];
   created_at: string;
 }
 
@@ -196,6 +198,7 @@ export interface ModelingPrintabilityIssue {
   severity: ModelingPrintabilitySeverity;
   message: string;
   detail: Record<string, unknown>;
+  recommendation: string;
 }
 
 export interface ModelingPrintabilityReport {
@@ -207,6 +210,7 @@ export interface ModelingPrintabilityReport {
   checks_executed: string[];
   issues: ModelingPrintabilityIssue[];
   metrics: Record<string, unknown>;
+  recommendations: string[];
   risk_score: number;
   summary: string;
   report_json: Record<string, unknown>;
@@ -220,6 +224,23 @@ export interface ModelingPrintabilityRequest {
   file_id?: string | null;
   checks?: string[];
   printer_profile?: string | null;
+}
+
+export interface ModelingModelVersion {
+  id: string;
+  project_id?: string | null;
+  plan_id?: string | null;
+  step_id?: string | null;
+  parent_version_id?: string | null;
+  software: ModelingSoftware;
+  source_file_id?: string | null;
+  file_ids: string[];
+  export_format?: string | null;
+  snapshot_id?: string | null;
+  label: string;
+  notes: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface ModelingExecutionResult {

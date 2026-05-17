@@ -102,6 +102,13 @@ def test_modeling_3d_context_is_exclusive_with_other_structured_modes() -> None:
             modeling_3d={"enabled": True},
         )
 
+    with pytest.raises(ValidationError):
+        ChatStreamRequest(
+            message="modele com agentes",
+            multi_agent_mode=True,
+            modeling_3d={"enabled": True},
+        )
+
 
 def test_chat_attachments_have_hard_limits() -> None:
     with pytest.raises(ValidationError):

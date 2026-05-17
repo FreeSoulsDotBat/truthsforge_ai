@@ -78,9 +78,9 @@
 - [x] [P1] [devin] Integrar MCP 3D ao chat como experiência primária de criação.
 - [x] [P1] [devin] Reposicionar aba 3D como configuração, diagnóstico e continuidade operacional.
 - [x] [P1] [devin] Diferenciar mock, adapter ausente, execução real e erro na UI de adapters MCP.
-- [ ] [P1] [any] Criar contrato detalhado do Fusion bridge.
-- [ ] [P1] [any] Versionar exports 3D como artifacts.
-- [ ] [P1] [any] Expandir printability mínima.
+- [x] [P1] [devin] Criar contrato detalhado do Fusion bridge.
+- [x] [P1] [devin] Versionar exports 3D como artifacts.
+- [x] [P1] [devin] Expandir printability mínima com recomendações acionáveis.
 
 ## Mobile, desktop e pareamento
 

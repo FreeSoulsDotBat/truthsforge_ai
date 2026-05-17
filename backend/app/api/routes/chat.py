@@ -1361,6 +1361,25 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
             assistant_message.metadata["modeling_plan"] = plan_metadata
             assistant_message.metadata["modeling_plan_id"] = plan.id
             store.add_message(assistant_message)
+            normalized_title = (session.title or "").strip().lower()
+            default_prompt_title = payload.message.strip()[:48].lower()
+            if normalized_title in DEFAULT_CHAT_TITLES or not normalized_title:
+                should_update_title = True
+            elif session.metadata.get("is_empty_draft") is True:
+                should_update_title = True
+            else:
+                should_update_title = normalized_title == default_prompt_title
+            if should_update_title:
+                title = payload.message.strip()[:72].rstrip() or "Modelagem 3D"
+                session_metadata = dict(session.metadata or {})
+                session_metadata["title_source"] = "modeling_3d_prompt"
+                session_metadata["is_empty_draft"] = False
+                titled_session = session.model_copy(
+                    update={"title": title, "metadata": session_metadata, "updated_at": now_utc()}
+                )
+                if hasattr(store, "upsert_chat_session"):
+                    store.upsert_chat_session(titled_session)
+                yield _sse("session_title", {"session_id": session.id, "title": title})
             yield _runtime_status(
                 "modeling_3d_plan",
                 "Plano 3D criado",

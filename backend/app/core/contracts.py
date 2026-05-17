@@ -479,6 +479,11 @@ class ChatStreamRequest(BaseModel):
             raise ValueError(
                 "Resumo oficial de raciocínio não é aplicado ao fluxo estruturado de modelagem 3D."
             )
+        if self.modeling_3d.enabled and self.multi_agent_mode:
+            raise ValueError(
+                "Fluxo de modelagem 3D via MCP já usa JUDITE como orquestradora e "
+                "não combina com modo multiagente do chat."
+            )
         return self
 
 
@@ -826,6 +831,8 @@ class ModelingToolCall(BaseModel):
     safe_to_retry_after_snapshot_restore: bool = False
     duration_ms: int | None = None
     artifact_paths: list[str] = Field(default_factory=list)
+    artifact_file_ids: list[str] = Field(default_factory=list)
+    model_version_ids: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=now_utc)
 
 
@@ -834,6 +841,7 @@ class ModelingPrintabilityIssue(BaseModel):
     severity: Literal["info", "warning", "error"] = "info"
     message: str = ""
     detail: dict[str, Any] = Field(default_factory=dict)
+    recommendation: str = ""
 
 
 class ModelingPrintabilityReport(BaseModel):
@@ -845,6 +853,7 @@ class ModelingPrintabilityReport(BaseModel):
     checks_executed: list[str] = Field(default_factory=list)
     issues: list[ModelingPrintabilityIssue] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
+    recommendations: list[str] = Field(default_factory=list)
     risk_score: float = Field(default=0.0, ge=0.0, le=1.0)
     summary: str = ""
     report_json: dict[str, Any] = Field(default_factory=dict)
@@ -884,6 +893,8 @@ class ModelingModelVersion(BaseModel):
     parent_version_id: str | None = None
     software: ModelingSoftware
     source_file_id: str | None = None
+    file_ids: list[str] = Field(default_factory=list)
+    export_format: str | None = None
     snapshot_id: str | None = None
     label: str
     notes: str = ""

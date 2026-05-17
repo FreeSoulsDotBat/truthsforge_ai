@@ -97,8 +97,24 @@ def _dimensions_mm(body: dict[str, Any]) -> tuple[float, float, float]:
     )
 
 
+RECOMMENDATIONS = {
+    "volume": "Reparar corpo aberto antes de exportar para impressão.",
+    "is_solid": "Converter para sólido fechado antes do export final.",
+    "bounding_box": "Revisar escala e dimensões mínimas do perfil de impressora.",
+    "wall_thickness_approx": "Aumentar espessura mínima ou ajustar parâmetros do sketch.",
+    "overhang_approx": "Reorientar peça ou planejar suportes no slicer.",
+    "thin_features": "Reforçar regiões finas antes de exportar.",
+}
+
+
 def _issue(check: str, severity: str, message: str, detail: dict[str, Any]) -> dict[str, Any]:
-    return {"check": check, "severity": severity, "message": message, "detail": detail}
+    return {
+        "check": check,
+        "severity": severity,
+        "message": message,
+        "detail": detail,
+        "recommendation": RECOMMENDATIONS.get(check, "Revisar o aviso antes do export final."),
+    }
 
 
 def _check_volume(body: dict[str, Any]) -> list[dict[str, Any]]:
@@ -272,6 +288,13 @@ def compute_printability_report(
     risk_score = min(
         1.0, sum(SEVERITY_WEIGHTS.get(issue["severity"], 0.05) for issue in issues)
     )
+    recommendations = list(
+        dict.fromkeys(
+            str(issue.get("recommendation"))
+            for issue in issues
+            if str(issue.get("recommendation") or "").strip()
+        )
+    )
     return {
         "message": (
             f"Printability validada em {len(bodies)} corpo(s); "
@@ -281,6 +304,7 @@ def compute_printability_report(
         "checks_executed": sorted(selected_checks),
         "issues": issues,
         "metrics": metrics,
+        "recommendations": recommendations,
         "risk_score": round(risk_score, 3),
         "printer_profile": printer_profile,
     }

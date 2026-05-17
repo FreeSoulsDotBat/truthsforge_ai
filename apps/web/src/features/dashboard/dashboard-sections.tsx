@@ -61,6 +61,7 @@ import type {
   KnowledgeBaseDocument,
   KnowledgeBaseUpsert,
   ModelingCapabilities,
+  ModelingModelVersion,
   ModelingPlan,
   ModelingPlanStep,
   ModelingPrintabilityReport,
@@ -850,10 +851,20 @@ export function ModelingDashboard({ projects, onOpenChat }: { projects: ProjectR
     enabled: !!selectedPlan,
     staleTime: 10_000
   });
+  const modelVersionsQuery = useQuery({
+    queryKey: ["modeling-model-versions", selectedPlan?.project_id ?? "__all__"],
+    queryFn: () => api.modelingModelVersions(selectedPlan?.project_id ? { project_id: selectedPlan.project_id } : {}),
+    enabled: !!selectedPlan,
+    staleTime: 10_000
+  });
 
   const snapshotsForPlan = useMemo<ModelingSnapshot[]>(() => snapshotsQuery.data ?? [], [snapshotsQuery.data]);
   const toolCalls = toolCallsQuery.data ?? [];
   const printabilityReports = printabilityQuery.data ?? [];
+  const modelVersions = useMemo<ModelingModelVersion[]>(
+    () => (modelVersionsQuery.data ?? []).filter((version) => version.plan_id === selectedPlan?.id),
+    [modelVersionsQuery.data, selectedPlan?.id]
+  );
   const [pendingRestoreSnapshotId, setPendingRestoreSnapshotId] = useState<string | null>(null);
   const pendingRestoreSnapshot = useMemo<ModelingSnapshot | null>(() => {
     if (!pendingRestoreSnapshotId) return null;
@@ -887,6 +898,8 @@ export function ModelingDashboard({ projects, onOpenChat }: { projects: ProjectR
       const result = await api.executeModelingPlan(selectedPlan.id);
       setSelectedPlanId(result.plan.id);
       await modelingQuery.refetch();
+      await toolCallsQuery.refetch();
+      await modelVersionsQuery.refetch();
       setStatus(
         result.blocked_step_ids.length
           ? "Execução parcial: ainda há etapas aguardando aprovação."
@@ -1180,6 +1193,27 @@ export function ModelingDashboard({ projects, onOpenChat }: { projects: ProjectR
 
           {selectedPlan && (
             <div className="rounded-md border border-forge-line bg-[#141615] p-3">
+              <PanelTitle icon={<FileText size={18} />} title="Model versions / exports" />
+              <div className="mt-3 space-y-2">
+                {modelVersions.length === 0 && <EmptyPanel text="Nenhum export versionado deste plano ainda." />}
+                {modelVersions.slice(0, 8).map((version) => (
+                  <div key={version.id} className="rounded-md border border-forge-line bg-[#0e0f0e] p-3 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="line-clamp-1 font-semibold">{version.label}</span>
+                      <Badge>{version.export_format ?? version.software}</Badge>
+                    </div>
+                    <p className="mt-1 text-forge-muted">
+                      {version.file_ids.length} arquivo(s) · {formatTimestamp(version.created_at)}
+                    </p>
+                    {version.notes && <p className="mt-1 line-clamp-2 text-forge-muted">{version.notes}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {selectedPlan && (
+            <div className="rounded-md border border-forge-line bg-[#141615] p-3">
               <PanelTitle icon={<Archive size={18} />} title="Snapshots do plano" />
               <div className="mt-3 space-y-2">
                 {snapshotsForPlan.length === 0 && <EmptyPanel text="Nenhum snapshot deste plano ainda." />}
@@ -1230,7 +1264,10 @@ export function ModelingDashboard({ projects, onOpenChat }: { projects: ProjectR
                       </p>
                     )}
                     {call.artifact_paths.length > 0 && (
-                      <p className="mt-1 line-clamp-1 text-forge-muted">Artefatos: {call.artifact_paths.length}</p>
+                      <p className="mt-1 line-clamp-1 text-forge-muted">
+                        Artefatos: {call.artifact_paths.length} path(s), {call.artifact_file_ids.length} arquivo(s),{" "}
+                        {call.model_version_ids.length} versão(ões)
+                      </p>
                     )}
                   </div>
                 ))}
@@ -1256,6 +1293,15 @@ export function ModelingDashboard({ projects, onOpenChat }: { projects: ProjectR
                       </Badge>
                     </div>
                     <p className="mt-1 line-clamp-2 text-forge-muted">{report.summary}</p>
+                    {report.recommendations.length > 0 && (
+                      <ul className="mt-2 space-y-1 text-forge-muted">
+                        {report.recommendations.slice(0, 3).map((recommendation) => (
+                          <li key={`${report.id}-${recommendation}`} className="rounded bg-[#141615] p-2">
+                            {recommendation}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                     {report.issues.length > 0 && (
                       <ul className="mt-2 space-y-1">
                         {report.issues.slice(0, 4).map((issue, index) => (
@@ -1267,6 +1313,9 @@ export function ModelingDashboard({ projects, onOpenChat }: { projects: ProjectR
                             ].join(" ")}
                           >
                             <span className="font-semibold">[{issue.severity}]</span> {issue.check}: {issue.message}
+                            {issue.recommendation && (
+                              <span className="mt-1 block text-forge-muted">{issue.recommendation}</span>
+                            )}
                           </li>
                         ))}
                       </ul>

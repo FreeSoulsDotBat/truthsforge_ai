@@ -527,11 +527,13 @@ def test_chat_stream_can_create_modeling_plan_inline() -> None:
 
     assert response.status_code == 200
     assert "event: modeling_plan" in response.text
+    assert "event: session_title" in response.text
     assert "event: done" in response.text
 
     sessions = client.get("/api/chat/sessions")
     assert sessions.status_code == 200
     session = next(item for item in sessions.json() if item["project_id"] == project_id)
+    assert session["title"].startswith("Crie no Blender")
     details = client.get(f"/api/chat/sessions/{session['id']}")
     assert details.status_code == 200
     messages = details.json()["messages"]

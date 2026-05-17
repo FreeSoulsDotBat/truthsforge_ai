@@ -5,8 +5,10 @@
 - [x] [P1] [devin] Renderizar card de plano 3D dentro do chat.
 - [x] [P1] [devin] Mover a criação primária para o chat e deixar a aba 3D como configuração/diagnóstico/continuidade.
 - [x] [P1] [devin] Diferenciar mock, adapter ausente, execução real e erro na UI de adapters MCP.
-- [ ] [P1] [any] Criar contrato detalhado do Fusion bridge.
+- [x] [P1] [devin] Criar contrato detalhado do Fusion bridge.
 - [ ] [P1] [any] Validar Blender real como caminho obrigatório quando configurado.
-- [ ] [P1] [any] Implementar versionamento de exports como artifacts.
-- [ ] [P1] [any] Expandir printability mínima.
+- [x] [P1] [devin] Implementar versionamento de exports como artifacts.
+- [x] [P1] [devin] Expandir printability mínima com recomendações acionáveis.
+- [x] [P1] [devin] Ampliar planner Fusion para tools seguras de design/sketch/export.
+- [x] [P1] [devin] Corrigir exclusividade MCP 3D vs multiagente e persistência de título no chat.
 - [ ] [P1] [any] Testar plano/aprovação/execução/snapshot/rollback/export.

@@ -18,6 +18,7 @@ from app.core.contracts import (
     ModelingCapability,
     ModelingErrorEnvelope,
     ModelingExecutionResult,
+    ModelingModelVersion,
     ModelingPlan,
     ModelingPlanCreate,
     ModelingPlannerSource,
@@ -614,8 +615,11 @@ class ModelingService:
         if is_real_run and result:
             raw_issues = result.get("issues") or []
             issues = [
-                ModelingPrintabilityIssue(**item) for item in raw_issues if isinstance(item, dict)
+                ModelingPrintabilityIssue(**ModelingService._normalize_printability_issue(item))
+                for item in raw_issues
+                if isinstance(item, dict)
             ]
+            recommendations = ModelingService._printability_recommendations(issues, result)
             return ModelingPrintabilityReport(
                 project_id=payload.project_id,
                 plan_id=payload.plan_id,
@@ -624,9 +628,10 @@ class ModelingService:
                 checks_executed=list(result.get("checks_executed") or payload.checks),
                 issues=issues,
                 metrics=dict(result.get("metrics") or {}),
+                recommendations=recommendations,
                 risk_score=float(result.get("risk_score") or 0.0),
                 summary=str(result.get("message") or "Printability validada."),
-                report_json=result,
+                report_json={**result, "recommendations": recommendations},
             )
         return ModelingPrintabilityReport(
             project_id=payload.project_id,
@@ -636,6 +641,12 @@ class ModelingService:
             checks_executed=list(payload.checks),
             issues=[],
             metrics={},
+            recommendations=[
+                (
+                    "Configure TRUTHS_FORGE_BLENDER_EXECUTABLE para trocar o placeholder "
+                    "por validação real."
+                )
+            ],
             risk_score=0.0,
             summary=(
                 "Blender não está conectado; relatório de printability é placeholder. "
@@ -643,6 +654,42 @@ class ModelingService:
             ),
             report_json=output,
         )
+
+    @staticmethod
+    def _normalize_printability_issue(item: dict[str, Any]) -> dict[str, Any]:
+        recommendation = item.get("recommendation")
+        if not isinstance(recommendation, str) or not recommendation.strip():
+            recommendation = ModelingService._recommendation_for_issue(item)
+        return {**item, "recommendation": recommendation}
+
+    @staticmethod
+    def _recommendation_for_issue(issue: dict[str, Any]) -> str:
+        check = str(issue.get("check") or "")
+        if check in {"non_manifold", "volume", "is_solid"}:
+            return "Reparar malha/corpo fechado antes de exportar para impressão."
+        if check in {"thickness_approx", "wall_thickness_approx", "thin_features"}:
+            return "Aumentar espessura mínima ou aplicar solidify antes da impressão."
+        if check == "overhang_approx":
+            return "Reorientar peça ou planejar suportes no slicer."
+        if check in {"loose_parts", "normals"}:
+            return "Limpar geometria e recalcular normais antes do export final."
+        if check == "bounding_box":
+            return "Revisar escala e dimensões mínimas do perfil de impressora."
+        return "Revisar o aviso antes de aprovar execução/export final."
+
+    @staticmethod
+    def _printability_recommendations(
+        issues: list[ModelingPrintabilityIssue], result: dict[str, Any]
+    ) -> list[str]:
+        raw = result.get("recommendations")
+        if isinstance(raw, list):
+            recommendations = [str(item).strip() for item in raw if str(item).strip()]
+        else:
+            recommendations = []
+        for issue in issues:
+            if issue.recommendation:
+                recommendations.append(issue.recommendation)
+        return list(dict.fromkeys(recommendations))
 
     def _dispatch_step(self, step: ModelingPlanStep, *, plan: ModelingPlan) -> dict[str, Any]:
         """Route a step to the right local handler.
@@ -719,6 +766,16 @@ class ModelingService:
         artifact_paths = [
             value for value in output.get("artifact_paths", []) if isinstance(value, str) and value
         ]
+        artifact_file_ids = [
+            value
+            for value in output.get("platform_file_ids", [])
+            if isinstance(value, str) and value
+        ]
+        model_version_ids = [
+            value
+            for value in output.get("model_version_ids", [])
+            if isinstance(value, str) and value
+        ]
         envelope = _envelope_from_output(output) if not ok else None
         record = ModelingToolCall(
             plan_id=plan.id,
@@ -739,6 +796,8 @@ class ModelingService:
             ),
             duration_ms=duration_ms,
             artifact_paths=artifact_paths,
+            artifact_file_ids=artifact_file_ids,
+            model_version_ids=model_version_ids,
         )
         return self.store.add_modeling_tool_call(record)
 
@@ -802,10 +861,64 @@ class ModelingService:
 
         if not created_or_existing:
             return output
+        model_version_ids = self._register_model_versions(
+            created_or_existing,
+            output=output,
+            plan=plan,
+            step=step,
+        )
         return {
             **output,
             "platform_file_ids": [platform_file.id for platform_file in created_or_existing],
+            "model_version_ids": model_version_ids,
         }
+
+    def _register_model_versions(
+        self,
+        files: list[PlatformFile],
+        *,
+        output: dict[str, Any],
+        plan: ModelingPlan,
+        step: ModelingPlanStep,
+    ) -> list[str]:
+        if not hasattr(self.store, "add_modeling_model_version"):
+            return []
+        existing_versions = (
+            self.store.list_modeling_model_versions(project_id=plan.project_id)
+            if hasattr(self.store, "list_modeling_model_versions")
+            else []
+        )
+        existing_by_source = {
+            version.source_file_id: version
+            for version in existing_versions
+            if version.source_file_id
+        }
+        version_ids: list[str] = []
+        for platform_file in files:
+            existing = existing_by_source.get(platform_file.id)
+            if existing:
+                version_ids.append(existing.id)
+                continue
+            version = ModelingModelVersion(
+                project_id=plan.project_id,
+                plan_id=plan.id,
+                step_id=step.id,
+                software=step.software,
+                source_file_id=platform_file.id,
+                file_ids=[platform_file.id],
+                export_format=Path(platform_file.filename).suffix.lower().lstrip(".") or None,
+                label=f"{step.software.value} export {platform_file.filename}",
+                notes=str(output.get("message") or ""),
+                metadata={
+                    "conversation_id": plan.conversation_id,
+                    "tool_name": step.tool_name,
+                    "artifact_path": platform_file.storage_path,
+                    "checksum_sha256": platform_file.checksum_sha256,
+                },
+            )
+            self.store.add_modeling_model_version(version)
+            version_ids.append(version.id)
+        return version_ids
 
     @staticmethod
     def _is_path_inside_data_dir(path: Path) -> bool:

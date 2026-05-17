@@ -6,6 +6,7 @@ from app.core.contracts import (
     ModelingApprovalRequest,
     ModelingCapabilities,
     ModelingExecutionResult,
+    ModelingModelVersion,
     ModelingPlan,
     ModelingPlanCreate,
     ModelingPrintabilityReport,
@@ -164,3 +165,11 @@ def list_printability_reports(
     file_id: str | None = Query(default=None),
 ) -> list[ModelingPrintabilityReport]:
     return _service().list_printability_reports(plan_id=plan_id, file_id=file_id)
+
+
+@router.get("/model-versions", response_model=list[ModelingModelVersion])
+def list_model_versions(project_id: str | None = Query(default=None)) -> list[ModelingModelVersion]:
+    store = get_store()
+    if not hasattr(store, "list_modeling_model_versions"):
+        return []
+    return store.list_modeling_model_versions(project_id=project_id)
