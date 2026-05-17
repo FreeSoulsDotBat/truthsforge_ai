@@ -734,11 +734,11 @@ class ModelingPlan(BaseModel):
     project_id: str | None = None
     conversation_id: str | None = None
     prompt: str
-    mode: ModelingExecutionMode = ModelingExecutionMode.approval_required
+    mode: ModelingExecutionMode = ModelingExecutionMode.safe_auto
     software_choice: ModelingSoftware
     confidence: float = Field(default=0.7, ge=0, le=1)
-    approval_required: bool = True
-    status: ModelingPlanStatus = ModelingPlanStatus.waiting_approval
+    approval_required: bool = False
+    status: ModelingPlanStatus = ModelingPlanStatus.approved
     rationale: str = ""
     assumptions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
