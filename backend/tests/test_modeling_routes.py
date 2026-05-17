@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from app.main import app
 from app.modeling.blender_adapter import BlenderAdapter
+from app.modeling.fusion_adapter import FusionDesktopAdapter
 from app.modeling.workspace import workspace_dir
 from app.storage.store import get_store
 
@@ -39,7 +40,9 @@ def test_modeling_capabilities_are_exposed() -> None:
     assert "fusion.validate_printability" in adapter_tools["fusion"]
 
 
-def test_modeling_plan_requires_approval_and_can_execute_after_approval() -> None:
+def test_modeling_plan_requires_approval_and_can_execute_after_approval(monkeypatch) -> None:
+    monkeypatch.setattr(FusionDesktopAdapter, "is_available", lambda self: False)
+
     client = TestClient(app)
     created = client.post(
         "/api/3d/plans",

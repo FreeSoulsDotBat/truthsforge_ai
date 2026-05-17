@@ -809,6 +809,13 @@ export function ModelingDashboard({ projects, onOpenChat }: { projects: ProjectR
   const [projectId, setProjectId] = useState<string>("");
   const [isBusy, setIsBusy] = useState(false);
   const [status, setStatus] = useState("");
+  const generalProject = useMemo(
+    () => projects.find((project) => project.is_general) ?? projects[0] ?? null,
+    [projects]
+  );
+  const selectedModelingProjectId = projects.some((project) => project.id === projectId)
+    ? projectId
+    : generalProject?.id || "";
   const modelingQuery = useQuery({
     queryKey: ["modeling-dashboard"],
     queryFn: async () => {
@@ -918,7 +925,7 @@ export function ModelingDashboard({ projects, onOpenChat }: { projects: ProjectR
     try {
       await api.startModelingSession({
         software,
-        project_id: projectId || null,
+        project_id: selectedModelingProjectId || null,
         force_mock: true
       });
       setStatus(`Sessão ${software} registrada. Instale o adapter desktop para execução real.`);
@@ -1042,16 +1049,20 @@ export function ModelingDashboard({ projects, onOpenChat }: { projects: ProjectR
             <div className="mt-4 grid gap-3 md:grid-cols-3">
               <Field label="Projeto">
                 <select
-                  value={projectId}
+                  value={selectedModelingProjectId}
                   onChange={(event) => setProjectId(event.target.value)}
+                  disabled={!projects.length}
                   className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-sm text-forge-text"
                 >
-                  <option value="">Contexto geral</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {projectDisplayName(project)}
-                    </option>
-                  ))}
+                  {projects.length ? (
+                    projects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {projectDisplayName(project)}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">Nenhum projeto disponível</option>
+                  )}
                 </select>
               </Field>
               <InfoRow label="Experiência principal" value="Chat com MCP 3D" />

@@ -76,6 +76,11 @@ class Settings(BaseModel):
     modeling_mcp_transport: str = Field(
         default_factory=lambda: os.getenv("TRUTHS_FORGE_MCP_TRANSPORT", "in_process").lower()
     )
+    fusion_mcp_url: str = Field(
+        default_factory=lambda: os.getenv(
+            "TRUTHS_FORGE_FUSION_MCP_URL", "http://127.0.0.1:27182/mcp"
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",

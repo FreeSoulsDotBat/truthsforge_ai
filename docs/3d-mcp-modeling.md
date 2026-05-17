@@ -18,7 +18,10 @@ O módulo 3D nasce como um bounded context local para conectar JUDITE e agentes 
   tool fora da allowlist).
 - O executor usa adapter MCP local com fallback `mock`.
 - Blender já pode executar um subconjunto seguro por `blender --background` quando configurado.
-- Fusion 360 tem bridge real via add-in desktop em `apps/fusion-addin/`; sem add-in ativo, permanece em `mock`.
+- Fusion 360 usa primeiro o **Fusion MCP Server** local do próprio aplicativo
+  (`http://127.0.0.1:27182/mcp` por padrão). O add-in desktop legado em
+  `apps/fusion-addin/` continua como fallback; sem nenhum deles ativo,
+  permanece em `mock`.
 - Ações mutáveis exigem aprovação humana por padrão.
 - Scripts livres, shell e operações destrutivas seguem fora do caminho feliz.
 - Artefatos gerados pelo Blender/Fusion, como `.blend`, `.stl`, `.obj`, `.3mf` e `.step`, entram em `Arquivos` como `generated` quando retornados pelo adapter.
@@ -103,6 +106,40 @@ O workspace fica em `.local/modeling/workspaces/<project>/<plan>`. O runner atua
   rollback exige snapshot.
 
 Isso é proposital: a LLM cria intenção e plano, mas não injeta Python livre no Blender.
+
+## Fusion 360 local
+
+Para ativar execução real no Fusion 360, abra o aplicativo e habilite
+**Fusion MCP Server** nas preferências do Fusion. A porta padrão exibida pelo
+Fusion é:
+
+```text
+http://127.0.0.1:27182/mcp
+```
+
+O backend usa essa porta como caminho preferido via `TRUTHS_FORGE_FUSION_MCP_URL`.
+Quando o backend roda em Docker e a URL configurada aponta para `127.0.0.1` ou
+`localhost`, o adapter também tenta `host.docker.internal` automaticamente para
+alcançar o Fusion aberto no Windows.
+
+Variáveis:
+
+- `TRUTHS_FORGE_FUSION_MCP_URL`: endpoint HTTP do Fusion MCP Server, padrão
+  `http://127.0.0.1:27182/mcp`.
+- `TRUTHS_FORGE_FUSION_BRIDGE_HOST`: override apenas para o bridge legado por
+  discovery file/socket.
+
+Importante: o MCP oficial do Fusion expõe uma ferramenta genérica de execução
+Python. Truth's Forge **não** repassa script livre gerado por LLM. O adapter
+mantém o mesmo contrato seguro do bounded context 3D: só aceita ferramentas
+`fusion.*` allowlistadas pelo planner/policy e as traduz para scripts
+determinísticos do backend antes de chamar `fusion_mcp_execute`.
+
+O bridge legado `apps/fusion-addin/` permanece compatível para setups antigos.
+Nesse modo, o add-in grava `.local/state/fusion-bridge.json` e o backend fala
+com ele por socket local autenticado. A UI diferencia `transport: "http"`
+(Fusion MCP oficial), `transport: "local"` (bridge legado), `transport: "mock"`
+(adapter ausente) e erros reais.
 
 ## Endpoints
 
@@ -398,7 +435,7 @@ Erros seguem códigos JSON-RPC: `PARSE_ERROR`, `METHOD_NOT_FOUND`,
 
 ## Bridge Fusion 360 (add-in desktop)
 
-O add-in fica em [`apps/fusion-addin/`](../apps/fusion-addin/) e é instalado
+O add-in fica em `apps/fusion-addin/` e é instalado
 pelo painel **Utilities → Scripts and Add-Ins → Add-Ins → + Add** do Fusion
 apontando para essa pasta (instruções detalhadas no README do próprio add-in).
 
@@ -509,7 +546,7 @@ com `data_dir` customizado continuam sincronizados.
 
 O `fusion.validate_printability` agora roda checks geométricos reais
 diretamente da API do Fusion, em vez do placeholder original. A lógica
-ficou em [`apps/fusion-addin/printability_logic.py`](../apps/fusion-addin/printability_logic.py)
+ficou em `apps/fusion-addin/printability_logic.py`
 como módulo puro (sem deps `adsk`), o que permite testar todos os
 thresholds via CI fora do Fusion.
 

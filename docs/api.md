@@ -110,7 +110,7 @@ devem permanecer auditáveis conforme `specs/observability-quality/`.
 - `POST /api/3d/validate/printability`
 - `GET /api/3d/printability-reports`
 
-O modulo 3D usa MCP local com fallback mock. O Blender executa ferramentas allowlistadas em background quando `TRUTHS_FORGE_BLENDER_EXECUTABLE` aponta para o executavel; o Fusion 360 usa um add-in desktop via discovery file e socket loopback quando instalado. Sem adapter conectado, as chamadas retornam envelopes auditaveis de mock/erro seguro.
+O modulo 3D usa MCP local com fallback mock. O Blender executa ferramentas allowlistadas em background quando `TRUTHS_FORGE_BLENDER_EXECUTABLE` aponta para o executavel. O Fusion 360 usa primeiro o Fusion MCP Server local do aplicativo em `TRUTHS_FORGE_FUSION_MCP_URL` (`http://127.0.0.1:27182/mcp` por padrao) e cai para o bridge desktop legado por discovery file/socket loopback quando necessario. Mesmo no MCP oficial, o backend so envia scripts determinísticos para tools `fusion.*` allowlistadas; sem adapter conectado, as chamadas retornam envelopes auditaveis de mock/erro seguro.
 
 ## OpenAPI
 

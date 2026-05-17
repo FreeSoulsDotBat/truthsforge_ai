@@ -70,7 +70,9 @@ Objetivo: consolidar o modulo mais alinhado a arquitetura e remover falsas prome
 - Manter Blender real como caminho obrigatorio quando configurado.
 - Melhorar UI para diferenciar mock, adapter ausente, execucao real e erro.
 - Melhorar validacoes de malha/printability.
-- Tratar Fusion bridge como obrigatorio para a trilha atual, com spec propria, add-in/adapter real e loopback local.
+- Tratar Fusion como obrigatorio para a trilha atual, com spec propria,
+  adapter real pelo Fusion MCP Server local (`/mcp` na porta do aplicativo) e
+  bridge loopback legado como fallback.
 - Registrar versoes de modelos e exports como artifacts.
 
 ## Fase 6 - Mobile, pairing e seguranca

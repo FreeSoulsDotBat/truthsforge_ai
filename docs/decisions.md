@@ -58,4 +58,4 @@ O pareamento mobile inicial deve usar QR code local. Para o MVP, não haverá au
 
 ## ADR-012 - 3D/Fusion obrigatório no MVP
 
-Blender real e Fusion bridge são obrigatórios para a trilha atual de modelagem 3D. Fusion deve ser tratado como spec própria do bounded context 3D, com planner, policy, snapshots, rollback, printability, exports e artifacts rastreáveis.
+Blender real e Fusion conectado são obrigatórios para a trilha atual de modelagem 3D. Fusion deve ser tratado como spec própria do bounded context 3D, com planner, policy, snapshots, rollback, printability, exports e artifacts rastreáveis. O caminho preferido é o Fusion MCP Server local do próprio aplicativo (`/mcp` na porta exibida pelo Fusion, padrão `27182`); o bridge loopback legado permanece apenas como fallback compatível.
