@@ -105,13 +105,30 @@ PlanCard + EditCard), `pnpm typecheck` limpo,
 - [x] [P1] [any] Tratamento de erro com "Tentar novamente" e "Revisar plano" inline em estado `failed`.
 - [ ] [P1] [Onda 5/6] SSE handler dedicado para `modeling_execution_progress`/`completion`/`failure` — esperando o orchestrator backend emitir os eventos no stream. Até lá, o card é atualizado pela resposta direta de `approve+execute` via `applyPlanToSession` no App.tsx.
 
-### Onda 5 — Título obrigatório do chat
+### Onda 5 — Título obrigatório do chat (frontend) — pronto para iniciar
 
-- [ ] [P1] [any] Frontend bloqueia input quando `chat.title` vazio; modal pede título no primeiro acesso.
-- [ ] [P1] [any] Backend retorna 422 quando `chat.title` ausente em `POST /api/chat/stream`.
-- [ ] [P1] [any] Remover serviço/endpoint de auto-titulação OpenAI; atualizar docs.
-- [ ] [P1] [any] Confirmar migração `002_chats_title_not_null` aplicada.
-- [ ] [P1] [any] Criar `test_chat_title_validation.py`.
+Backend já está totalmente preparado desde Onda 2 (rotas, validação 422,
+remoção de auto-titulação OpenAI, migração 002 com backfill). Falta só
+o frontend e o flip da feature flag.
+
+**Sub-etapas concretas** (ver `handoff.md` para guia step-by-step):
+
+- [ ] [P1] [any] **5.1** Criar `apps/web/src/features/chat/components/ChatTitleRequiredDialog.tsx`: modal acessível (`role="dialog"`), input com `min_length=1`, autofocus, ESC cancela, Enter confirma. Confirma desabilita com título vazio/whitespace ou em `DEFAULT_CHAT_TITLES`. Copy explicando economia de tokens.
+- [ ] [P1] [any] **5.1.test** `ChatTitleRequiredDialog.test.tsx` (Vitest + Testing Library): open/close, validation, ESC, Enter, busy state.
+- [ ] [P1] [any] **5.2** Criar `apps/web/src/features/chat/hooks/useChatTitleGate.ts` que decide quando `needsTitle === true` (sessão nova, título vazio, ou em DEFAULT_CHAT_TITLES) e expõe `openTitleDialog`.
+- [ ] [P1] [any] **5.3** Wire no `App.tsx`: antes de `streamChat`, checar `gate.needsTitle`; se sim, abrir modal, aguardar `onConfirm`, atualizar `session.title` localmente, e passar `title` no payload. Em `onError` do streamChat, abrir o mesmo modal quando reason `chat_title_required`.
+- [ ] [P1] [any] **5.4** Em `apps/web/src/lib/api.ts`, garantir que o `streamChat.onError` é chamado com `reason: "chat_title_required"` quando o backend devolve HTTP 422 com esse `detail.error`.
+- [ ] [P1] [any] **5.5** Flag flip: `TRUTHS_FORGE_REQUIRE_CHAT_TITLE=true` em `infra/docker-compose.dev.yml` e `infra/.env.example`.
+- [ ] [P1] [any] **5.6** Smoke test manual: criar chat novo → modal aparece → confirma → mensagem sobe sem 422. Chats antigos (com título da migração 002) continuam funcionando sem modal.
+- [ ] [P1] [any] **5.7** Atualizar `docs/application-map.md` (fluxo de criação de chat com título obrigatório) e `README.md` (remover qualquer menção a auto-titulação).
+- [ ] [P1] [any] **5.8** Atualizar `specs/modeling-3d-fusion/tasks.md` (este arquivo) e `handoff.md` marcando Onda 5 como concluída.
+
+**Contratos backend já implementados (não precisam mexer):**
+- `ChatStreamRequest.title: str | None = None` (Onda 2.9)
+- `POST /api/chat/stream` retorna `HTTP 422` com `detail={"error": "chat_title_required", "message": "..."}` quando flag ativa e título inválido (Onda 2.9)
+- Migração `002_chats_title_not_null` backfill `Sem título - YYYY-MM-DD` (Onda 2.2)
+- Auto-titulação OpenAI removida (helpers + gateway method + provider) (Onda 2.10)
+- Testes backend: `test_chat_title_required.py` (Onda 2.9, 6 testes)
 
 ### Onda 6 — QA, docs finais e handoff
 
