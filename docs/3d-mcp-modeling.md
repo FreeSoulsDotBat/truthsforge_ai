@@ -181,11 +181,13 @@ O contrato do chat recebe:
 }
 ```
 
-Quando `modeling_3d.enabled=true`, `ChatStreamRequest` não pode usar geração
-de imagem, Deep Research ou resumo oficial de raciocínio no mesmo request. O
-backend cria a mensagem do usuário, chama `ModelingService.create_plan` com
-`conversation_id` da sessão, emite SSE `modeling_plan` e persiste a resposta da
-JUDITE com:
+Quando `modeling_3d.enabled=true`, o frontend normaliza o request para texto
+simples antes do streaming: geração de imagem, Deep Research, resumo oficial de
+raciocínio, raciocínio longo e multiagente ficam desativados para aquele envio.
+Isso preserva o contrato exclusivo do `ChatStreamRequest` e impede que estados
+antigos do menu de execução façam o chat 3D cair no fluxo padrão. O backend cria
+a mensagem do usuário, chama `ModelingService.create_plan` com `conversation_id`
+da sessão, emite SSE `modeling_plan` e persiste a resposta da JUDITE com:
 
 - `metadata.response_mode = "modeling_3d"`
 - `metadata.modeling_plan_id`

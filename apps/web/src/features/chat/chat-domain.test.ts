@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatMessage, ModelingPlan } from "../../types/api";
-import { initialAssistantStatus, withModelingPlan } from "./chat-domain";
+import { initialAssistantStatus, normalizeStreamExecutionModes, withModelingPlan } from "./chat-domain";
 
 function buildMessage(): ChatMessage {
   return {
@@ -79,5 +79,26 @@ describe("chat-domain modeling 3D helpers", () => {
 
     expect(status.stage).toBe("modeling_3d");
     expect(status.label).toContain("3D");
+  });
+
+  it("normalizes incompatible chat modes when MCP 3D is enabled", () => {
+    const modes = normalizeStreamExecutionModes({
+      reasoningOverride: "long",
+      deepResearch: true,
+      responseMode: "image",
+      reasoningSummary: true,
+      multiAgentMode: true,
+      modeling3d: { enabled: true, mode: "safe_auto", software_override: "blender" }
+    });
+
+    expect(modes).toMatchObject({
+      reasoningOverride: "default",
+      deepResearch: false,
+      responseMode: "text",
+      reasoningSummary: false,
+      multiAgentMode: false,
+      imageModelEnabled: false,
+      modeling3dEnabled: true
+    });
   });
 });
