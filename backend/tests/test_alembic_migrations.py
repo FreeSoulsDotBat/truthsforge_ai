@@ -25,16 +25,19 @@ def test_alembic_ini_is_loadable() -> None:
     assert cfg.get_main_option("script_location") is not None
 
 
-def test_revision_graph_links_001_to_004() -> None:
+def test_revision_graph_is_linear_001_to_004() -> None:
     cfg = _alembic_config()
     scripts = ScriptDirectory.from_config(cfg)
     revisions = {rev.revision: rev for rev in scripts.walk_revisions()}
     assert "001_initial_baseline" in revisions
+    assert "002_chats_title_not_null" in revisions
+    assert "003_chats_modeling_fields" in revisions
     assert "004_modeling_plans_kind" in revisions
     head = scripts.get_current_head()
     assert head == "004_modeling_plans_kind"
-    revision_004 = revisions["004_modeling_plans_kind"]
-    assert revision_004.down_revision == "001_initial_baseline"
+    assert revisions["002_chats_title_not_null"].down_revision == "001_initial_baseline"
+    assert revisions["003_chats_modeling_fields"].down_revision == "002_chats_title_not_null"
+    assert revisions["004_modeling_plans_kind"].down_revision == "003_chats_modeling_fields"
 
 
 def test_initial_baseline_includes_modeling_plans_table() -> None:
@@ -44,6 +47,30 @@ def test_initial_baseline_includes_modeling_plans_table() -> None:
     assert "CREATE TABLE IF NOT EXISTS modeling_plans" in body
     assert "CREATE TABLE IF NOT EXISTS modeling_snapshots" in body
     assert "idx_modeling_tool_calls_plan" in body
+
+
+def test_chats_title_backfill_targets_blank_or_missing_titles() -> None:
+    backend_root = Path(__file__).resolve().parent.parent
+    script_path = (
+        backend_root / "migrations" / "versions" / "002_chats_title_not_null.py"
+    )
+    body = script_path.read_text(encoding="utf-8")
+    # The backfill must hit BOTH the rows that are missing the title key
+    # entirely and the rows where the title is blank/whitespace.
+    assert "payload->'title' IS NULL" in body
+    assert "btrim(coalesce(payload->>'title', '')) = ''" in body
+    assert "Sem título" in body
+
+
+def test_chats_modeling_fields_creates_three_indexes() -> None:
+    backend_root = Path(__file__).resolve().parent.parent
+    script_path = (
+        backend_root / "migrations" / "versions" / "003_chats_modeling_fields.py"
+    )
+    body = script_path.read_text(encoding="utf-8")
+    assert "idx_chat_sessions_modeling_3d" in body
+    assert "idx_chat_sessions_modeling_stage" in body
+    assert "idx_chat_sessions_modeling_plan" in body
 
 
 def test_modeling_plans_kind_creates_two_indexes() -> None:

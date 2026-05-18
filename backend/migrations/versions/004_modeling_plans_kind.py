@@ -7,7 +7,7 @@ schema; estes índices aceleram queries do tipo "todos os mini-planos de
 edição do plano X" usadas pela orquestração chat-first.
 
 Revision ID: 004_modeling_plans_kind
-Revises: 001_initial_baseline
+Revises: 003_chats_modeling_fields
 Create Date: 2026-05-17
 """
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "004_modeling_plans_kind"
-down_revision = "001_initial_baseline"
+down_revision = "003_chats_modeling_fields"
 branch_labels = None
 depends_on = None
 

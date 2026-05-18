@@ -350,6 +350,32 @@ class PromptCreate(BaseModel):
     favorite: bool = False
 
 
+class ChatModelingStage(StrEnum):
+    """State machine of a 3D modeling chat (ADR-013).
+
+    * ``discovery``  — the agent is asking clarifying questions to fully
+                       understand what the user wants to model.
+    * ``planning``   — the agent has called ``3d.propose_plan``; the user
+                       sees the card and must approve / reject inline.
+    * ``approved``   — user approved the plan; backend will execute every
+                       step (including high_risk).
+    * ``executing``  — execution in progress.
+    * ``editing``    — primary plan executed; new messages produce
+                       auto-approved mini-plans (or reopen approval if a
+                       step is high_risk).
+    * ``completed``  — chat is closed/archived for modeling purposes.
+
+    Non-3D chats keep ``modeling_stage = None``.
+    """
+
+    discovery = "discovery"
+    planning = "planning"
+    approved = "approved"
+    executing = "executing"
+    editing = "editing"
+    completed = "completed"
+
+
 class ChatSession(BaseModel):
     id: str = Field(default_factory=lambda: new_id("chat"))
     title: str = "Novo chat"
@@ -361,13 +387,41 @@ class ChatSession(BaseModel):
     context_document_ids: list[str] = Field(default_factory=list)
     context_knowledge_base_ids: list[str] = Field(default_factory=list)
     archived: bool = False
+    # 3D modeling fields (ADR-013). Non-3D chats keep all four as defaults.
+    is_modeling_3d: bool = False
+    modeling_software_preference: ModelingSoftware | None = None
+    modeling_stage: ChatModelingStage | None = None
+    modeling_plan_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
 
+    @field_validator("title", mode="before")
+    @classmethod
+    def _normalize_blank_title(cls, value: Any) -> Any:
+        """Be tolerant of legacy rows that may have a blank title.
+
+        ADR-014 forbids creating a new chat without a title, but historical
+        payloads in JSONB might still have ``title=""``. Migration 002
+        backfills them with ``"Sem título - YYYY-MM-DD"`` — until that
+        runs, normalise empty strings here so the model loads cleanly.
+        """
+
+        if isinstance(value, str) and not value.strip():
+            return "Sem título"
+        return value
+
 
 class ChatSessionCreate(BaseModel):
-    title: str = "Novo chat"
+    """Payload to create a new chat session.
+
+    ADR-014 requires every new chat to carry a non-empty title before the
+    user can send the first message. We enforce that here (rejecting blank
+    titles) so callers can't bypass the rule by going around the chat
+    stream handler.
+    """
+
+    title: str = Field(default="Novo chat", min_length=1)
     model_id: str | None = None
     agent_id: str | None = None
     project_id: str | None = None
@@ -375,6 +429,18 @@ class ChatSessionCreate(BaseModel):
     context_project_ids: list[str] = Field(default_factory=list)
     context_document_ids: list[str] = Field(default_factory=list)
     context_knowledge_base_ids: list[str] = Field(default_factory=list)
+    # 3D modeling fields (ADR-013). Setting ``is_modeling_3d=True`` at
+    # creation marks the chat as a modeling chat for its entire lifetime;
+    # the flag is immutable after the chat is persisted.
+    is_modeling_3d: bool = False
+    modeling_software_preference: ModelingSoftware | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _title_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Chat title must not be blank (ADR-014).")
+        return value
 
 
 class ChatMessage(BaseModel):
