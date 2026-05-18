@@ -26,6 +26,7 @@ from app.core.contracts import (
     ChatAttachmentAnalyzeRequest,
     ChatAttachmentAnalyzeResponse,
     ChatMessage,
+    ChatModelingStage,
     ChatSession,
     ChatSessionContextUpdate,
     ChatSessionCreate,
@@ -37,7 +38,6 @@ from app.core.contracts import (
     KnowledgeBase,
     KnowledgeBaseDocument,
     ModelCapability,
-    ModelConfig,
     ModelingExecutionMode,
     ModelingPlan,
     ModelingPlanCreate,
@@ -47,7 +47,6 @@ from app.core.contracts import (
     ProviderName,
     now_utc,
 )
-from app.modeling.attachment_analyzer import ModelingAttachmentAnalyzer
 from app.cost_governor.service import (
     estimate_cost,
     estimate_tokens,
@@ -66,6 +65,7 @@ from app.llm_gateway.providers import (
     ProviderStreamEvent,
     token_event,
 )
+from app.modeling.attachment_analyzer import ModelingAttachmentAnalyzer
 from app.modeling.service import get_modeling_service
 from app.rag.embeddings import embed_text
 from app.rag.indexing import ensure_document_for_platform_file
@@ -276,6 +276,37 @@ def _clear_empty_draft_flag(store, session: ChatSession) -> ChatSession:
     metadata = dict(session.metadata or {})
     metadata["is_empty_draft"] = False
     updated = session.model_copy(update={"metadata": metadata, "updated_at": now_utc()})
+    if hasattr(store, "upsert_chat_session"):
+        store.upsert_chat_session(updated)
+    return updated
+
+
+def _promote_modeling_session(
+    store, session: ChatSession, payload: ChatStreamRequest
+) -> ChatSession:
+    if not payload.modeling_3d.enabled or session.is_modeling_3d:
+        return session
+    updated = session.model_copy(
+        update={
+            "is_modeling_3d": True,
+            "modeling_software_preference": payload.modeling_3d.software_override,
+            "modeling_stage": ChatModelingStage.discovery,
+            "updated_at": now_utc(),
+        }
+    )
+    if hasattr(store, "upsert_chat_session"):
+        store.upsert_chat_session(updated)
+    return updated
+
+
+def _sync_modeling_plan_session(store, session: ChatSession, plan: ModelingPlan) -> ChatSession:
+    updated = session.model_copy(
+        update={
+            "modeling_stage": ChatModelingStage.editing,
+            "modeling_plan_id": plan.id,
+            "updated_at": now_utc(),
+        }
+    )
     if hasattr(store, "upsert_chat_session"):
         store.upsert_chat_session(updated)
     return updated
@@ -1243,12 +1274,10 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
         runtime_allowed_project_ids=runtime_allowed_project_ids,
     )
     if session is None:
-        is_new_session = True
         if settings.require_chat_title:
             _enforce_required_chat_title(payload)
         session = store.get_or_create_session(payload)
-    else:
-        is_new_session = False
+    session = _promote_modeling_session(store, session, payload)
     effective_folder_id = payload.folder_id if payload.folder_id is not None else session.folder_id
     if (
         effective_project_id != session.project_id or effective_folder_id != session.folder_id
@@ -1335,6 +1364,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
         )
 
         async def modeling_events() -> AsyncIterator[str]:
+            nonlocal session
             yield _sse("meta", {"session_id": session.id, "message_id": assistant_message.id})
             yield _runtime_status(
                 "modeling_3d",
@@ -1374,6 +1404,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                     plan = execution.plan
                 except Exception as exc:  # noqa: BLE001 - keep plan linked on execution failure
                     plan_metadata = _modeling_plan_metadata(plan)
+                    _sync_modeling_plan_session(store, session, plan)
                     error_message = f"Plano 3D criado, mas a execução MCP falhou: {exc}"
                     assistant_message.content = error_message
                     assistant_message.metadata["modeling_plan"] = plan_metadata
@@ -1390,6 +1421,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                     return
 
             plan_metadata = _modeling_plan_metadata(plan)
+            session = _sync_modeling_plan_session(store, session, plan)
             assistant_message.content = _modeling_plan_chat_summary(plan)
             assistant_message.metadata["modeling_plan"] = plan_metadata
             assistant_message.metadata["modeling_plan_id"] = plan.id

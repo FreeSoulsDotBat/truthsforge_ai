@@ -41,9 +41,7 @@ export function EnableModeling3DDialog({
         return;
       }
       if (event.key === "Tab") {
-        const focusables = [confirmRef.current, cancelRef.current].filter(
-          (node): node is HTMLButtonElement => !!node
-        );
+        const focusables = [confirmRef.current, cancelRef.current].filter((node): node is HTMLButtonElement => !!node);
         if (focusables.length < 2) return;
         const currentIndex = focusables.indexOf(document.activeElement as HTMLButtonElement);
         event.preventDefault();
@@ -74,7 +72,9 @@ export function EnableModeling3DDialog({
       <div className="w-full max-w-md rounded-lg border border-forge-line bg-[#111312] p-4 shadow-xl">
         <div className="space-y-1">
           <p className="text-xs uppercase text-forge-muted">MCP 3D</p>
-          <h3 id={titleId} className="text-lg font-semibold">Ativar modelagem 3D no chat</h3>
+          <h3 id={titleId} className="text-lg font-semibold">
+            Ativar modelagem 3D no chat
+          </h3>
           <p className="text-sm text-forge-muted">
             O próximo chat será marcado como 3D e JUDITE executará adições e alterações normais via MCP fluido. Deleções
             e ações destrutivas continuam abrindo aprovação humana.
