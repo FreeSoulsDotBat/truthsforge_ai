@@ -8,7 +8,6 @@ from app.core.contracts import (
     ModelingExecutionResult,
     ModelingModelVersion,
     ModelingPlan,
-    ModelingPlanCreate,
     ModelingPrintabilityReport,
     ModelingPrintabilityRequest,
     ModelingSession,
@@ -66,9 +65,10 @@ def list_plans() -> list[ModelingPlan]:
     return store.list_modeling_plans()
 
 
-@router.post("/plans", response_model=ModelingPlan)
-def create_plan(payload: ModelingPlanCreate) -> ModelingPlan:
-    return _service().create_plan(payload)
+# NOTE: ``POST /plans`` was removed in Onda 2.11 (ADR-013). Plans are now
+# created exclusively by the chat-first orchestrator via the
+# ``3d.propose_plan`` / ``3d.propose_edit_plan`` agent tools. External
+# callers that need a plan should drive the chat instead.
 
 
 @router.get("/plans/{plan_id}", response_model=ModelingPlan)
@@ -98,12 +98,10 @@ def execute_plan(plan_id: str) -> ModelingExecutionResult:
         raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
 
 
-@router.post("/steps/{step_id}/approve", response_model=ModelingPlan)
-def decide_step(step_id: str, payload: ModelingApprovalRequest) -> ModelingPlan:
-    try:
-        return _service().decide_step(step_id, payload)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Etapa 3D não encontrada.") from exc
+# NOTE: ``POST /steps/{step_id}/approve`` was removed in Onda 2.11
+# (ADR-013). Approval is now global at the plan level via the chat card;
+# high-risk steps in edit plans reopen approval inline through the same
+# plan-level endpoint rather than per step.
 
 
 @router.get("/snapshots", response_model=list[ModelingSnapshot])

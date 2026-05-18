@@ -47,6 +47,9 @@ def test_openapi_contains_runtime_routes() -> None:
     assert "/api/knowledge-bases/documents" in paths
     assert "/api/knowledge-bases/{knowledge_base_id}/documents" in paths
     assert "/api/3d/capabilities" in paths
+    # ``GET /api/3d/plans`` continues to exist read-only for diagnostics.
+    # ``POST /api/3d/plans`` was removed in Onda 2.11 (ADR-013); plans are
+    # now created via the chat-first orchestrator.
     assert "/api/3d/plans" in paths
     assert "/api/3d/plans/{plan_id}/execute" in paths
     assert "/api/files/{file_id}/content" in paths
