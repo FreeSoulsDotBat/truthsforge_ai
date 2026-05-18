@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useId, useRef } from "react";
 import { X } from "lucide-react";
 
 import { formatDurationMs, formatRiskPercentage, formatTimestamp, riskSeverityClass } from "../format";
@@ -12,21 +13,55 @@ type ModelingDiagnosticsModalProps = {
 
 export function ModelingDiagnosticsModal({ open, planId, projectId, onClose }: ModelingDiagnosticsModalProps) {
   const diagnosticsQuery = useModeling3dDiagnostics(planId, projectId);
+  const titleId = useId();
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    document.body.classList.add("overflow-hidden");
+    return () => {
+      document.body.classList.remove("overflow-hidden");
+      previouslyFocusedRef.current?.focus?.();
+    };
+  }, [open]);
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onClose();
+      }
+    },
+    [onClose]
+  );
 
   if (!open) return null;
 
   const diagnostics = diagnosticsQuery.data;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      onKeyDown={handleKeyDown}
+    >
       <div className="flex max-h-[88vh] w-full max-w-3xl flex-col rounded-lg border border-forge-line bg-[#111312] shadow-xl">
         <div className="flex items-start justify-between gap-3 border-b border-forge-line p-4">
           <div>
             <p className="text-xs uppercase text-forge-muted">Diagnóstico MCP</p>
-            <h3 className="text-lg font-semibold">Modelagem 3D</h3>
+            <h3 id={titleId} className="text-lg font-semibold">Modelagem 3D</h3>
             <p className="text-sm text-forge-muted">Adapters, tool calls, printability e artifacts do chat 3D.</p>
           </div>
           <button
+            ref={closeRef}
             type="button"
             className="rounded-md border border-forge-line p-2 text-forge-muted hover:text-forge-text"
             onClick={onClose}

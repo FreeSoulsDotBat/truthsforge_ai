@@ -1,3 +1,5 @@
+import { useCallback, useEffect, useId, useRef } from "react";
+
 import type { ModelingSoftware } from "../types";
 
 type EnableModeling3DDialogProps = {
@@ -15,14 +17,64 @@ export function EnableModeling3DDialog({
   onConfirm,
   onSoftwareChange
 }: EnableModeling3DDialogProps) {
+  const titleId = useId();
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
+    confirmRef.current?.focus();
+    document.body.classList.add("overflow-hidden");
+    return () => {
+      document.body.classList.remove("overflow-hidden");
+      previouslyFocusedRef.current?.focus?.();
+    };
+  }, [open]);
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      if (event.key === "Tab") {
+        const focusables = [confirmRef.current, cancelRef.current].filter(
+          (node): node is HTMLButtonElement => !!node
+        );
+        if (focusables.length < 2) return;
+        const currentIndex = focusables.indexOf(document.activeElement as HTMLButtonElement);
+        event.preventDefault();
+        const nextIndex = event.shiftKey
+          ? currentIndex <= 0
+            ? focusables.length - 1
+            : currentIndex - 1
+          : (currentIndex + 1) % focusables.length;
+        focusables[nextIndex]?.focus();
+      }
+    },
+    [onClose]
+  );
+
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+    <div
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      onKeyDown={handleKeyDown}
+    >
       <div className="w-full max-w-md rounded-lg border border-forge-line bg-[#111312] p-4 shadow-xl">
         <div className="space-y-1">
           <p className="text-xs uppercase text-forge-muted">MCP 3D</p>
-          <h3 className="text-lg font-semibold">Ativar modelagem 3D no chat</h3>
+          <h3 id={titleId} className="text-lg font-semibold">Ativar modelagem 3D no chat</h3>
           <p className="text-sm text-forge-muted">
             O próximo chat será marcado como 3D e JUDITE executará adições e alterações normais via MCP fluido. Deleções
             e ações destrutivas continuam abrindo aprovação humana.
@@ -48,6 +100,7 @@ export function EnableModeling3DDialog({
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <button
+            ref={cancelRef}
             type="button"
             className="rounded-md border border-forge-line px-3 py-2 text-sm text-forge-muted hover:text-forge-text"
             onClick={onClose}
@@ -55,6 +108,7 @@ export function EnableModeling3DDialog({
             Cancelar
           </button>
           <button
+            ref={confirmRef}
             type="button"
             className="rounded-md border border-forge-amber/60 bg-[#24211b] px-3 py-2 text-sm text-forge-text"
             onClick={onConfirm}

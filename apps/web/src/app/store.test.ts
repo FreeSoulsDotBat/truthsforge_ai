@@ -25,4 +25,28 @@ describe("useAppStore persistence", () => {
     expect(useAppStore.getState().activePanel).toBe("config");
     expect(useAppStore.getState().activeSessionId).toBe("chat_123");
   });
+
+  it("strips stale modeling fields from persisted state", async () => {
+    localStorage.setItem(
+      "truths-forge-ui-state-v1",
+      JSON.stringify({
+        state: {
+          activeView: "chat",
+          activePanel: "contexto",
+          modeling3dEnabled: true,
+          modeling3dMode: "safe_auto",
+          modeling3dSoftware: "blender"
+        },
+        version: 0
+      })
+    );
+
+    const { useAppStore } = await import("./store");
+
+    const state = useAppStore.getState();
+    expect(state.activeView).toBe("chat");
+    expect(state).not.toHaveProperty("modeling3dEnabled");
+    expect(state).not.toHaveProperty("modeling3dMode");
+    expect(state).not.toHaveProperty("modeling3dSoftware");
+  });
 });

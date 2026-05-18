@@ -20,17 +20,25 @@ function isDashboardView(value: unknown): value is DashboardView {
   return typeof value === "string" && dashboardViews.includes(value as DashboardView);
 }
 
-function migratePersistedState(persistedState: unknown): unknown {
+const staleKeys = ["modeling3dEnabled", "modeling3dMode", "modeling3dSoftware"] as const;
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function migratePersistedState(persistedState: unknown, version: number): unknown {
   if (!persistedState || typeof persistedState !== "object") {
     return persistedState;
   }
 
-  const state = persistedState as Partial<AppStoreState> & { activeView?: unknown };
-  if (isDashboardView(state.activeView)) {
-    return persistedState;
+  const state = { ...(persistedState as Record<string, unknown>) };
+
+  for (const key of staleKeys) {
+    delete state[key];
   }
 
-  return { ...state, activeView: initialState.activeView };
+  if (!isDashboardView(state.activeView)) {
+    state.activeView = initialState.activeView;
+  }
+
+  return state;
 }
 
 export type AppStoreState = {

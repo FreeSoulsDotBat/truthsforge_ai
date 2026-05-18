@@ -7,6 +7,7 @@ import type {
   ModelingPrintabilityReport,
   ModelingSession,
   ModelingSnapshot,
+  ModelingSoftware,
   ModelingToolCall
 } from "../../../types/api";
 
@@ -38,7 +39,7 @@ export const modeling3dApi = {
     })
 };
 
-export function toModeling3DContext(enabled: boolean, software: string) {
+export function toModeling3DContext(enabled: boolean, software: ModelingSoftware) {
   return {
     enabled,
     mode: "safe_auto" as const,
