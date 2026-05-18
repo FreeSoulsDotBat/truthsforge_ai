@@ -5,9 +5,9 @@ O módulo 3D nasce como um bounded context local para conectar JUDITE e agentes 
 ## Estado atual
 
 > **Refatoração v2 em curso.** A v2 (chat-first integral) é a direção definitiva
-> definida em ADR-013. As seções abaixo descrevem a v1 ainda em produção e a v2
-> sendo entregue em 6 ondas (`specs/modeling-3d-fusion/plan.md`). Trechos
-> marcados como `[v1 — em remoção]` deixam de existir após Onda 3.
+> definida em ADR-013. A Onda 3 moveu o frontend 3D para o bounded context
+> `apps/web/src/features/modeling-3d/`; as próximas ondas entregam cards de
+> aprovação inline, título obrigatório e QA com Blender/Fusion reais.
 
 - Backend FastAPI expõe `/api/3d/*` para execução, approval, snapshots,
   rollback, tool calls e printability. Os endpoints de criação manual de plano
@@ -36,6 +36,19 @@ A v2 trata cada chat 3D como uma sessão completa de modelagem, da descoberta
 de contexto até a execução e edição. Não existe mais painel 3D no dashboard:
 configuração migra para Configurações gerais e diagnóstico vira modal
 acessível pelo cabeçalho do chat 3D.
+
+No frontend, o bounded context vive em `apps/web/src/features/modeling-3d/`:
+
+- `api/`: leitura de `/api/3d/*` para diagnóstico e análise de anexos do chat 3D.
+- `hooks/`: `useModeling3dChat`, `useAttachmentAnalysis` e
+  `useModeling3dDiagnostics`.
+- `components/`: badge de chat 3D, dialog de ativação e modal de diagnóstico.
+- `settings/`: seção 3D nas Configurações gerais.
+- `store.ts`: estado local não persistente, incluindo `nextChatIs3D` e preferência de software.
+
+`apps/web/src/lib/api.ts` permanece responsável por APIs gerais e streaming do
+chat; a view `"modeling"` e os componentes antigos `ModelingDashboard` /
+`ModelingStepCard` foram removidos do dashboard.
 
 ### Identidade do chat
 
@@ -105,7 +118,7 @@ profunda via Blender headless: bounding box, contagens
 planejamento. Limite inicial: 50 MB / 15 s; fallback para metadata mínima
 em caso de timeout.
 
-Endpoint: `POST /api/chat/{id}/attachments/analyze`.
+Endpoint: `POST /api/chat/sessions/{id}/attachments/analyze`.
 
 ### Ativação 3D em chat com histórico
 
@@ -119,8 +132,10 @@ intacto; nenhuma mensagem é copiada para o novo chat.
 
 ### Configuração e diagnóstico
 
-- **Configurações gerais** ganha seção "Modelagem 3D" com Blender path,
-  Fusion MCP URL, transport mode e status de cada adapter.
+- **Configurações gerais** ganha seção "Modelagem 3D" com preferência de
+  software e lembrete do modo fluido allowlistado. Variáveis técnicas como
+  Blender path, Fusion MCP URL, transport mode e timeout permanecem no backend;
+  status de adapter aparece no diagnóstico.
 - **`ModelingDiagnosticsModal`** abre pelo cabeçalho do chat 3D e mostra
   capabilities, sessões, snapshots, tool calls recentes, model versions e
   printability reports — todos read-only. Sem botões de aprovar, executar
@@ -146,17 +161,12 @@ TOOL_REGISTRY: dict[str, ToolDescriptor] = {...}
 `BLOCKED_TOOL_PREFIXES` e os arrays nos adapters passam a importar do
 registry para eliminar divergência silenciosa.
 
-## Experiência chat-first (v1 — em remoção pelas Ondas 1–3)
-
-> Esta seção descreve o contrato v1 do chat 3D. A v2 (acima) substitui o
-> campo `modeling_3d.mode` por `chats.is_modeling_3d` + state machine, e
-> substitui a tool monolítica `3d.generate_plan` pelas cinco tools
-> dedicadas. Esta descrição permanece aqui apenas como referência de
-> migração até a Onda 3 estabilizar.
+## Experiência chat-first
 
 O usuário modela 3D como conversa: ativa **MCP 3D** no menu de execução do
-composer, escolhe software (`auto`, `blender` ou `fusion`) e usa o modo padrão
-fluido (`safe_auto`) ou `plan_only` quando quiser apenas revisar o plano.
+composer e escolhe software (`auto`, `blender` ou `fusion`). O frontend sempre
+envia o modo fluido allowlistado; não há seletor de `plan_only` ou
+`approval_required` na UI.
 
 O contrato do chat recebe:
 
@@ -183,10 +193,10 @@ JUDITE com:
 
 O frontend usa esse metadata para renderizar o card **Plano 3D MCP** dentro da
 bolha da JUDITE. No modo fluido, o backend executa automaticamente as etapas
-allowlistadas que não exigem aprovação. A continuidade operacional permanece na
-aba `3D`: aprovar etapas destrutivas/high-risk quando existirem, executar plano
-manual quando `plan_only`, criar/restaurar snapshots, validar printability e ver
-tool calls auditadas.
+allowlistadas que não exigem aprovação. A continuidade operacional fica no chat
+e no `ModelingDiagnosticsModal`: aprovar ações destrutivas/high-risk quando
+existirem, criar/restaurar snapshots manuais quando expostos, validar
+printability e ver tool calls auditadas.
 
 ## Blender local
 
@@ -321,7 +331,7 @@ Arquivos de scaffolding do runner Blender (`*.job.json`, `*.result.json`) e o pr
 `manifest.json` ficam fora dos snapshots porque não fazem parte do estado canônico.
 
 O planner não cria snapshot automático no plano fluido. Snapshots continuam como ação manual
-do painel 3D e como proteção do fluxo explícito de restore.
+via API/diagnóstico operacional e como proteção do fluxo explícito de restore.
 
 ### Rollback seguro
 
@@ -465,9 +475,8 @@ painel 3D no dashboard**.
 
 - **`ChatModeling3DBadge`** — ícone identificador exibido na sidebar de chats,
   no header do chat ativo e em cards de prévia. Tooltip: "Chat de modelagem 3D".
-- **`EnableModeling3DDialog`** — modal aberto pelo menu rápido quando o usuário
-  tenta ativar 3D em chat com histórico não-vazio. Oferece "Criar novo chat 3D"
-  ou "Cancelar". Sem cópia de mensagens.
+- **`EnableModeling3DDialog`** — modal aberto pelo menu rápido para preparar o
+  próximo chat MCP 3D, com preferência de software (`auto`, Blender ou Fusion).
 - **`ModelingPlanCard`** (plano primário) — aparece no chat quando o agente
   chama `3d.propose_plan`. Contém:
   - Prosa descritiva (o que será modelado, físico e processual).
@@ -487,13 +496,13 @@ painel 3D no dashboard**.
 
 A seção "Modelagem 3D" em Configurações gerais expõe:
 
-- Caminho do executável Blender (`TRUTHS_FORGE_BLENDER_EXECUTABLE`).
-- URL do Fusion MCP Server (`TRUTHS_FORGE_FUSION_MCP_URL`).
-- Transport MCP (`TRUTHS_FORGE_MCP_TRANSPORT`: `in_process` ou `stdio`).
-- Timeout por etapa (`TRUTHS_FORGE_MODELING_TIMEOUT_SECONDS`, padrão 90).
-- Status atual de cada adapter (mock, adapter ausente, execução real, erro)
-  com detalhes técnicos: transporte, host efetivo, falhas consecutivas, último
-  erro.
+- Preferência de software do próximo chat (`auto`, Blender ou Fusion).
+- Aviso do modo fluido allowlistado: adições e alterações normais podem
+  autoexecutar; deleções, ações destrutivas e high-risk exigem aprovação humana.
+- O status técnico de adapter fica no `ModelingDiagnosticsModal`; valores de
+  ambiente como `TRUTHS_FORGE_BLENDER_EXECUTABLE`,
+  `TRUTHS_FORGE_FUSION_MCP_URL`, `TRUTHS_FORGE_MCP_TRANSPORT` e timeout seguem
+  configurados no backend.
 
 ### Aprovação
 
@@ -505,81 +514,6 @@ opcional) volta o chat para `discovery` e o agente retoma a conversa.
 Em edições, mini-planos sem high-risk autoexecutam e renderizam
 `ModelingEditCard` compacto. Se a edição tocar em high-risk, o card retorna a
 pedir aprovação inline.
-
-## UI de chat e painel 3D (v1 — em remoção pelas Ondas 3–4)
-
-> Esta seção descreve a interface v1 (painel 3D do dashboard com aprovação
-> step-a-step). Toda a interface descrita abaixo é desligada na Onda 3. A
-> aprovação por etapa via painel deixa de existir. Mantida aqui apenas como
-> referência de migração.
-
-O chat é a experiência principal de criação 3D. O menu de execução permite
-ativar MCP 3D, escolher software/modo e enviar o prompt para JUDITE; a resposta
-mostra o plano estruturado como card dentro da conversa.
-
-A aba 3D do dashboard expõe configuração, diagnóstico e continuidade operacional:
-
-- **Header MCP** explica que novos modelos começam no chat e oferece atalho
-  "Abrir chat MCP 3D".
-- **Adapters MCP** distingue explicitamente `mock`, `adapter ausente`,
-  `execução real` e `erro`, além de mostrar transporte, status, detalhe e tools
-  expostas por Blender/Fusion.
-- **Planos recentes** lista planos criados no chat ou por API, permitindo
-  selecionar um plano para operação.
-- **Header do plano** mostra software, confiança, status, e um badge `planner: IA`
-  ou `planner: heurístico`; quando há fallback, o `fallback_reason` aparece em âmbar.
-- **Cards de etapa** trazem botões "Aprovar etapa" e "Rejeitar etapa" quando a etapa está em
-  `waiting_approval`; chamam `POST /api/3d/steps/{id}/approve`.
-- **Botões do plano**: "Snapshot manual" (cria snapshot ad-hoc do workspace via
-  `POST /api/3d/snapshots`), "Validar printability" (roda relatório completo via
-  `POST /api/3d/validate/printability`), "Aprovar plano" (todas as etapas) e "Executar MCP".
-- **Painel "Snapshots do plano"** lista snapshots persistidos do plano selecionado com label,
-  arquivos, marcador de `restored_at`. O botão "Restaurar" exige confirmação porque, embora
-  o auto-snapshot pré-restore proteja o estado, a operação sobrescreve o workspace.
-- **Painel "Tool calls"** exibe as 12 chamadas mais recentes filtradas pelo plano selecionado,
-  com `tool_name`, server, transporte, duração; em erro destaca `error_code`/mensagem e marca
-  `retryable` quando aplicável. Quando há export, mostra contagem de paths,
-  arquivos registrados e versões geradas.
-- **Painel "Model versions / exports"** lista exports versionados do plano
-  selecionado, com formato, quantidade de arquivos, timestamp e notas do adapter.
-- **Painel "Printability"** mostra os 6 relatórios mais recentes do plano com `risk_score`,
-  contagem de issues por severidade, recomendações deduplicadas e as 4 primeiras
-  issues detalhadas (severidade `error` pintada em vermelho).
-
-A aprovação por etapa é granular: você pode aprovar `blender.create_mesh_primitive` e rejeitar
-`blender.apply_boolean`, por exemplo. O executor pula etapas rejeitadas e marca o plano como
-`running` se ainda houver etapas pendentes ou `failed` se alguma etapa explodir.
-
-### Modal de confirmação de restore
-
-O botão **Restaurar** abre o componente reutilizável `ConfirmDialog`
-(`apps/web/src/components/ui/ConfirmDialog.tsx`) em vez de chamar
-`window.confirm`. O dialog tem:
-
-- `role="alertdialog"` + `aria-modal="true"`, com `aria-labelledby` apontando
-  para o título e `aria-describedby` para o corpo.
-- Foco inicial vai para o botão de confirmação; `Tab`/`Shift+Tab` ciclam
-  entre Confirmar e Cancelar (focus trap mínimo, sem dependência externa).
-- `ESC` cancela; clique no backdrop também cancela.
-- `tone="danger"` pinta a borda em vermelho e o botão primário com fundo
-  diferenciado.
-- `busy` desabilita ambos os botões enquanto a ação está em curso.
-
-O componente é testado em `apps/web/src/components/ui/ConfirmDialog.test.tsx`
-com 10 cenários cobrindo render, focus, callbacks, ESC, backdrop e cycle de
-foco.
-
-### Filtro server-side de snapshots
-
-O painel "Snapshots do plano" agora consome `GET /api/3d/snapshots?plan_id=...`
-em vez de filtrar a lista completa client-side. Vantagens:
-
-- Backend retorna só o que importa para o plano selecionado; payload da UI
-  diminui linearmente com o número de planos no banco.
-- Filtro JSONB no Postgres (`payload->>'plan_id' = %s`) usa índices se
-  forem adicionados depois sem mudar interface.
-- Cache do `useQuery` é por `["modeling-snapshots", planId]` — trocar de
-  plano força refetch focado, sem trazer snapshots de outros planos.
 
 ## Transporte MCP: in-process vs stdio
 
@@ -790,37 +724,22 @@ após a exportação STL/3MF.
 
 ## Testes de UI
 
-A aba 3D agora tem cobertura unitária via **Vitest + @testing-library/react**.
+O bounded context 3D tem cobertura unitária via **Vitest +
+@testing-library/react**.
 
-- `apps/web/src/features/modeling/format.ts` — helpers puros
+- `apps/web/src/features/modeling-3d/modeling-format.ts` — helpers puros
   (`formatDurationMs`, `formatConfidencePercentage`, `formatRiskPercentage`,
   `riskSeverity`, `riskSeverityClass`, `formatTimestamp`, `truncate`).
-  Sem deps de React; testados em `format.test.ts` com 15 cenários
-  cobrindo `null`/`NaN`, clamping, transição segundos → minutos e
-  mapeamento de severidade para classes Tailwind.
-- `dashboard-sections.tsx` exporta `ModelingStepCard`. Os 8 testes em
-  `ModelingStepCard.test.tsx` cobrem render dos badges (risk_level,
-  approval, status), botões "Aprovar etapa" / "Rejeitar etapa" só em
-  `waiting_approval + approval_required`, callbacks com decisão
-  correta, `isBusy` desabilita, mensagem de output e exibição vermelha
-  do erro.
-- `apps/web/src/components/ui/ConfirmDialog.test.tsx` cobre o modal
-  acessível usado no restore: render condicional,
-  `role=alertdialog`, focus inicial, click confirm/cancel, ESC,
-  backdrop, `busy` desabilita, Tab cycle entre confirm e cancel.
+- `ChatModeling3DBadge.test.tsx` cobre render acessível e detecção de chat 3D
+  por flag persistida ou metadata legada.
+- `EnableModeling3DDialog.test.tsx` cobre render condicional, troca de software
+  e modo, e confirmação.
+- `store.test.ts` garante que `nextChatIs3D` é estado local resetável do
+  bounded context, não flag persistida no store global.
 
-Para adicionar um teste novo:
-
-1. Exportar o componente em `dashboard-sections.tsx` (ou extraí-lo
-   para `features/modeling/components/`).
-2. Criar `*.test.tsx` ao lado, importando `@testing-library/react` +
-   `vitest`.
-3. Rodar via `pnpm --filter @truths-forge/web test:unit` ou via
-   `./scripts/quality.ps1`.
-
-Helpers puros ficam em `features/modeling/format.ts` e similares.
-Componentes só são extraídos para arquivos próprios quando crescem
-demais (>200 linhas ou hooks dedicados).
+Para adicionar teste novo, crie `*.test.tsx` ao lado do componente/hook em
+`features/modeling-3d/` e rode `pnpm --filter @truths-forge/web test:unit`
+ou `./scripts/quality.ps1`.
 
 ## Próximos incrementos
 

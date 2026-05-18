@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronRight, LoaderCircle, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
 
 import type { ChatSession } from "../../types/api";
 
@@ -8,6 +9,7 @@ type HistorySectionProps = {
   collapsed: boolean;
   deletingSessionId: string | null;
   disabled?: boolean;
+  renderSessionBadge?: (session: ChatSession) => ReactNode;
   onToggleCollapsed: () => void;
   onSelectSession: (sessionId: string) => void;
   onDeleteSession: (session: ChatSession) => void;
@@ -19,6 +21,7 @@ export function HistorySection({
   collapsed,
   deletingSessionId,
   disabled = false,
+  renderSessionBadge,
   onToggleCollapsed,
   onSelectSession,
   onDeleteSession
@@ -49,7 +52,10 @@ export function HistorySection({
                 ].join(" ")}
                 onClick={() => onSelectSession(session.id)}
               >
-                <span className="block truncate">{session.title}</span>
+                <span className="flex min-w-0 items-center gap-2">
+                  {renderSessionBadge?.(session)}
+                  <span className="block truncate">{session.title}</span>
+                </span>
               </button>
               <button
                 type="button"

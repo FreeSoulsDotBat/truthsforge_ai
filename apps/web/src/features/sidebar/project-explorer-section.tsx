@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronRight, FolderOpen, Plus, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
 import { useMemo } from "react";
 
 import { buildProjectChatTree, type ProjectChatTreeNode } from "./project-chat-tree";
@@ -11,6 +12,7 @@ type ProjectExplorerSectionProps = {
   activeSessionId: string | null;
   collapsed: boolean;
   expandedKeys: Record<string, boolean>;
+  renderSessionBadge?: (session: ChatSession) => ReactNode;
   onToggleCollapsed: () => void;
   onToggleExpanded: (key: string) => void;
   onSelectSession: (sessionId: string) => void;
@@ -26,6 +28,7 @@ type FolderNodeProps = {
   activeSessionId: string | null;
   expandedKeys: Record<string, boolean>;
   folderOptions: Array<{ id: string | null; label: string }>;
+  renderSessionBadge?: (session: ChatSession) => ReactNode;
   onToggleExpanded: (key: string) => void;
   onSelectSession: (sessionId: string) => void;
   onCreateChat: (projectId: string, folderId: string | null) => void;
@@ -39,6 +42,7 @@ function ChatRow({
   projectId,
   activeSessionId,
   folderOptions,
+  renderSessionBadge,
   onSelectSession,
   onMoveSession
 }: {
@@ -46,6 +50,7 @@ function ChatRow({
   projectId: string;
   activeSessionId: string | null;
   folderOptions: Array<{ id: string | null; label: string }>;
+  renderSessionBadge?: (session: ChatSession) => ReactNode;
   onSelectSession: (sessionId: string) => void;
   onMoveSession: (sessionId: string, projectId: string, folderId: string | null) => void;
 }) {
@@ -59,7 +64,10 @@ function ChatRow({
         ].join(" ")}
         onClick={() => onSelectSession(session.id)}
       >
-        {session.title}
+        <span className="flex min-w-0 items-center gap-2">
+          {renderSessionBadge?.(session)}
+          <span className="truncate">{session.title}</span>
+        </span>
       </button>
       <select
         className="h-7 w-full rounded border border-forge-line bg-[#0e0f0e] px-2 text-[11px] text-forge-muted"
@@ -82,6 +90,7 @@ function FolderNode({
   activeSessionId,
   expandedKeys,
   folderOptions,
+  renderSessionBadge,
   onToggleExpanded,
   onSelectSession,
   onCreateChat,
@@ -138,6 +147,7 @@ function FolderNode({
               projectId={projectId}
               activeSessionId={activeSessionId}
               folderOptions={folderOptions}
+              renderSessionBadge={renderSessionBadge}
               onSelectSession={onSelectSession}
               onMoveSession={onMoveSession}
             />
@@ -150,6 +160,7 @@ function FolderNode({
               activeSessionId={activeSessionId}
               expandedKeys={expandedKeys}
               folderOptions={folderOptions}
+              renderSessionBadge={renderSessionBadge}
               onToggleExpanded={onToggleExpanded}
               onSelectSession={onSelectSession}
               onCreateChat={onCreateChat}
@@ -171,6 +182,7 @@ export function ProjectExplorerSection({
   activeSessionId,
   collapsed,
   expandedKeys,
+  renderSessionBadge,
   onToggleCollapsed,
   onToggleExpanded,
   onSelectSession,
@@ -253,6 +265,7 @@ export function ProjectExplorerSection({
                         projectId={project.id}
                         activeSessionId={activeSessionId}
                         folderOptions={folderOptions}
+                        renderSessionBadge={renderSessionBadge}
                         onSelectSession={onSelectSession}
                         onMoveSession={onMoveSession}
                       />
@@ -265,6 +278,7 @@ export function ProjectExplorerSection({
                         activeSessionId={activeSessionId}
                         expandedKeys={expandedKeys}
                         folderOptions={folderOptions}
+                        renderSessionBadge={renderSessionBadge}
                         onToggleExpanded={onToggleExpanded}
                         onSelectSession={onSelectSession}
                         onCreateChat={onCreateChat}

@@ -20,21 +20,6 @@ import type {
   KnowledgeBaseDocument,
   KnowledgeBaseDocumentUpsert,
   KnowledgeBaseUpsert,
-  ModelingApprovalRequest,
-  ModelingCapabilities,
-  ModelingExecutionResult,
-  ModelingModelVersion,
-  ModelingPlan,
-  ModelingPlanCreate,
-  ModelingPrintabilityReport,
-  ModelingPrintabilityRequest,
-  ModelingSession,
-  ModelingSessionStart,
-  ModelingSnapshot,
-  ModelingSnapshotCreate,
-  ModelingSnapshotRestore,
-  ModelingSnapshotRestoreResult,
-  ModelingToolCall,
   ModelConfig,
   ModelUpsert,
   PlatformFile,
@@ -53,9 +38,9 @@ import type {
   ServerStatus
 } from "../types/api";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
       "Content-Type": "application/json",
@@ -73,7 +58,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function multipartRequest<T>(path: string, body: FormData): Promise<T> {
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return apiRequest<T>(path, init);
+}
+
+export async function multipartRequest<T>(path: string, body: FormData): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",
     body
@@ -102,6 +91,8 @@ export const api = {
     context_project_ids?: string[];
     context_document_ids?: string[];
     context_knowledge_base_ids?: string[];
+    is_modeling_3d?: boolean;
+    modeling_software_preference?: "auto" | "blender" | "fusion" | null;
   }) =>
     request<ChatSession>("/api/chat/sessions", {
       method: "POST",
@@ -307,79 +298,7 @@ export const api = {
   deleteProviderKey: (provider: ProviderName) =>
     request<ProviderSecretStatus>(`/api/settings/providers/${provider}/api-key`, {
       method: "DELETE"
-    }),
-  modelingCapabilities: () => request<ModelingCapabilities>("/api/3d/capabilities"),
-  modelingSessions: () => request<ModelingSession[]>("/api/3d/sessions"),
-  startModelingSession: (payload: ModelingSessionStart) =>
-    request<ModelingSession>("/api/3d/sessions/start", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
-  modelingPlans: () => request<ModelingPlan[]>("/api/3d/plans"),
-  createModelingPlan: (payload: ModelingPlanCreate) =>
-    request<ModelingPlan>("/api/3d/plans", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
-  approveModelingPlan: (planId: string, payload: ModelingApprovalRequest) =>
-    request<ModelingPlan>(`/api/3d/plans/${planId}/approve`, {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
-  decideModelingStep: (stepId: string, payload: ModelingApprovalRequest) =>
-    request<ModelingPlan>(`/api/3d/steps/${stepId}/approve`, {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
-  executeModelingPlan: (planId: string) =>
-    request<ModelingExecutionResult>(`/api/3d/plans/${planId}/execute`, {
-      method: "POST"
-    }),
-  modelingSnapshots: (params: { plan_id?: string; project_id?: string } = {}) => {
-    const search = new URLSearchParams();
-    if (params.plan_id) search.set("plan_id", params.plan_id);
-    if (params.project_id) search.set("project_id", params.project_id);
-    const suffix = search.toString();
-    return request<ModelingSnapshot[]>(suffix ? `/api/3d/snapshots?${suffix}` : "/api/3d/snapshots");
-  },
-  createModelingSnapshot: (payload: ModelingSnapshotCreate & { label: string }) =>
-    request<ModelingSnapshot>("/api/3d/snapshots", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
-  restoreModelingSnapshot: (snapshotId: string, payload: ModelingSnapshotRestore = {}) =>
-    request<ModelingSnapshotRestoreResult>(`/api/3d/snapshots/${snapshotId}/restore`, {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
-  modelingToolCalls: (params: { plan_id?: string; step_id?: string; limit?: number } = {}) => {
-    const search = new URLSearchParams();
-    if (params.plan_id) search.set("plan_id", params.plan_id);
-    if (params.step_id) search.set("step_id", params.step_id);
-    if (params.limit) search.set("limit", String(params.limit));
-    const suffix = search.toString();
-    return request<ModelingToolCall[]>(suffix ? `/api/3d/tool-calls?${suffix}` : "/api/3d/tool-calls");
-  },
-  validateModelingPrintability: (payload: ModelingPrintabilityRequest) =>
-    request<ModelingPrintabilityReport>("/api/3d/validate/printability", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
-  modelingPrintabilityReports: (params: { plan_id?: string; file_id?: string } = {}) => {
-    const search = new URLSearchParams();
-    if (params.plan_id) search.set("plan_id", params.plan_id);
-    if (params.file_id) search.set("file_id", params.file_id);
-    const suffix = search.toString();
-    return request<ModelingPrintabilityReport[]>(
-      suffix ? `/api/3d/printability-reports?${suffix}` : "/api/3d/printability-reports"
-    );
-  },
-  modelingModelVersions: (params: { project_id?: string } = {}) => {
-    const search = new URLSearchParams();
-    if (params.project_id) search.set("project_id", params.project_id);
-    const suffix = search.toString();
-    return request<ModelingModelVersion[]>(suffix ? `/api/3d/model-versions?${suffix}` : "/api/3d/model-versions");
-  }
+    })
 };
 
 export interface StreamChatPayload {

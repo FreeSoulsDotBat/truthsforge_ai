@@ -1,6 +1,6 @@
 export type LoadState = "idle" | "loading" | "ready" | "offline";
 
-export type DashboardView = "chat" | "agents" | "projects" | "knowledge" | "files" | "modeling";
+export type DashboardView = "chat" | "agents" | "projects" | "knowledge" | "files";
 
 export type Panel = "contexto" | "infra" | "auditoria" | "prompts" | "config";
 

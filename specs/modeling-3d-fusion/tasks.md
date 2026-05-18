@@ -69,19 +69,20 @@ Branch: `refactor/3d-backend-chat-first`. Commits:
 - [x] [P1] [any] Remover serviço/endpoint de auto-titulação OpenAI (helpers `_openai_title_model` / `_maybe_generate_openai_title`, `gateway.generate_title` e implementação em `OpenAIProvider`).
 - [x] [P1] [any] Criar `test_chat_modeling_state_machine.py` (18), `test_chat_orchestrator.py` (17), `test_discovery_system_prompt.py` (5), `test_attachment_analyzer.py` (22), `test_chat_attachment_analyze_endpoint.py` (5), `test_chat_title_required.py` (6).
 
-### Onda 3 — Frontend: feature module 3D
+### Onda 3 — Frontend: feature module 3D (em PR)
 
-- [ ] [P1] [any] Criar `apps/web/src/features/modeling-3d/` com estrutura `api/`, `hooks/`, `components/`, `settings/`, `types.ts`.
-- [ ] [P1] [any] Migrar funções 3D de `apps/web/src/lib/api.ts` para o módulo.
-- [ ] [P1] [any] Implementar `useModeling3dChat`, `useAttachmentAnalysis`, `useModeling3dDiagnostics`.
-- [ ] [P1] [any] Remover `ModelingDashboard` e `ModelingStepCard` de `dashboard-sections.tsx`.
-- [ ] [P1] [any] Remover view `"modeling"` de `App.tsx`.
-- [ ] [P1] [any] Mover flags 3D para `features/modeling-3d/store.ts` e substituir flag global por `nextChatIs3D` não-persistente.
-- [ ] [P1] [any] Atualizar `apps/web/src/types/api.ts` com `is_modeling_3d`, `modeling_stage` etc.
-- [ ] [P1] [any] Implementar `ChatModeling3DBadge` em sidebar e header.
-- [ ] [P1] [any] Implementar `EnableModeling3DDialog` no menu rápido (modal para criar chat 3D separado).
-- [ ] [P1] [any] Seção 3D em Configurações gerais (Blender path, Fusion URL, status de adapters).
-- [ ] [P1] [any] `ModelingDiagnosticsModal` acessível pelo cabeçalho do chat 3D.
+- [x] [P1] [devin] Criar `apps/web/src/features/modeling-3d/` com estrutura `api/`, `hooks/`, `components/`, `settings/`, `types.ts` e `store.ts`.
+- [x] [P1] [devin] Migrar leituras/diagnóstico 3D de `apps/web/src/lib/api.ts` para o módulo, mantendo criação/execução de planos no chat-first backend.
+- [x] [P1] [devin] Implementar `useModeling3dChat`, `useAttachmentAnalysis`, `useModeling3dDiagnostics`.
+- [x] [P1] [devin] Remover `ModelingDashboard` e `ModelingStepCard` de `dashboard-sections.tsx`.
+- [x] [P1] [devin] Remover view `"modeling"` de `App.tsx`.
+- [x] [P1] [devin] Mover flags 3D para `features/modeling-3d/store.ts` e substituir flag global por `nextChatIs3D` não-persistente.
+- [x] [P1] [devin] Atualizar `apps/web/src/types/api.ts` com `is_modeling_3d`, `modeling_stage`, `kind`, `parent_plan_id` e análise de anexos.
+- [x] [P1] [devin] Implementar `ChatModeling3DBadge` em sidebar e header.
+- [x] [P1] [devin] Implementar `EnableModeling3DDialog` no menu rápido.
+- [x] [P1] [devin] Seção 3D em Configurações gerais para preferência de software do próximo chat MCP.
+- [x] [P1] [devin] Remover seletor frontend de modo 3D; o chat envia sempre o fluxo fluido `safe_auto`.
+- [x] [P1] [devin] `ModelingDiagnosticsModal` acessível pelo cabeçalho do chat 3D.
 
 ### Onda 4 — Frontend: cards de plano e fluxo de aprovação
 
