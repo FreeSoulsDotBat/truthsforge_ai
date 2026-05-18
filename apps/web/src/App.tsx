@@ -93,6 +93,7 @@ import {
   ModelingDiagnosticsModal
 } from "./features/modeling-3d/components";
 import { isModeling3DChat } from "./features/modeling-3d/chat-domain";
+import { modeling3dApi } from "./features/modeling-3d";
 import { useModeling3dChat, useModelingPlanActions } from "./features/modeling-3d/hooks";
 import type { ModelingPlanCardActions } from "./components/app-chat";
 import { useModeling3DStore } from "./features/modeling-3d/store";
@@ -1443,6 +1444,68 @@ function App() {
       setAttachedFiles([]);
       setAttachedPlatformFileIds([]);
       setAttachedDocumentIds([]);
+
+      // Onda 4.3 — when the chat is marked as 3D and the user attached
+      // image/3D files alongside the message, fire the attachment
+      // analyzer in the background. Each successful analysis is posted
+      // back to the session as a local assistant note so the agent
+      // (and the user) can read the structured summary without an
+      // extra round-trip.
+      if (modeling3dPayload.enabled && uploadedFileIds.length > 0) {
+        const chatIdForAnalysis = sessionId ?? activeSession?.id ?? null;
+        if (chatIdForAnalysis) {
+          void Promise.all(
+            uploadedFileIds.map((fileId) =>
+              modeling3dApi
+                .analyzeAttachment(chatIdForAnalysis, fileId)
+                .then((analysis) => ({ ok: true as const, analysis }))
+                .catch((exc: unknown) => ({
+                  ok: false as const,
+                  fileId,
+                  error: exc instanceof Error ? exc.message : "Falha ao analisar anexo 3D."
+                }))
+            )
+          ).then((results) => {
+            const notes = results.map((entry, index) => {
+              const baseId = `m3d_note_${Date.now()}_${index}`;
+              if (entry.ok) {
+                return {
+                  id: baseId,
+                  session_id: chatIdForAnalysis,
+                  role: "assistant" as const,
+                  content: entry.analysis.context_text,
+                  model_id: null,
+                  metadata: {
+                    response_mode: "modeling_3d_attachment_analysis",
+                    attachment_analysis: entry.analysis
+                  } as Record<string, unknown>,
+                  created_at: new Date().toISOString()
+                };
+              }
+              return {
+                id: baseId,
+                session_id: chatIdForAnalysis,
+                role: "assistant" as const,
+                content: `Não consegui analisar o anexo (${entry.fileId}): ${entry.error}`,
+                model_id: null,
+                metadata: { response_mode: "modeling_3d_attachment_analysis_error" } as Record<
+                  string,
+                  unknown
+                >,
+                created_at: new Date().toISOString()
+              };
+            });
+            if (!notes.length) return;
+            setSessions((current) =>
+              current.map((session) =>
+                session.id === chatIdForAnalysis
+                  ? { ...session, messages: [...session.messages, ...notes] }
+                  : session
+              )
+            );
+          });
+        }
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Falha inesperada no chat.";
       const fallbackOptimisticUser =
