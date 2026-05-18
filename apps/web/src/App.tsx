@@ -1202,7 +1202,7 @@ function App() {
                   context_knowledge_base_ids: normalizedContextKnowledgeBaseIds,
                   is_modeling_3d: modeling3dPayload.enabled,
                   modeling_software_preference: modeling3dPayload.software_override ?? "auto",
-                  modeling_stage: modeling3dPayload.enabled ? "planning" : null,
+                  modeling_stage: modeling3dPayload.enabled ? "discovery" : null,
                   modeling_plan_id: null,
                   archived: false,
                   metadata: { is_empty_draft: false },
@@ -1386,7 +1386,7 @@ function App() {
               context_knowledge_base_ids: normalizedContextKnowledgeBaseIds,
               is_modeling_3d: modeling3dPayload.enabled,
               modeling_software_preference: modeling3dPayload.software_override ?? "auto",
-              modeling_stage: modeling3dPayload.enabled ? "planning" : null,
+              modeling_stage: modeling3dPayload.enabled ? "discovery" : null,
               modeling_plan_id: null,
               archived: false,
               metadata: { is_empty_draft: false },
@@ -2160,12 +2160,14 @@ function App() {
         }}
         onSoftwareChange={setModeling3dSoftware}
       />
-      <ModelingDiagnosticsModal
-        open={modelingDiagnosticsOpen}
-        planId={activeModelingPlanId}
-        projectId={activeSessionProjectId}
-        onClose={() => setModelingDiagnosticsOpen(false)}
-      />
+      {modelingDiagnosticsOpen && (
+        <ModelingDiagnosticsModal
+          open={modelingDiagnosticsOpen}
+          planId={activeModelingPlanId}
+          projectId={activeSessionProjectId}
+          onClose={() => setModelingDiagnosticsOpen(false)}
+        />
+      )}
 
       <aside
         className={[
