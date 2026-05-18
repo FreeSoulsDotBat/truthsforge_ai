@@ -20,6 +20,7 @@ from app.core.contracts import (
     AuditEvent,
     ChatGPTImportJob,
     ChatMessage,
+    ChatModelingStage,
     ChatSession,
     ChatSessionCreate,
     ChatSessionWithMessages,
@@ -1289,12 +1290,16 @@ class PostgresStore:
         explicit_title = (payload.title or "").strip()
         derived_title = (payload.message or "")[:48].strip()
         session_title = explicit_title or derived_title or "Novo chat"
+        is_modeling_3d = payload.modeling_3d.enabled
         session = ChatSession(
             title=session_title,
             model_id=payload.model_id,
             agent_id=payload.agent_id,
             project_id=project_id,
             folder_id=folder_id,
+            is_modeling_3d=is_modeling_3d,
+            modeling_software_preference=payload.modeling_3d.software_override,
+            modeling_stage=ChatModelingStage.discovery if is_modeling_3d else None,
         )
         self._upsert_payload("chat_sessions", _dump_model(session))
         return session
