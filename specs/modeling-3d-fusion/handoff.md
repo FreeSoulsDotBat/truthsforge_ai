@@ -2,34 +2,29 @@
 
 ## Estado
 
-Refatoração v2 (chat-first integral + título obrigatório) em curso na branch
-`refactor/3d-backend-foundations`.
+Refatoração v2 (chat-first integral + título obrigatório) em curso. **Onda 4
+em PR** na branch `refactor/3d-frontend-chat-cards`.
 
 | Onda | Status | Commit(s) |
 |---|---|---|
 | 0 — Specs/docs/ADRs | mergeado (PR #19) | `bf9395a` |
-| 1.1 — Allowlist unificada (`tool_registry`) | mergeado | `0546ff8` |
-| 1.2 — Campo `kind`/`parent_plan_id` em `ModelingPlan` | mergeado | `821b66a` |
-| 1.3 — Split do `ModelingService` em 5 serviços | mergeado | `89b1b21` |
-| 1.4 — Alembic + migrações `001`/`004` | mergeado | `0e1e78e` |
-| 1.5 — Marcar Onda 1 em tasks/handoff | mergeado | `371eb0e` |
-| 2.1+2.2 — Campos modeling/state em ChatSession + migrações `002`/`003` | em PR | `f5269b7` |
-| 2.3 — State machine `chat_state.py` | em PR | `0734f8d` |
-| 2.4+2.5 — `ModelingChatOrchestrator` + `discovery_system.md` | em PR | `46e718a` |
-| 2.6 — `ModelingAttachmentAnalyzer` | em PR | `24b3822` |
-| 2.11 — Remover `POST /api/3d/plans` + step approval | em PR | `a181f32` |
-| 2.10 — Remover auto-titulação OpenAI | em PR | `b6998e9` |
-| 2.9 — Gate de título obrigatório (feature flag) | em PR | `aa4abd4` |
-| 2.7 — Endpoint `attachments/analyze` | em PR | `f42f7eb` |
-| 2.8 — Mini-planos auto-aprovados em editing | coberto pelo orchestrator (`propose_edit_plan`) | — |
-| 3 — Frontend feature module 3D | em PR | `devin/onda-3-3d-mcp-solidificacao` |
-| 4 — Frontend cards/aprovação | não iniciada | — |
+| 1 — Backend foundations | mergeado (PR #19) | `0546ff8` → `371eb0e` |
+| 2 — Backend chat-first orchestration | mergeado (PR #20) | `f5269b7` → `c3cb10c` |
+| 3 — Frontend feature module 3D | mergeado (PR #21, #22, #24) | `a94a273` + fixes |
+| 4.1+4.2 — `ModelingPlanCard` + `ModelingEditCard` + `useModelingPlanActions` | em PR | `cf42144` |
+| 4 integration — wire approve/reject/retry/revise no App.tsx | em PR | `ffb6f73` |
+| 4.3 — Auto-analyze de anexos em chats 3D | em PR | `92218dd` |
 | 5 — Título obrigatório do chat (frontend) | não iniciada | — |
 | 6 — QA / docs finais | não iniciada | — |
 
-Verificação backend ao fim da Onda 2:
-`pytest tests/ --ignore=tests/test_postgres_store.py` = **241 verdes**
-localmente. `alembic history` linear `001 → 002 → 003 → 004`.
+Verificação ao fim da Onda 4:
+- `pytest tests/ --ignore=tests/test_postgres_store.py` = **243 verdes**
+  (backend regredido vs Onda 2 só em count porque Onda 3 trouxe 2 testes
+  novos do orchestrator chat-first sync).
+- `pnpm test:unit` = **60 verdes** em 11 arquivos (16 novos da Onda 4
+  para PlanCard + EditCard).
+- `pnpm typecheck` limpo.
+- `alembic history` linear `001 → 002 → 003 → 004`.
 
 ## Decisões consolidadas com o dono do produto
 
@@ -74,31 +69,28 @@ localmente. `alembic history` linear `001 → 002 → 003 → 004`.
 
 ## Próximos passos
 
-1. Abrir PR de `refactor/3d-backend-chat-first` para `master` (Onda 2).
-2. Ao mergear, flipar `TRUTHS_FORGE_REQUIRE_CHAT_TITLE=true` só depois
-   que a Onda 5 (React) garantir que o frontend exige título antes de
-   enviar a primeira mensagem. Backend já está pronto, mas a flag
-   permanece off por default para não quebrar a UI legada.
-3. Finalizar revisão/CI da **Onda 3 — Frontend feature module 3D**:
-   - Módulo `apps/web/src/features/modeling-3d/` criado.
-   - Leituras/diagnóstico 3D isoladas em `features/modeling-3d/api`; criação
-     e execução de planos seguem exclusivamente pelo chat-first backend.
-   - Hooks `useModeling3dChat`, `useAttachmentAnalysis`,
-     `useModeling3dDiagnostics` criados.
-   - `ModelingDashboard`, `ModelingStepCard` e view `"modeling"` removidos.
-   - Flags 3D removidas de `app/store.ts`; `nextChatIs3D` e preferência de
-     software ficam no store local não persistente do bounded context.
-   - Tipos frontend atualizados para `ChatSession.is_modeling_3d`,
-     `modeling_stage`, `ModelingPlan.kind`, `parent_plan_id` e análise de anexos.
-   - `ChatModeling3DBadge`, `EnableModeling3DDialog`,
-     `ModelingDiagnosticsModal` e seção 3D em Configurações gerais criados.
-   - Seletor frontend de modo removido; o chat 3D envia sempre `safe_auto`,
-     preservando aprovação humana apenas para deleções/destrutivo/high-risk
-     conforme policy.
-4. Onda 4 (cards + fluxo de aprovação) e Onda 5 (título obrigatório
-   no frontend) só começam depois que Onda 3 estiver em main, para
-   evitar conflitos no `App.tsx` (3.156 linhas) e em
-   `dashboard-sections.tsx` (2.623 linhas).
+1. Abrir PR de `refactor/3d-frontend-chat-cards` para `master` (Onda 4).
+2. Ao mergear, agendar o flip `TRUTHS_FORGE_REQUIRE_CHAT_TITLE=true` para
+   logo após a Onda 5 (frontend) garantir que o modal de título obrigatório
+   está plugado antes do primeiro envio.
+3. Iniciar **Onda 5 — Título obrigatório do chat (frontend)**:
+   - Modal "Dê um título para esse chat" antes da primeira mensagem.
+   - `ChatStreamRequest.title` agora opcional no contrato; o cliente
+     React deve passar a sempre enviar `title` quando criar sessão.
+   - Tratar 422 `{error: "chat_title_required"}` com mensagem clara.
+4. Onda 6 (QA + docs finais) só começa quando 5 estiver mergeada.
+
+### Pendências carryover para 5/6
+
+- **SSE handler dedicado para execução**: backend ainda não emite
+  `modeling_execution_*` events no stream; quando emitir, substituir a
+  atualização otimista do `applyPlanToSession` por reação aos eventos.
+- **Wire orchestrator chat-first ao stream handler do backend**: hoje
+  `POST /api/chat/stream` ainda cria plano via tool legada
+  `3d.generate_plan` (Onda 3 manteve compat). As 5 tools dedicadas
+  (`3d.propose_plan`, `3d.propose_edit_plan`, etc.) existem no
+  `ModelingChatOrchestrator` mas o stream handler precisa ser ligado a
+  elas. Sub-fase pendente para a Onda 6 ou um PR dedicado entre 5 e 6.
 
 ## Notas para a Onda 3 sobre o frontend
 

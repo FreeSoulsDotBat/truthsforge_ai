@@ -84,14 +84,26 @@ Branch: `refactor/3d-backend-chat-first`. Commits:
 - [x] [P1] [devin] Remover seletor frontend de modo 3D; o chat envia sempre o fluxo fluido `safe_auto`.
 - [x] [P1] [devin] `ModelingDiagnosticsModal` acessível pelo cabeçalho do chat 3D.
 
-### Onda 4 — Frontend: cards de plano e fluxo de aprovação
+### Onda 4 — Frontend: cards de plano e fluxo de aprovação (em PR)
 
-- [ ] [P1] [any] Implementar `ModelingPlanCard` com prosa, etapas, badges de risco, banner high-risk, botões "Aprovar"/"Rejeitar" e campo opcional de motivo.
-- [ ] [P1] [any] Implementar `ModelingEditCard` compacto.
-- [ ] [P1] [any] Upload de anexos (imagens + STL/OBJ/STEP/3MF/BLEND) dispara `analyze_attachment`.
-- [ ] [P1] [any] SSE handler para eventos de execução (progress, completion, error).
-- [ ] [P1] [any] Indicação visual de `executing` no card.
-- [ ] [P1] [any] Tratamento de erro com "tentar novamente" e "revisar plano".
+Branch: `refactor/3d-frontend-chat-cards`. Commits:
+`cf42144` (4.1+4.2 ModelingPlanCard + ModelingEditCard + hook
+`useModelingPlanActions`), `ffb6f73` (integração no App.tsx via
+`modelingPlanActions` prop + state sync), `92218dd` (4.3 auto-analyze
+de anexos em chats 3D).
+
+Verificação ao fim da Onda 4:
+`pnpm test:unit` = **60 verdes** em 11 arquivos (16 novos para
+PlanCard + EditCard), `pnpm typecheck` limpo,
+`pytest tests/ --ignore=tests/test_postgres_store.py` = **243 verdes**.
+
+- [x] [P1] [any] Implementar `ModelingPlanCard` com prosa, etapas, badges de risco, banner high-risk, botões "Aprovar"/"Rejeitar" e campo de motivo obrigatório na rejeição (em `features/modeling-3d/components/`).
+- [x] [P1] [any] Implementar `ModelingEditCard` compacto para mini-planos auto-aprovados (`kind=edit`).
+- [x] [P1] [any] Upload de anexos (imagens + STL/OBJ/STEP/3MF/BLEND) em chats 3D dispara `analyze_attachment` em background após o stream e injeta o `context_text` como nota local assistant.
+- [x] [P1] [any] Hook `useModelingPlanActions` encapsula approve+execute, reject, retry e revise sobre `modeling3dApi`; mantém estado `busy/error/lastPlan/lastExecution`.
+- [x] [P1] [any] Indicação visual de `executing` no card (spinner + cópia clara) e blocos para `completed`, `failed` e `rejected`.
+- [x] [P1] [any] Tratamento de erro com "Tentar novamente" e "Revisar plano" inline em estado `failed`.
+- [ ] [P1] [Onda 5/6] SSE handler dedicado para `modeling_execution_progress`/`completion`/`failure` — esperando o orchestrator backend emitir os eventos no stream. Até lá, o card é atualizado pela resposta direta de `approve+execute` via `applyPlanToSession` no App.tsx.
 
 ### Onda 5 — Título obrigatório do chat
 
