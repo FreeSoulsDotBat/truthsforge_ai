@@ -1404,7 +1404,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                     plan = execution.plan
                 except Exception as exc:  # noqa: BLE001 - keep plan linked on execution failure
                     plan_metadata = _modeling_plan_metadata(plan)
-                    _sync_modeling_plan_session(store, session, plan)
+                    session = _sync_modeling_plan_session(store, session, plan)
                     error_message = f"Plano 3D criado, mas a execução MCP falhou: {exc}"
                     assistant_message.content = error_message
                     assistant_message.metadata["modeling_plan"] = plan_metadata
