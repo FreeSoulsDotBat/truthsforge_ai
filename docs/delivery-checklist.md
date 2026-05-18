@@ -52,9 +52,19 @@ Este checklist deve acompanhar toda implementação relevante enviada ao dono do
 
 ### 3D, Blender e Fusion
 
-- [ ] Planner, policy, aprovação, snapshot e rollback preservados.
+- [ ] Planner, policy, snapshot e rollback preservados.
+- [ ] Aprovação inline no chat (botões do `ModelingPlanCard`) preservada; sem rotas/UI de aprovação fora do chat (ADR-013).
+- [ ] State machine `discovery → planning → approved → executing → editing` respeitada em mudanças de fluxo.
+- [ ] Allowlist consultada via `tool_registry` (sem duplicar em `planner.py`/`policy.py`/adapters).
 - [ ] Diferença entre mock, adapter ausente, execução real e erro mantida clara.
 - [ ] Printability, exports e artifacts considerados.
+- [ ] Anexos do chat 3D (imagem + arquivo 3D) consideram limites de tamanho e timeout da análise profunda.
+
+### Chat (núcleo)
+
+- [ ] Título do chat obrigatório validado no frontend e backend (ADR-014).
+- [ ] Nenhum caminho do código chama auto-titulação OpenAI (serviço removido).
+- [ ] Migração de schema preserva chats existentes com backfill de título quando aplicável.
 
 ### Mobile, desktop e pareamento
 

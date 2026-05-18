@@ -18,6 +18,7 @@ from app.core.contracts import (
     ModelingStepStatus,
 )
 from app.llm_gateway.gateway import LLMGateway
+from app.modeling.tool_registry import PLANNER_TOOLSET
 
 logger = logging.getLogger(__name__)
 
@@ -57,35 +58,10 @@ BLENDER_HINTS = {
     "cubo",
 }
 
-# Tools the planner is allowed to choose. Anything outside this list goes through
-# policy.py and gets blocked at execution time, but we still narrow the LLM's
-# choice up front to keep planning deterministic.
-PLANNER_TOOLSET: tuple[str, ...] = (
-    "blender.create_mesh_primitive",
-    "blender.apply_bevel",
-    "blender.apply_boolean",
-    "blender.apply_subdivision",
-    "blender.apply_solidify",
-    "blender.assign_material",
-    "blender.measure_object",
-    "blender.repair_non_manifold",
-    "blender.validate_mesh",
-    "blender.validate_printability",
-    "blender.export_stl",
-    "blender.export_obj",
-    "blender.export_3mf",
-    "fusion.open_design",
-    "fusion.create_sketch",
-    "fusion.add_rectangle",
-    "fusion.add_circle",
-    "fusion.extrude_profile",
-    "fusion.set_parameter",
-    "fusion.export_step",
-    "fusion.export_stl",
-    "fusion.export_3mf",
-    "fusion.validate_dimensions",
-    "fusion.validate_printability",
-)
+# ``PLANNER_TOOLSET`` is re-exported from :mod:`app.modeling.tool_registry`, the
+# single source of truth for the modeling allowlist (ADR-013). Keep the import
+# above; downstream callers that still ``from .planner import PLANNER_TOOLSET``
+# continue to work unchanged.
 
 EXECUTION_PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -181,6 +157,8 @@ def create_heuristic_plan(payload: ModelingPlanCreate) -> ModelingPlan:
         conversation_id=payload.conversation_id,
         prompt=payload.prompt,
         mode=payload.mode,
+        kind=payload.kind,
+        parent_plan_id=payload.parent_plan_id,
         software_choice=software,
         confidence=confidence,
         approval_required=approval_required,
@@ -376,6 +354,8 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
         conversation_id=payload.conversation_id,
         prompt=payload.prompt,
         mode=payload.mode,
+        kind=payload.kind,
+        parent_plan_id=payload.parent_plan_id,
         software_choice=software,
         confidence=confidence,
         approval_required=plan_approval_required,

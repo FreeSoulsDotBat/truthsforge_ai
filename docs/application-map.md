@@ -41,10 +41,10 @@ O backend e uma aplicacao FastAPI. Ele expoe rotas REST e streaming SSE para o c
 
 O frontend React e a primeira experiencia do usuario.
 
-- Sidebar esquerda: sessoes, historico paginado, projetos/pastas e novo chat.
-- Centro: chat com streaming, anexos, modos de execucao, MCP 3D opcional e upload rapido.
-- Painel direito: contexto, custos, RAG, auditoria, prompts, configuracao, arquivos, bases, projetos, agentes e painel 3D de diagnóstico/continuidade.
-- Configuracoes: API keys por provedor e registry editavel de modelos.
+- Sidebar esquerda: sessoes (com `ChatModeling3DBadge` para chats 3D), historico paginado, projetos/pastas e novo chat. Todo chat exige titulo nao vazio antes da primeira mensagem (ADR-014).
+- Centro: chat com streaming, anexos, MCP 3D ativado por chat (ADR-013) e upload rapido. Chats 3D mostram `ModelingPlanCard` (aprovacao por botoes inline) e `ModelingEditCard` (mini-planos executados). Botao de diagnostico no cabecalho abre `ModelingDiagnosticsModal` read-only.
+- Painel direito: contexto, custos, RAG, auditoria, prompts, configuracao, arquivos, bases, projetos e agentes. O painel 3D no dashboard foi removido com ADR-013; toda interacao 3D ocorre no chat.
+- Configuracoes: API keys por provedor, registry editavel de modelos e secao "Modelagem 3D" (Blender path, Fusion MCP URL, transport, timeouts, status de adapters).
 - Arquivos: biblioteca bruta de arquivos enviados, recebidos, gerados ou importados, com paginacao, filtros, preview/download e status de indexacao.
 - Bases: colecoes curadas de documentos indexados para RAG.
 - Projetos: organizacao de chats e pastas, com bases atreladas quando fizer sentido.
@@ -81,16 +81,17 @@ O SDD vive em `specs/` e organiza intenção, plano, tasks e handoff sem substit
 
 ## Fluxo de chat
 
-1. Usuario envia mensagem no React.
-2. Frontend chama `POST /api/chat/stream`.
-3. Backend resolve agente principal, agente solicitado, agentes de apoio e bases atreladas.
-4. Se `modeling_3d.enabled=true`, o backend cria um plano MCP 3D vinculado à conversa e devolve metadata/card de plano na resposta.
-5. Caso contrário, backend escolhe o modelo pelo Model Registry.
-6. Cost Governor estima custo antes da chamada.
-7. LLM Gateway chama o provedor real ou fallback dev. Modos especiais podem usar Deep Research, geracao de imagem ou resumo oficial.
-8. Imagens geradas e anexos viram `PlatformFile` em `Arquivos` e podem ser indexados.
-9. Backend envia tokens via SSE.
-10. Mensagens, metadados e auditoria sao salvos no store.
+1. Usuario cria chat (com titulo obrigatorio nao vazio — ADR-014) e opcionalmente marca como 3D.
+2. Usuario envia mensagem no React.
+3. Frontend chama `POST /api/chat/stream`. Backend rejeita com 422 se `chat.title` ausente.
+4. Backend resolve agente principal, agente solicitado, agentes de apoio e bases atreladas.
+5. Se `chat.is_modeling_3d=true`, o agente segue a state machine `discovery → planning → approved → executing → editing` (ADR-013). Tools dedicadas (`3d.ask_clarification`, `3d.propose_plan`, `3d.propose_edit_plan`, `3d.request_high_risk_approval`, `3d.analyze_attachment`) controlam transicoes.
+6. Caso contrário, backend escolhe o modelo pelo Model Registry.
+7. Cost Governor estima custo antes da chamada.
+8. LLM Gateway chama o provedor real ou fallback dev. Modos especiais (Deep Research, imagem, resumo oficial) seguem mutuamente exclusivos com chat 3D.
+9. Imagens geradas, anexos e exports 3D viram `PlatformFile` em `Arquivos` e podem ser indexados.
+10. Backend envia tokens via SSE; eventos `modeling_plan`, `modeling_edit` e `modeling_execution` levam estado 3D para a UI.
+11. Mensagens, metadados e auditoria sao salvos no store.
 
 ## Fluxo de RAG
 

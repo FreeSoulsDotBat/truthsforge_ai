@@ -56,7 +56,7 @@ O backend esta organizado por dominios:
 - `audit`: trilha de envio a provedores e execucao de ferramentas.
 - `cost_governor`: orcamento, estimativa e bloqueios.
 - `workers`: filas em memoria para importacao do ChatGPT e indexacao de arquivos, com recuperacao/backfill de pendencias. Redis/Valkey permanece pronto para cache/fila distribuida futura.
-- `modeling`: MCP local para Blender/Fusion, snapshots, tool calls, printability e artefatos 3D.
+- `modeling`: bounded context chat-first para Blender/Fusion via MCP local, com state machine de chat 3D (`discovery → planning → approved → executing → editing`), allowlist unificada (`tool_registry`), planner LLM + heuristico, executor, snapshots manuais, rollback explicito, printability e artefatos 3D versionados. Refatoracao v2 (ADR-013) substitui os modos legados e remove o painel 3D do dashboard.
 
 O store principal do modo containerizado e Postgres. Para o desenvolvimento principal e validacao do produto completo, Postgres + Qdrant + Valkey sao obrigatorios. O JSON-backed store permanece como fallback local para testes ou quando o banco nao estiver disponivel; ele nao e caminho de producao, sync ou backup.
 

@@ -22,7 +22,8 @@ dependencies = [
   "sentence-transformers>=3.0.0",
   "pypdf>=5.0.0",
   "pillow>=10.0.0",
-  "pytesseract>=0.3.13"
+  "pytesseract>=0.3.13",
+  "alembic>=1.13.0"
 ]
 
 [project.optional-dependencies]
