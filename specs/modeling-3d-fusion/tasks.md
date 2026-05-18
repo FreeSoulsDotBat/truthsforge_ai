@@ -48,20 +48,26 @@ Branch: `refactor/3d-backend-foundations`. Commits: `0546ff8` (1.1), `821b66a` (
 - [x] [P1] [any] Atualizar `backend/tests/test_modeling_routes.py` e `test_planner_llm.py` para os novos serviços.
 - [x] [P1] [any] Criar `backend/tests/test_tool_registry.py` (18), `test_modeling_services_split.py` (7) e `test_alembic_migrations.py` (4).
 
-### Onda 2 — Backend: orquestração chat-first
+### Onda 2 — Backend: orquestração chat-first (concluída)
 
-- [ ] [P1] [any] Adicionar campos `title NOT NULL`, `is_modeling_3d`, `modeling_software_preference`, `modeling_stage`, `modeling_plan_id` em `chats` (migrações `002` e `003`).
-- [ ] [P1] [any] Implementar state machine `discovery → planning → approved → executing → editing` no domain do chat.
-- [ ] [P1] [any] Substituir tool `3d.generate_plan` por `3d.ask_clarification`, `3d.propose_plan`, `3d.propose_edit_plan`, `3d.request_high_risk_approval`, `3d.analyze_attachment`.
-- [ ] [P1] [any] Criar `backend/app/modeling/prompts/discovery_system.md`.
-- [ ] [P1] [any] Implementar `ModelingAttachmentAnalyzer` (vision + Blender headless com análise profunda).
-- [ ] [P1] [any] Criar `POST /api/chat/{id}/attachments/analyze`.
-- [ ] [P1] [any] Implementar mini-planos auto-aprovados em `editing`; reaprovação inline para high-risk.
-- [ ] [P1] [any] Remover `POST /api/3d/plans` e `POST /api/3d/steps/{id}/approve`.
-- [ ] [P1] [any] Validar `chat.title` obrigatório em `POST /api/chat/stream` (422 quando ausente).
-- [ ] [P1] [any] Migração `002` com backfill `Sem título - YYYY-MM-DD` para chats existentes.
-- [ ] [P1] [any] Remover serviço/endpoint de auto-titulação OpenAI.
-- [ ] [P1] [any] Criar `test_chat_modeling_state_machine.py`, `test_attachment_analyzer.py`, `test_mini_plan_auto_approval.py`, `test_chat_title_required.py`.
+Branch: `refactor/3d-backend-chat-first`. Commits:
+`f5269b7` (2.1+2.2), `0734f8d` (2.3), `46e718a` (2.4+2.5),
+`24b3822` (2.6), `a181f32` (2.11), `b6998e9` (2.10), `aa4abd4` (2.9),
+`f42f7eb` (2.7). 241 testes verdes em
+`pytest tests/ --ignore=tests/test_postgres_store.py`.
+
+- [x] [P1] [any] Adicionar campos `title NOT NULL`, `is_modeling_3d`, `modeling_software_preference`, `modeling_stage`, `modeling_plan_id` em `chats` (migrações `002` e `003` + campos em `ChatSession` / `ChatSessionCreate`).
+- [x] [P1] [any] Implementar state machine `discovery → planning → approved → executing → editing` no domain do chat (pure functions em `chat_state.py` + orchestrator em `chat_orchestrator.py`).
+- [x] [P1] [any] Substituir tool `3d.generate_plan` por `3d.ask_clarification`, `3d.propose_plan`, `3d.propose_edit_plan`, `3d.request_high_risk_approval`, `3d.analyze_attachment` (mapeadas para métodos do `ModelingChatOrchestrator`).
+- [x] [P1] [any] Criar `backend/app/modeling/prompts/discovery_system.md` + helper `discovery_system_prompt()` com lru_cache.
+- [x] [P1] [any] Implementar `ModelingAttachmentAnalyzer` (vision stub para imagens, Blender headless para mesh/blend, metadata-only para CAD STEP).
+- [x] [P1] [any] Criar `POST /api/chat/sessions/{chat_id}/attachments/analyze`.
+- [x] [P1] [any] Implementar mini-planos auto-aprovados em `editing`; reaprovação inline para high-risk (`ModelingChatOrchestrator.propose_edit_plan` retorna `EditPlanOutcome.requires_approval`).
+- [x] [P1] [any] Remover `POST /api/3d/plans` e `POST /api/3d/steps/{id}/approve` + ajustar testes que dependiam delas.
+- [x] [P1] [any] Validar `chat.title` obrigatório em `POST /api/chat/stream` (HTTP 422 quando ausente/default) via feature flag `settings.require_chat_title` (off por padrão para não quebrar frontend legado antes da Onda 5).
+- [x] [P1] [any] Migração `002` com backfill `Sem título - YYYY-MM-DD` para chats existentes (idempotente, cobre títulos vazios e structurally missing).
+- [x] [P1] [any] Remover serviço/endpoint de auto-titulação OpenAI (helpers `_openai_title_model` / `_maybe_generate_openai_title`, `gateway.generate_title` e implementação em `OpenAIProvider`).
+- [x] [P1] [any] Criar `test_chat_modeling_state_machine.py` (18), `test_chat_orchestrator.py` (17), `test_discovery_system_prompt.py` (5), `test_attachment_analyzer.py` (22), `test_chat_attachment_analyze_endpoint.py` (5), `test_chat_title_required.py` (6).
 
 ### Onda 3 — Frontend: feature module 3D
 
