@@ -1,14 +1,30 @@
 import json
 from pathlib import Path
+from typing import Any
 
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
+from app.core.contracts import ModelingExecutionMode, ModelingPlanCreate, ModelingSoftware
 from app.main import app
 from app.modeling.blender_adapter import BlenderAdapter
 from app.modeling.fusion_adapter import FusionDesktopAdapter
+from app.modeling.service import get_modeling_service
 from app.modeling.workspace import workspace_dir
 from app.storage.store import get_store
+
+
+def _create_plan_via_service(**kwargs: Any) -> dict[str, Any]:
+    """Build a plan through ``ModelingService`` instead of the removed
+    ``POST /api/3d/plans`` endpoint (ADR-013, Onda 2.11).
+
+    Returns the plan as a JSON-serialisable dict so existing assertions
+    keep working without touching every line.
+    """
+
+    payload = ModelingPlanCreate(**kwargs)
+    plan = get_modeling_service(get_store()).create_plan(payload)
+    return json.loads(plan.model_dump_json())
 
 EXPECTED_BLENDER_TOOLS = {
     "blender.create_mesh_primitive",
@@ -44,16 +60,11 @@ def test_modeling_plan_executes_fluid_steps_without_plan_approval(monkeypatch) -
     monkeypatch.setattr(FusionDesktopAdapter, "is_available", lambda self: False)
 
     client = TestClient(app)
-    created = client.post(
-        "/api/3d/plans",
-        json={
-            "prompt": "Crie uma peça paramétrica de 40 mm com furo central.",
-            "mode": "safe_auto",
-        },
+    plan = _create_plan_via_service(
+        prompt="Crie uma peça paramétrica de 40 mm com furo central.",
+        mode=ModelingExecutionMode.safe_auto,
     )
 
-    assert created.status_code == 200
-    plan = created.json()
     assert plan["software_choice"] == "fusion"
     assert plan["status"] == "approved"
     assert all(step["approval_required"] is False for step in plan["steps"])
@@ -72,17 +83,12 @@ def test_blender_plan_uses_mcp_boundary_without_desktop_adapter(monkeypatch) -> 
     monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
 
     client = TestClient(app)
-    created = client.post(
-        "/api/3d/plans",
-        json={
-            "prompt": "Crie um cubo visual com bevel no Blender.",
-            "mode": "safe_auto",
-            "software_override": "blender",
-        },
+    plan = _create_plan_via_service(
+        prompt="Crie um cubo visual com bevel no Blender.",
+        mode=ModelingExecutionMode.safe_auto,
+        software_override=ModelingSoftware.blender,
     )
 
-    assert created.status_code == 200
-    plan = created.json()
     assert plan["software_choice"] == "blender"
     assert all(step["tool_name"] != "project_store.create_snapshot" for step in plan["steps"])
 
@@ -103,16 +109,11 @@ def test_modeling_plan_only_draft_does_not_execute_directly(monkeypatch) -> None
     monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
 
     client = TestClient(app)
-    created = client.post(
-        "/api/3d/plans",
-        json={
-            "prompt": "Planeje um cubo visual no Blender.",
-            "mode": "plan_only",
-            "software_override": "blender",
-        },
+    plan = _create_plan_via_service(
+        prompt="Planeje um cubo visual no Blender.",
+        mode=ModelingExecutionMode.plan_only,
+        software_override=ModelingSoftware.blender,
     )
-    assert created.status_code == 200
-    plan = created.json()
     assert plan["status"] == "draft"
 
     executed = client.post(f"/api/3d/plans/{plan['id']}/execute")
@@ -321,15 +322,11 @@ def test_modeling_snapshot_restore_rejects_path_outside_modeling_dir(monkeypatch
 
 def test_modeling_tool_calls_persisted_during_execution() -> None:
     client = TestClient(app)
-    created = client.post(
-        "/api/3d/plans",
-        json={
-            "prompt": "Crie um cubo simples no Blender.",
-            "mode": "approval_required",
-            "software_override": "blender",
-        },
+    plan = _create_plan_via_service(
+        prompt="Crie um cubo simples no Blender.",
+        mode=ModelingExecutionMode.approval_required,
+        software_override=ModelingSoftware.blender,
     )
-    plan = created.json()
     plan_id = plan["id"]
 
     executed = client.post(f"/api/3d/plans/{plan_id}/execute")
@@ -394,16 +391,16 @@ def test_modeling_export_artifacts_create_platform_files_and_versions(
     monkeypatch.setattr(modeling_route, "get_modeling_service", lambda store: fake_service)
 
     client = TestClient(app)
-    created = client.post(
-        "/api/3d/plans",
-        json={
-            "prompt": "Exporte um STL no Blender.",
-            "project_id": project_id,
-            "mode": "safe_auto",
-            "software_override": "blender",
-        },
+    plan = json.loads(
+        fake_service.create_plan(
+            ModelingPlanCreate(
+                prompt="Exporte um STL no Blender.",
+                project_id=project_id,
+                mode=ModelingExecutionMode.safe_auto,
+                software_override=ModelingSoftware.blender,
+            )
+        ).model_dump_json()
     )
-    plan = created.json()
     executed = client.post(f"/api/3d/plans/{plan['id']}/execute")
     assert executed.status_code == 200
     export_steps = [
@@ -471,15 +468,15 @@ def test_modeling_failure_is_logged_with_error_envelope_fields(monkeypatch) -> N
     monkeypatch.setattr(modeling_route, "get_modeling_service", lambda store: failing_service)
 
     client = TestClient(app)
-    created = client.post(
-        "/api/3d/plans",
-        json={
-            "prompt": "Crie um cubo simples no Blender.",
-            "mode": "safe_auto",
-            "software_override": "blender",
-        },
+    plan = json.loads(
+        failing_service.create_plan(
+            ModelingPlanCreate(
+                prompt="Crie um cubo simples no Blender.",
+                mode=ModelingExecutionMode.safe_auto,
+                software_override=ModelingSoftware.blender,
+            )
+        ).model_dump_json()
     )
-    plan = created.json()
     plan_id = plan["id"]
     executed = client.post(f"/api/3d/plans/{plan_id}/execute")
     assert executed.status_code == 200

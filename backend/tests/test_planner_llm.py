@@ -199,35 +199,33 @@ def test_create_llm_plan_handles_empty_steps() -> None:
         raise AssertionError("Plano sem etapas deveria falhar.")
 
 
-def test_service_falls_back_to_heuristic_when_gateway_raises(monkeypatch) -> None:
-    from app.api.routes import modeling as modeling_route
+def test_service_falls_back_to_heuristic_when_gateway_raises() -> None:
+    """The route ``POST /api/3d/plans`` was removed in Onda 2.11; the
+    fallback behaviour is now tested by calling the service directly.
+    """
 
     gateway = _FakeGateway(exc=ProviderExecutionError("simulação"))
     failing_service = ModelingService(store=get_store(), gateway=gateway)
-    monkeypatch.setattr(modeling_route, "get_modeling_service", lambda store: failing_service)
 
-    client = TestClient(app)
-    response = client.post(
-        "/api/3d/plans",
-        json={"prompt": "crie um cubo no Blender", "mode": "approval_required"},
+    plan = failing_service.create_plan(
+        ModelingPlanCreate(
+            prompt="crie um cubo no Blender",
+            mode=ModelingExecutionMode.approval_required,
+        )
     )
-    assert response.status_code == 200
-    plan = response.json()
-    # The heuristic plan still gets persisted but the audit metadata reflects fallback.
-    events = client.get("/api/3d/tool-calls").json()  # smoke check that route still works
-    assert events is not None
+    plan_dict = json.loads(plan.model_dump_json())
 
-    audit = client.get("/api/3d/plans").json()
-    matching = next((item for item in audit if item["id"] == plan["id"]), None)
+    audit = get_store().list_modeling_plans()
+    matching = next((item for item in audit if item.id == plan.id), None)
     assert matching is not None
-    assert len(plan["steps"]) == 3
-    assert plan["steps"][0]["tool_name"] == "blender.create_mesh_primitive"
-    assert all(step["tool_name"] != "project_store.create_snapshot" for step in plan["steps"])
+    assert len(plan_dict["steps"]) == 3
+    assert plan_dict["steps"][0]["tool_name"] == "blender.create_mesh_primitive"
+    assert all(
+        step["tool_name"] != "project_store.create_snapshot" for step in plan_dict["steps"]
+    )
 
 
-def test_service_uses_llm_plan_when_gateway_returns_valid_payload(monkeypatch) -> None:
-    from app.api.routes import modeling as modeling_route
-
+def test_service_uses_llm_plan_when_gateway_returns_valid_payload() -> None:
     gateway = _FakeGateway(
         response={
             "software_choice": "blender",
@@ -248,21 +246,20 @@ def test_service_uses_llm_plan_when_gateway_returns_valid_payload(monkeypatch) -
         }
     )
     llm_service = ModelingService(store=get_store(), gateway=gateway)
-    monkeypatch.setattr(modeling_route, "get_modeling_service", lambda store: llm_service)
 
-    client = TestClient(app)
-    response = client.post(
-        "/api/3d/plans",
-        json={"prompt": "valide a malha do meu modelo", "mode": "approval_required"},
+    plan = llm_service.create_plan(
+        ModelingPlanCreate(
+            prompt="valide a malha do meu modelo",
+            mode=ModelingExecutionMode.approval_required,
+        )
     )
-    assert response.status_code == 200
-    plan = response.json()
-    assert len(plan["steps"]) == 1
-    assert plan["confidence"] == 0.9
-    assert plan["steps"][0]["tool_name"] == "blender.validate_mesh"
+
+    assert len(plan.steps) == 1
+    assert plan.confidence == 0.9
+    assert plan.steps[0].tool_name == "blender.validate_mesh"
     # validate_mesh is read-only by policy, so approval_required stays false even though
     # other plans in the suite would have it set.
-    assert plan["steps"][0]["approval_required"] is False
+    assert plan.steps[0].approval_required is False
 
 
 def test_create_heuristic_plan_still_available_as_alias() -> None:
@@ -277,23 +274,21 @@ def test_create_heuristic_plan_still_available_as_alias() -> None:
     assert [step.tool_name for step in plan.steps] == [step.tool_name for step in heuristic.steps]
 
 
-def test_plan_records_planner_source_and_fallback_reason(monkeypatch) -> None:
+def test_plan_records_planner_source_and_fallback_reason() -> None:
     """create_plan persists planner_source on the plan itself so the UI can render it."""
-    from app.api.routes import modeling as modeling_route
 
     failing_gateway = _FakeGateway(exc=ProviderExecutionError("teste de fallback"))
     service = ModelingService(store=get_store(), gateway=failing_gateway)
-    monkeypatch.setattr(modeling_route, "get_modeling_service", lambda store: service)
 
-    client = TestClient(app)
-    response = client.post(
-        "/api/3d/plans",
-        json={"prompt": "crie um cubo", "mode": "approval_required"},
+    plan = service.create_plan(
+        ModelingPlanCreate(
+            prompt="crie um cubo",
+            mode=ModelingExecutionMode.approval_required,
+        )
     )
-    assert response.status_code == 200
-    plan = response.json()
-    assert plan["planner_source"] == "heuristic"
-    assert "teste de fallback" in (plan.get("fallback_reason") or "")
+
+    assert plan.planner_source.value == "heuristic"
+    assert "teste de fallback" in (plan.fallback_reason or "")
 
 
 def test_heuristic_plan_defaults_to_primary_kind() -> None:
@@ -344,9 +339,7 @@ def test_llm_plan_preserves_edit_kind_and_parent_id() -> None:
     assert plan.parent_plan_id == "m3d_plan_primary"
 
 
-def test_plan_records_llm_source_when_gateway_succeeds(monkeypatch) -> None:
-    from app.api.routes import modeling as modeling_route
-
+def test_plan_records_llm_source_when_gateway_succeeds() -> None:
     gateway = _FakeGateway(
         response={
             "software_choice": "fusion",
@@ -367,14 +360,13 @@ def test_plan_records_llm_source_when_gateway_succeeds(monkeypatch) -> None:
         }
     )
     service = ModelingService(store=get_store(), gateway=gateway)
-    monkeypatch.setattr(modeling_route, "get_modeling_service", lambda store: service)
 
-    client = TestClient(app)
-    response = client.post(
-        "/api/3d/plans",
-        json={"prompt": "peça paramétrica", "mode": "approval_required"},
+    plan = service.create_plan(
+        ModelingPlanCreate(
+            prompt="peça paramétrica",
+            mode=ModelingExecutionMode.approval_required,
+        )
     )
-    assert response.status_code == 200
-    plan = response.json()
-    assert plan["planner_source"] == "llm"
-    assert plan["fallback_reason"] is None
+
+    assert plan.planner_source.value == "llm"
+    assert plan.fallback_reason is None

@@ -23,6 +23,8 @@ from app.core.contracts import (
     MAX_CONTEXT_KNOWLEDGE_BASE_IDS,
     Agent,
     AuditEvent,
+    ChatAttachmentAnalyzeRequest,
+    ChatAttachmentAnalyzeResponse,
     ChatMessage,
     ChatSession,
     ChatSessionContextUpdate,
@@ -45,6 +47,7 @@ from app.core.contracts import (
     ProviderName,
     now_utc,
 )
+from app.modeling.attachment_analyzer import ModelingAttachmentAnalyzer
 from app.cost_governor.service import (
     estimate_cost,
     estimate_tokens,
@@ -533,106 +536,33 @@ def _knowledge_base_document_index(
     return indexed
 
 
-def _openai_title_model(registry: ModelRegistry) -> ModelConfig | None:
-    candidates = [
-        model
-        for model in registry.list_enabled()
-        if model.provider == ProviderName.openai
-        and ModelCapability.chat in model.capabilities
-        and (model.provider_model_id or ("/" not in model.id))
-    ]
-    if not candidates:
-        return None
-    priced_candidates = [
-        model
-        for model in candidates
-        if model.input_token_cost_per_million is not None
-        and model.output_token_cost_per_million is not None
-    ]
-    if priced_candidates:
-        return min(
-            priced_candidates,
-            key=lambda item: (
-                item.input_token_cost_per_million or 0,
-                item.output_token_cost_per_million or 0,
-                item.display_name.lower(),
-            ),
+# Auto-titulação via OpenAI removida em Onda 2.10 (ADR-014). Todo chat
+# precisa carregar um título não-vazio antes da primeira mensagem
+# (validado em ChatSessionCreate + Onda 2.9 no stream handler).
+
+
+def _enforce_required_chat_title(payload: ChatStreamRequest) -> None:
+    """Reject the first turn of a new chat when title is missing or default.
+
+    Controlled by ``settings.require_chat_title`` so the legacy frontend
+    keeps working until the Onda 5 UI ships. When enabled, the React
+    modal must send ``payload.title`` with a user-typed value; otherwise
+    the backend responds with ``HTTP 422`` and a clear error code.
+    """
+
+    raw = payload.title
+    normalized = (raw or "").strip().lower()
+    if not normalized or normalized in DEFAULT_CHAT_TITLES:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "chat_title_required",
+                "message": (
+                    "Esse chat precisa de um título antes da primeira mensagem. "
+                    "Renomeie o chat e envie de novo."
+                ),
+            },
         )
-    default_openai = next((item for item in candidates if item.default), None)
-    return default_openai or candidates[0]
-
-
-async def _maybe_generate_openai_title(
-    *,
-    store,
-    session: ChatSession,
-    gateway: LLMGateway,
-    registry: ModelRegistry,
-) -> str | None:
-    if session.archived:
-        return None
-
-    normalized_title = (session.title or "").strip().lower()
-    metadata = session.metadata if isinstance(session.metadata, dict) else {}
-    title_source = str(metadata.get("title_source") or "")
-    last_update_count = int(metadata.get("title_last_message_count") or 0)
-    eligible_existing_title = normalized_title in DEFAULT_CHAT_TITLES or not normalized_title
-
-    session_with_messages = (
-        store.get_chat_session(session.id) if hasattr(store, "get_chat_session") else None
-    )
-    if session_with_messages is None:
-        session_with_messages = next(
-            (item for item in store.list_chat_sessions() if item.id == session.id),
-            None,
-        )
-    if session_with_messages is None:
-        return None
-
-    chat_messages = [
-        {"role": item.role, "content": item.content}
-        for item in session_with_messages.messages
-        if item.role in {"user", "assistant"} and item.content.strip()
-    ]
-    message_count = len(chat_messages)
-    if message_count < 2:
-        return None
-
-    should_refresh_existing = (
-        title_source == "openai" and message_count <= 12 and message_count - last_update_count >= 2
-    )
-    if not eligible_existing_title and not should_refresh_existing:
-        return None
-
-    title_model = _openai_title_model(registry)
-    if title_model is None:
-        return None
-
-    try:
-        generated = await gateway.generate_title(title_model, chat_messages)
-    except (ProviderConfigurationError, ProviderExecutionError):
-        return None
-
-    title = " ".join(generated.split()).strip().strip("\"'")
-    if not title:
-        return None
-    if len(title) > 72:
-        title = title[:72].rstrip()
-
-    metadata = dict(session.metadata or {})
-    metadata["title_source"] = "openai"
-    metadata["title_last_message_count"] = message_count
-    metadata["is_empty_draft"] = False
-    updated_session = session.model_copy(
-        update={
-            "title": title,
-            "metadata": metadata,
-            "updated_at": now_utc(),
-        }
-    )
-    if hasattr(store, "upsert_chat_session"):
-        store.upsert_chat_session(updated_session)
-    return title
 
 
 def select_orchestration_agents(
@@ -865,6 +795,63 @@ async def _search_knowledge_base_context(
 
     ranked.sort(key=lambda value: value[0], reverse=True)
     return [item for _score, item in ranked[:MAX_CONTEXT_DOCUMENTS]]
+
+
+@router.post(
+    "/sessions/{chat_id}/attachments/analyze",
+    response_model=ChatAttachmentAnalyzeResponse,
+)
+def analyze_attachment_for_chat(
+    chat_id: str, payload: ChatAttachmentAnalyzeRequest
+) -> ChatAttachmentAnalyzeResponse:
+    """Run the deep-analysis pipeline for an attachment in a 3D chat.
+
+    ADR-013 (Onda 2.7): the discovery agent calls this endpoint after
+    the user uploads an image or a 3D file. The response carries a
+    structured analysis (vision summary for images, mesh stats from
+    Blender headless for STL/OBJ/3MF/BLEND, metadata-only for STEP)
+    plus a ready-to-inject ``context_text`` block for the next LLM
+    turn.
+    """
+
+    store = get_store()
+    chat = None
+    if hasattr(store, "get_chat_session"):
+        chat = store.get_chat_session(chat_id)
+    if chat is None:
+        # Fall back to the summary list when ``get_chat_session`` is
+        # unavailable (legacy stores). Match by id only.
+        chat = next(
+            (item for item in store.list_chat_sessions() if item.id == chat_id),
+            None,
+        )
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Chat não encontrado.")
+    if not chat.is_modeling_3d:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "chat_is_not_modeling_3d",
+                "message": (
+                    "Análise de anexo para modelagem 3D só é aceita em chats "
+                    "marcados como is_modeling_3d=true."
+                ),
+            },
+        )
+
+    analyzer = ModelingAttachmentAnalyzer(store=store)
+    analysis = analyzer.analyze(payload.file_id)
+    return ChatAttachmentAnalyzeResponse(
+        file_id=analysis.file_id,
+        filename=analysis.filename,
+        kind=analysis.kind,
+        ok=analysis.ok,
+        summary=analysis.summary,
+        metrics=analysis.metrics,
+        suggestions=analysis.suggestions,
+        error=analysis.error,
+        context_text=analysis.to_context_text(),
+    )
 
 
 @router.get("/sessions", response_model=list[ChatSessionWithMessages])
@@ -1256,7 +1243,12 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
         runtime_allowed_project_ids=runtime_allowed_project_ids,
     )
     if session is None:
+        is_new_session = True
+        if settings.require_chat_title:
+            _enforce_required_chat_title(payload)
         session = store.get_or_create_session(payload)
+    else:
+        is_new_session = False
     effective_folder_id = payload.folder_id if payload.folder_id is not None else session.folder_id
     if (
         effective_project_id != session.project_id or effective_folder_id != session.folder_id
@@ -2049,14 +2041,6 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 },
             )
         )
-        updated_title = await _maybe_generate_openai_title(
-            store=store,
-            session=session,
-            gateway=gateway,
-            registry=registry,
-        )
-        if updated_title:
-            yield _sse("session_title", {"session_id": session.id, "title": updated_title})
         yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
 
     return StreamingResponse(events(), media_type="text/event-stream")

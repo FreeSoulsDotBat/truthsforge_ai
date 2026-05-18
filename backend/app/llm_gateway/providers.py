@@ -59,10 +59,10 @@ class LLMProvider(ABC):
             f"Geração de imagem não implementada para {self.provider.value}."
         )
 
-    async def generate_title(self, model: ModelConfig, messages: list[dict[str, str]]) -> str:
-        raise ProviderConfigurationError(
-            f"Geração de título não implementada para {self.provider.value}."
-        )
+    # ``generate_title`` was removed in Onda 2.10 (ADR-014). The base
+    # method and the per-provider overrides have been deleted; chat
+    # titles must come from the user (Pydantic validator at
+    # ``ChatSessionCreate`` + 422 in ``POST /api/chat/stream``).
 
     async def deep_research(
         self,
@@ -325,52 +325,9 @@ class OpenAIProvider(BaseRemoteProvider):
             return f"![Imagem gerada]({first['url']})"
         raise ProviderConfigurationError("Resposta de imagem sem URL ou base64.")
 
-    async def generate_title(self, model: ModelConfig, messages: list[dict[str, str]]) -> str:
-        api_key = self.api_key()
-        provider_model_id = self.provider_model_id(model)
-        transcript = []
-        for message in messages:
-            if message["role"] not in {"user", "assistant"}:
-                continue
-            role = "Usuário" if message["role"] == "user" else "Assistente"
-            transcript.append(f"{role}: {message['content']}")
-        prompt = "\n\n".join(transcript[-10:]).strip()
-        if not prompt:
-            return ""
-
-        payload = {
-            "model": provider_model_id,
-            "input": [
-                {
-                    "role": "system",
-                    "content": (
-                        "Crie um título curto para conversa em português do Brasil, "
-                        "com até 6 palavras, sem aspas e sem pontuação final."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-            "temperature": 0.2,
-            "max_output_tokens": 32,
-        }
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(
-                    "https://api.openai.com/v1/responses", headers=headers, json=payload
-                )
-                response.raise_for_status()
-            title = self._extract_response_text(response.json()).strip()
-            return title.strip().strip("\"'")
-        except httpx.HTTPStatusError as exc:
-            raise self._provider_error(exc) from exc
-        except httpx.RequestError as exc:
-            raise ProviderExecutionError(
-                f"Falha de rede ao gerar título com OpenAI: {exc}"
-            ) from exc
+    # ``generate_title`` removed in Onda 2.10 (ADR-014). Auto-titulação
+    # via OpenAI Responses API descontinuada — chats nascem com título
+    # obrigatório fornecido pelo usuário.
 
     async def deep_research(
         self,
