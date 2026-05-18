@@ -41,7 +41,7 @@ O backend e uma aplicacao FastAPI. Ele expoe rotas REST e streaming SSE para o c
 
 O frontend React e a primeira experiencia do usuario.
 
-- Sidebar esquerda: sessoes (com `ChatModeling3DBadge` para chats 3D), historico paginado, projetos/pastas e novo chat. Todo chat exige titulo nao vazio antes da primeira mensagem (ADR-014) — backend valida com HTTP 422 quando a flag `TRUTHS_FORGE_REQUIRE_CHAT_TITLE` esta ativa; modal frontend `ChatTitleRequiredDialog` planejado para Onda 5.
+- Sidebar esquerda: sessoes (com `ChatModeling3DBadge` para chats 3D), historico paginado, projetos/pastas e novo chat. Todo chat exige titulo nao vazio antes da primeira mensagem (ADR-014): o frontend abre `ChatTitleRequiredDialog`, envia `title` em `POST /api/chat/stream` e o backend valida com HTTP 422 quando `TRUTHS_FORGE_REQUIRE_CHAT_TITLE` esta ativa.
 - Centro: chat com streaming, anexos, MCP 3D ativado por chat (ADR-013) e upload rapido. Chats 3D mostram `ModelingPlanCard` (aprovacao por botoes inline em `apps/web/src/features/modeling-3d/components/`, com banner para etapas high-risk e estados `executing`/`completed`/`failed` com retry+revise) e `ModelingEditCard` (mini-planos auto-aprovados). Anexos (imagem ou arquivo 3D) disparam `analyze_attachment` em background apos o envio. Botao de diagnostico no cabecalho abre `ModelingDiagnosticsModal` read-only.
 - Painel direito: contexto, custos, RAG, auditoria, prompts, configuracao, arquivos, bases, projetos e agentes. O painel 3D no dashboard foi removido com ADR-013; toda interacao 3D ocorre no chat.
 - Configuracoes: API keys por provedor, registry editavel de modelos e secao "Modelagem 3D" (Blender path, Fusion MCP URL, transport, timeouts, status de adapters).
@@ -81,9 +81,9 @@ O SDD vive em `specs/` e organiza intenção, plano, tasks e handoff sem substit
 
 ## Fluxo de chat
 
-1. Usuario cria chat (com titulo obrigatorio nao vazio — ADR-014) e opcionalmente marca como 3D.
-2. Usuario envia mensagem no React.
-3. Frontend chama `POST /api/chat/stream`. Backend rejeita com 422 se `chat.title` ausente.
+1. Usuario cria chat e opcionalmente marca como 3D.
+2. Antes da primeira mensagem, o React exige um titulo nao vazio e nao-default via `ChatTitleRequiredDialog`.
+3. Frontend chama `POST /api/chat/stream` com `title`. Backend rejeita com 422 se o titulo estiver ausente ou ainda for `Novo chat`/`New chat`.
 4. Backend resolve agente principal, agente solicitado, agentes de apoio e bases atreladas.
 5. Se `chat.is_modeling_3d=true`, o agente segue a state machine `discovery → planning → approved → executing → editing` (ADR-013). Tools dedicadas (`3d.ask_clarification`, `3d.propose_plan`, `3d.propose_edit_plan`, `3d.request_high_risk_approval`, `3d.analyze_attachment`) controlam transicoes.
 6. Caso contrário, backend escolhe o modelo pelo Model Registry.

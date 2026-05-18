@@ -5,9 +5,11 @@ O módulo 3D nasce como um bounded context local para conectar JUDITE e agentes 
 ## Estado atual
 
 > **Refatoração v2 em curso.** A v2 (chat-first integral) é a direção definitiva
-> definida em ADR-013. A Onda 3 moveu o frontend 3D para o bounded context
-> `apps/web/src/features/modeling-3d/`; as próximas ondas entregam cards de
-> aprovação inline, título obrigatório e QA com Blender/Fusion reais.
+> definida em ADR-013. O frontend 3D já vive em
+> `apps/web/src/features/modeling-3d/`, os cards de aprovação inline já
+> renderizam no chat e a Onda 5 exige título antes da primeira mensagem. A
+> próxima frente é QA com Blender/Fusion reais e eventos SSE dedicados de
+> execução.
 
 - Backend FastAPI expõe `/api/3d/*` para execução, approval, snapshots,
   rollback, tool calls e printability. Os endpoints de criação manual de plano
@@ -68,6 +70,11 @@ class Chat:
 O badge `ChatModeling3DBadge` aparece na sidebar, no header do chat e em
 qualquer card de prévia. Tooltip: "Chat de modelagem 3D".
 
+Antes da primeira mensagem, `ChatTitleRequiredDialog` bloqueia títulos vazios
+ou defaults (`Novo chat`/`New chat`) e `streamChat` envia `title` no payload.
+Com `TRUTHS_FORGE_REQUIRE_CHAT_TITLE=true`, o backend devolve
+`chat_title_required` em HTTP 422 para qualquer bypass do frontend.
+
 ### State machine
 
 ```
@@ -87,13 +94,13 @@ opcional registrado na auditoria.
 
 ### Tools do agente (substitui `3d.generate_plan`)
 
-| Tool | Quando o agente chama | Efeito |
-|---|---|---|
-| `3d.ask_clarification` | Falta contexto durante descoberta | Pergunta livre ao usuário; sem registro de plano |
-| `3d.analyze_attachment` | Usuário anexou imagem ou arquivo 3D | Vision (imagens) ou Blender headless (arquivos 3D) com análise profunda |
-| `3d.propose_plan` | Agente tem contexto suficiente | Cria `ModelingPlan` `kind="primary"`, transiciona `discovery → planning`, renderiza `ModelingPlanCard` com botões aprovar/rejeitar |
-| `3d.propose_edit_plan` | Mensagem em `editing` sem high-risk | Mini-plano auto-aprovado, executa, renderiza `ModelingEditCard` compacto |
-| `3d.request_high_risk_approval` | Edição inclui tool high-risk | Mini-plano pendente; card volta a pedir aprovação inline |
+| Tool                            | Quando o agente chama               | Efeito                                                                                                                             |
+| ------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `3d.ask_clarification`          | Falta contexto durante descoberta   | Pergunta livre ao usuário; sem registro de plano                                                                                   |
+| `3d.analyze_attachment`         | Usuário anexou imagem ou arquivo 3D | Vision (imagens) ou Blender headless (arquivos 3D) com análise profunda                                                            |
+| `3d.propose_plan`               | Agente tem contexto suficiente      | Cria `ModelingPlan` `kind="primary"`, transiciona `discovery → planning`, renderiza `ModelingPlanCard` com botões aprovar/rejeitar |
+| `3d.propose_edit_plan`          | Mensagem em `editing` sem high-risk | Mini-plano auto-aprovado, executa, renderiza `ModelingEditCard` compacto                                                           |
+| `3d.request_high_risk_approval` | Edição inclui tool high-risk        | Mini-plano pendente; card volta a pedir aprovação inline                                                                           |
 
 ### Fluxo único (substitui modos `plan_only`/`approval_required`/`safe_auto`)
 
@@ -404,11 +411,11 @@ software). O audit event `modeling.plan_created` registra `planner_source` (`llm
 O LLM só pode escolher entre:
 
 - `blender.{create_mesh_primitive, apply_bevel, apply_boolean, apply_subdivision,
-  apply_solidify, assign_material, measure_object, repair_non_manifold, validate_mesh,
-  validate_printability, export_stl, export_obj, export_3mf}`
+apply_solidify, assign_material, measure_object, repair_non_manifold, validate_mesh,
+validate_printability, export_stl, export_obj, export_3mf}`
 - `fusion.{open_design, create_sketch, add_rectangle, add_circle, extrude_profile,
-  set_parameter, export_step, export_stl, export_3mf, validate_dimensions,
-  validate_printability}`
+set_parameter, export_step, export_stl, export_3mf, validate_dimensions,
+validate_printability}`
 
 O fallback heurístico para Fusion também usa o contrato real: abre/cria design,
 cria sketch, adiciona perfil retangular dimensionado, extruda, valida
@@ -419,15 +426,15 @@ printability e exporta STL como artifact versionado.
 A tool `blender.validate_printability` roda dentro do runner Blender em background e usa
 `bmesh` para checks geométricos:
 
-| Check | O que faz |
-|---|---|
-| `non_manifold` | conta arestas não-manifold por objeto (issue `error`) |
-| `loose_parts` | conta ilhas desconectadas e vértices soltos (issue `warning`) |
-| `volume` | sinaliza volume não-positivo, sugerindo malha aberta (issue `warning`) |
-| `normals` | heurística baseada em centróide para estimar faces invertidas (issue `warning`) |
-| `overhang_approx` | faces com normal abaixo de 45° em relação ao plano (issue `info`) |
-| `thickness_approx` | faces com área absurdamente pequena (issue `info`) |
-| `bounding_box` | dimensões em mm |
+| Check              | O que faz                                                                       |
+| ------------------ | ------------------------------------------------------------------------------- |
+| `non_manifold`     | conta arestas não-manifold por objeto (issue `error`)                           |
+| `loose_parts`      | conta ilhas desconectadas e vértices soltos (issue `warning`)                   |
+| `volume`           | sinaliza volume não-positivo, sugerindo malha aberta (issue `warning`)          |
+| `normals`          | heurística baseada em centróide para estimar faces invertidas (issue `warning`) |
+| `overhang_approx`  | faces com normal abaixo de 45° em relação ao plano (issue `info`)               |
+| `thickness_approx` | faces com área absurdamente pequena (issue `info`)                              |
+| `bounding_box`     | dimensões em mm                                                                 |
 
 O `risk_score` (0–1) agrega severidades com pesos: `error=0.5`, `warning=0.2`, `info=0.05`,
 saturado em 1.0. Cada execução vira um `ModelingPrintabilityReport` persistido em
@@ -499,6 +506,7 @@ painel 3D no dashboard**.
 > sobre `modeling3dApi`; o `App.tsx` instancia o hook e injeta
 > `modelingPlanActions` em cada `MessageBubble` de chat 3D ativo. Texto
 > livre **não** aciona execução em nenhum momento.
+
 - **`ModelingDiagnosticsModal`** — read-only, acessível pelo ícone de
   diagnóstico no cabeçalho do chat 3D. Abas: Adapters, Snapshots, Tool calls,
   Model versions, Printability reports.
@@ -583,7 +591,7 @@ Arquitetura quando o add-in está rodando:
 
 1. O add-in escuta em `127.0.0.1:<porta aleatória>` e grava um arquivo de
    discovery em `~/.truths_forge/fusion-bridge.json` com `{host, port, token,
-   pid, tools}`. O token é efêmero (gerado a cada `run()` do add-in) e o
+pid, tools}`. O token é efêmero (gerado a cada `run()` do add-in) e o
    arquivo é escrito atomicamente via `.tmp` + rename.
 2. O `FusionDesktopAdapter` no backend lê esse arquivo a cada chamada, abre
    socket TCP loopback, envia `auth` com o token, e em seguida despacha
@@ -607,7 +615,7 @@ Mesmo contrato dos servidores stdio: JSON-RPC 2.0 line-delimited. Métodos do ad
 - `status` — retorna `{server, connected, transport, addin_pid, tools}`.
 - `tools/call` — recebe `{name, arguments, _meta}`,
   bloqueia até a main thread executar, devolve o envelope `{ok, mcp_server,
-  transport, tool_name, software, message, ...}`.
+transport, tool_name, software, message, ...}`.
 
 ### Tools expostas no MVP
 
@@ -643,7 +651,7 @@ services:
     environment:
       TRUTHS_FORGE_FUSION_BRIDGE_HOST: host.docker.internal
     extra_hosts:
-      - "host.docker.internal:host-gateway"  # Linux precisa desse mapping
+      - "host.docker.internal:host-gateway" # Linux precisa desse mapping
 ```
 
 O override aceita IP ou nome DNS arbitrário. Precedência:
@@ -698,20 +706,20 @@ Fluxo:
    área total, área de faces "para baixo" (normal.z ≤ cos 135°), e área
    de faces "finas" (< 1 mm²).
 2. Esses summaries entram em `compute_printability_report(bodies, checks,
-   printer_profile)`, que aplica os checks abaixo e devolve
+printer_profile)`, que aplica os checks abaixo e devolve
    `{message, objects_inspected, checks_executed, issues, metrics,
-   recommendations, risk_score, printer_profile}` — mesma forma da resposta Blender.
+recommendations, risk_score, printer_profile}` — mesma forma da resposta Blender.
 
 Checks suportados:
 
-| Check | Severidade | Critério |
-|---|---|---|
-| `is_solid` | error | body não fechado → não printável |
-| `volume` | error | `volume_mm3 ≤ 0` (corpo aberto/degenerado) |
-| `bounding_box` | warning | menor dimensão < `min_dimension_mm` do profile |
-| `wall_thickness_approx` | warning | `2·V / A < min_wall_thickness_mm` |
-| `overhang_approx` | info | `downward_area / total_area > max_overhang_ratio` |
-| `thin_features` | info | `thin_face_area / total_area > max_thin_face_ratio` |
+| Check                   | Severidade | Critério                                            |
+| ----------------------- | ---------- | --------------------------------------------------- |
+| `is_solid`              | error      | body não fechado → não printável                    |
+| `volume`                | error      | `volume_mm3 ≤ 0` (corpo aberto/degenerado)          |
+| `bounding_box`          | warning    | menor dimensão < `min_dimension_mm` do profile      |
+| `wall_thickness_approx` | warning    | `2·V / A < min_wall_thickness_mm`                   |
+| `overhang_approx`       | info       | `downward_area / total_area > max_overhang_ratio`   |
+| `thin_features`         | info       | `thin_face_area / total_area > max_thin_face_ratio` |
 
 Perfis de impressora embutidos: `default` (genérico FDM) e `bambu_x1c_pla`.
 Adicionar perfis é trivial — basta uma nova entrada em `PRINTER_PROFILES`.

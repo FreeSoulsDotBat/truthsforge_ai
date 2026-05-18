@@ -281,6 +281,40 @@ def _clear_empty_draft_flag(store, session: ChatSession) -> ChatSession:
     return updated
 
 
+def _apply_stream_title_to_session(
+    store,
+    session: ChatSession,
+    payload: ChatStreamRequest,
+    *,
+    require_title: bool,
+) -> ChatSession:
+    """Persist the title collected by the Onda 5 modal for draft sessions."""
+
+    current_title = (session.title or "").strip().lower()
+    payload_title = (payload.title or "").strip()
+    payload_title_valid = bool(payload_title) and payload_title.lower() not in DEFAULT_CHAT_TITLES
+
+    if require_title and _is_empty_draft_session(session) and not payload_title_valid:
+        _enforce_required_chat_title(payload)
+
+    should_update_title = payload_title_valid and (
+        _is_empty_draft_session(session)
+        or not current_title
+        or current_title in DEFAULT_CHAT_TITLES
+    )
+    if not should_update_title:
+        return session
+
+    metadata = dict(session.metadata or {})
+    metadata["title_source"] = "manual"
+    updated = session.model_copy(
+        update={"title": payload_title, "metadata": metadata, "updated_at": now_utc()}
+    )
+    if hasattr(store, "upsert_chat_session"):
+        store.upsert_chat_session(updated)
+    return updated
+
+
 def _promote_modeling_session(
     store, session: ChatSession, payload: ChatStreamRequest
 ) -> ChatSession:
@@ -1279,6 +1313,12 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
         if settings.require_chat_title:
             _enforce_required_chat_title(payload)
         session = store.get_or_create_session(payload)
+    session = _apply_stream_title_to_session(
+        store,
+        session,
+        payload,
+        require_title=settings.require_chat_title,
+    )
     session = _promote_modeling_session(store, session, payload)
     effective_folder_id = payload.folder_id if payload.folder_id is not None else session.folder_id
     if (

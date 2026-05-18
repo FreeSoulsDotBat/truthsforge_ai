@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { ChatMessage, ModelingPlan } from "../../types/api";
-import { initialAssistantStatus, normalizeStreamExecutionModes, withModelingPlan } from "./chat-domain";
+import type { ChatMessage, ChatSession, ModelingPlan } from "../../types/api";
+import {
+  chatSessionNeedsTitle,
+  initialAssistantStatus,
+  isDefaultChatTitle,
+  normalizeStreamExecutionModes,
+  withModelingPlan
+} from "./chat-domain";
 
 function buildMessage(): ChatMessage {
   return {
@@ -100,5 +106,43 @@ describe("chat-domain modeling 3D helpers", () => {
       imageModelEnabled: false,
       modeling3dEnabled: true
     });
+  });
+});
+
+describe("chat-domain required title helpers", () => {
+  function buildSession(title: string): ChatSession {
+    return {
+      id: "session_1",
+      title,
+      model_id: null,
+      agent_id: null,
+      project_id: "project_general",
+      folder_id: null,
+      context_project_ids: [],
+      context_document_ids: [],
+      context_knowledge_base_ids: [],
+      archived: false,
+      is_modeling_3d: false,
+      modeling_software_preference: null,
+      modeling_stage: null,
+      modeling_plan_id: null,
+      metadata: {},
+      created_at: new Date("2026-05-14T00:00:00Z").toISOString(),
+      updated_at: new Date("2026-05-14T00:00:00Z").toISOString(),
+      messages: []
+    };
+  }
+
+  it("treats blank and default chat titles as invalid for the first send", () => {
+    expect(isDefaultChatTitle("")).toBe(true);
+    expect(isDefaultChatTitle(" Novo chat ")).toBe(true);
+    expect(isDefaultChatTitle("New chat")).toBe(true);
+    expect(isDefaultChatTitle("Plano de suporte")).toBe(false);
+  });
+
+  it("requires a title when no usable session title exists", () => {
+    expect(chatSessionNeedsTitle(null)).toBe(true);
+    expect(chatSessionNeedsTitle(buildSession("Novo chat"))).toBe(true);
+    expect(chatSessionNeedsTitle(buildSession("Briefing do suporte"))).toBe(false);
   });
 });

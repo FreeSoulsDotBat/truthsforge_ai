@@ -51,7 +51,7 @@ import {
 } from "./components/app-panels";
 import { Badge } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
-import { api, streamChat } from "./lib/api";
+import { api, ChatStreamHttpError, streamChat } from "./lib/api";
 import {
   agentRequiredFieldsComplete,
   createEmptyAgentDraft,
@@ -61,6 +61,7 @@ import {
 import {
   type ChatMessageAttachment,
   initialAssistantStatus,
+  normalizeRequiredChatTitle,
   localAssistantMessage,
   messageMetadata,
   normalizeStreamExecutionModes,
@@ -68,6 +69,8 @@ import {
   withReasoningSummary,
   withRuntimeStatus
 } from "./features/chat/chat-domain";
+import { ChatTitleRequiredDialog } from "./features/chat/components/ChatTitleRequiredDialog";
+import { useChatTitleGate } from "./features/chat/hooks/useChatTitleGate";
 import {
   fileContentUrl,
   platformFileLabel,
@@ -674,9 +677,32 @@ function App() {
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
     [activeSessionId, sessions]
   );
+  const chatTitleGate = useChatTitleGate(activeSession);
   const activeSessionIsModeling3D = isModeling3DChat(activeSession);
   const modeling3dEnabled = nextChatIs3D || activeSessionIsModeling3D;
   const activeModelingPlanId = activeSession?.modeling_plan_id ?? null;
+
+  const applyChatTitleToSession = useCallback((sessionId: string, title: string) => {
+    const normalizedTitle = normalizeRequiredChatTitle(title);
+    if (!normalizedTitle) return;
+    setSessions((current) =>
+      sortSessionsByNewest(
+        current.map((session) => {
+          if (session.id !== sessionId) return session;
+          const metadata = (session.metadata ?? {}) as Record<string, unknown>;
+          return {
+            ...session,
+            title: normalizedTitle,
+            metadata: {
+              ...metadata,
+              title_source: "manual"
+            },
+            updated_at: new Date().toISOString()
+          };
+        })
+      )
+    );
+  }, []);
 
   // Onda 4.4 — mirror approve/reject/retry/revise outcomes from
   // useModelingPlanActions onto the local session graph so the
@@ -689,15 +715,12 @@ function App() {
         current.map((session) => {
           if (session.id !== plan.conversation_id) return session;
           const messages = session.messages.map((message) =>
-            messageMetadata(message).modeling_plan?.id === plan.id
-              ? withModelingPlan(message, plan)
-              : message
+            messageMetadata(message).modeling_plan?.id === plan.id ? withModelingPlan(message, plan) : message
           );
           return {
             ...session,
             modeling_stage: nextStage,
-            modeling_plan_id:
-              nextStage === "discovery" ? null : plan.id ?? session.modeling_plan_id,
+            modeling_plan_id: nextStage === "discovery" ? null : (plan.id ?? session.modeling_plan_id),
             messages
           };
         })
@@ -1141,6 +1164,14 @@ function App() {
     event.preventDefault();
     const message = draft.trim();
     if (!message || isStreaming) return;
+    const confirmedTitle = chatTitleGate.needsTitle
+      ? await chatTitleGate.openTitleDialog(activeSession?.title)
+      : normalizeRequiredChatTitle(activeSession?.title);
+    if (chatTitleGate.needsTitle && !confirmedTitle) return;
+    const streamTitle = confirmedTitle || normalizeRequiredChatTitle(activeSession?.title) || undefined;
+    if (streamTitle && activeSession?.id) {
+      applyChatTitleToSession(activeSession.id, streamTitle);
+    }
     chatStickToBottomRef.current = true;
     setDraft("");
     setIsStreaming(true);
@@ -1245,6 +1276,7 @@ function App() {
         {
           message,
           session_id: sessionId ?? undefined,
+          title: streamTitle,
           agent_id: activeAgent?.id,
           agent_ids: runtimeSupportAgents.map((agent) => agent.id),
           project_id: chatProjectId,
@@ -1292,7 +1324,7 @@ function App() {
               return sortSessionsByNewest([
                 {
                   id: meta.session_id,
-                  title: message.slice(0, 48),
+                  title: streamTitle ?? message.slice(0, 48),
                   model_id: activeAgentModelLabel,
                   agent_id: activeAgent?.id,
                   project_id: activeSessionProjectId,
@@ -1307,6 +1339,7 @@ function App() {
                   archived: false,
                   metadata: {
                     is_empty_draft: false,
+                    ...(streamTitle ? { title_source: "manual" } : {}),
                     ...(modeling3dPayload.enabled ? { modeling_3d: modeling3dPayload } : {})
                   },
                   created_at: new Date().toISOString(),
@@ -1404,6 +1437,9 @@ function App() {
             if (error.reason === "context_document_selection_required") {
               setContextDocsModalOpen(true);
             }
+            if (error.reason === "chat_title_required") {
+              return;
+            }
             const errorMessage = error.message ?? "Não consegui concluir a chamada ao provedor.";
             const errorStatus = {
               stage: "error",
@@ -1488,25 +1524,37 @@ function App() {
                 role: "assistant" as const,
                 content: `Não consegui analisar o anexo (${entry.fileId}): ${entry.error}`,
                 model_id: null,
-                metadata: { response_mode: "modeling_3d_attachment_analysis_error" } as Record<
-                  string,
-                  unknown
-                >,
+                metadata: { response_mode: "modeling_3d_attachment_analysis_error" } as Record<string, unknown>,
                 created_at: new Date().toISOString()
               };
             });
             if (!notes.length) return;
             setSessions((current) =>
               current.map((session) =>
-                session.id === chatIdForAnalysis
-                  ? { ...session, messages: [...session.messages, ...notes] }
-                  : session
+                session.id === chatIdForAnalysis ? { ...session, messages: [...session.messages, ...notes] } : session
               )
             );
           });
         }
       }
     } catch (error) {
+      if (error instanceof ChatStreamHttpError && error.reason === "chat_title_required") {
+        setDraft(message);
+        if (sessionId && (optimisticUser || optimisticAssistant)) {
+          const optimisticIds = new Set(
+            [optimisticUser?.id, optimisticAssistant?.id].filter((id): id is string => Boolean(id))
+          );
+          setSessions((current) =>
+            current.map((session) =>
+              session.id === sessionId
+                ? { ...session, messages: session.messages.filter((item) => !optimisticIds.has(item.id)) }
+                : session
+            )
+          );
+        }
+        void chatTitleGate.openTitleDialog(activeSession?.title);
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : "Falha inesperada no chat.";
       const fallbackOptimisticUser =
         optimisticUser ??
@@ -1545,7 +1593,7 @@ function App() {
           sortSessionsByNewest([
             {
               id: localSessionId,
-              title: message.slice(0, 48),
+              title: streamTitle ?? message.slice(0, 48),
               model_id: activeAgentModelLabel,
               agent_id: activeAgent?.id,
               project_id: activeSessionProjectId,
@@ -2321,6 +2369,13 @@ function App() {
           onSave={(knowledgeBaseIds) => void saveChatKnowledgeBaseSelection(knowledgeBaseIds)}
         />
       )}
+      <ChatTitleRequiredDialog
+        key={chatTitleGate.dialogRequestId}
+        open={chatTitleGate.dialogOpen}
+        initialTitle={chatTitleGate.initialTitle}
+        onConfirm={chatTitleGate.confirmTitle}
+        onCancel={chatTitleGate.cancelTitleDialog}
+      />
       <EnableModeling3DDialog
         open={modelingEnableDialogOpen}
         software={modeling3dSoftware}

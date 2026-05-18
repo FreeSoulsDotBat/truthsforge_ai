@@ -3,38 +3,94 @@
 > **Para a próxima IA/humano que pegar o trabalho:** leia esse arquivo
 > inteiro **antes** de tocar código. As seções abaixo descrevem o que já
 > está em produção, o que está em PR aberto, os gaps que ficaram
-> explicitamente sem fazer, e como continuar (passo a passo) a partir da
-> Onda 5. As decisões consolidadas com o dono do produto seguem firmes —
+> explicitamente sem fazer, e como continuar a partir da Onda 6. As
+> decisões consolidadas com o dono do produto seguem firmes —
 > não reabrir sem aprovação.
 
 ## Estado atual
 
-Refatoração v2 (chat-first integral + título obrigatório). **Onda 4 em
-PR #25** na branch `refactor/3d-frontend-chat-cards`.
+Refatoração v2 (chat-first integral + título obrigatório). **Onda 5
+concluída localmente** na branch `codex/3d-chat-title-required`; falta
+PR/merge.
 
-| Onda | Status | PR | Commits-chave |
-|---|---|---|---|
-| 0 — Specs/docs/ADRs | mergeado | #19 | `bf9395a` |
-| 1 — Backend foundations | mergeado | #19 | `0546ff8` → `371eb0e` |
-| 2 — Backend chat-first orchestration | mergeado | #20 | `f5269b7` → `c3cb10c` |
-| 3 — Frontend feature module 3D | mergeado | #21 + fixes #22, #24 | `a94a273` |
-| 4 — Frontend cards + aprovação inline + auto-analyze | em PR | #25 | `cf42144` → `424be99` |
-| 5 — Título obrigatório do chat (frontend) | não iniciada | — | — |
-| 6 — QA / docs finais + wire orchestrator no stream | não iniciada | — | — |
+| Onda                                                 | Status               | PR                   | Commits-chave                         |
+| ---------------------------------------------------- | -------------------- | -------------------- | ------------------------------------- |
+| 0 — Specs/docs/ADRs                                  | mergeado             | #19                  | `bf9395a`                             |
+| 1 — Backend foundations                              | mergeado             | #19                  | `0546ff8` → `371eb0e`                 |
+| 2 — Backend chat-first orchestration                 | mergeado             | #20                  | `f5269b7` → `c3cb10c`                 |
+| 3 — Frontend feature module 3D                       | mergeado             | #21 + fixes #22, #24 | `a94a273`                             |
+| 4 — Frontend cards + aprovação inline + auto-analyze | mergeado             | #25                  | `cf42144` → `424be99`                 |
+| 5 — Título obrigatório do chat (frontend)            | concluída localmente | —                    | branch `codex/3d-chat-title-required` |
+| 6 — QA / docs finais + wire orchestrator no stream   | não iniciada         | —                    | —                                     |
 
 Verificação ao fim da Onda 4 (local, Windows):
+
 - `pytest tests/ --ignore=tests/test_postgres_store.py` → **243 verdes**
 - `pnpm test:unit` → **60 verdes** em 11 arquivos (16 novos)
 - `pnpm typecheck` → limpo
 - `alembic history` linear `001 → 002 → 003 → 004`
 
+Verificação da Onda 5 (local, Windows):
+
+- `backend\.venv\Scripts\python.exe -m ruff format --check backend\app\api\routes\chat.py backend\tests\test_chat_title_required.py` → limpo.
+- `backend\.venv\Scripts\python.exe -m ruff check backend\app\api\routes\chat.py backend\tests\test_chat_title_required.py` → limpo.
+- `backend\.venv\Scripts\python.exe -m pytest backend\tests\test_chat_title_required.py -q` → **8 verdes**.
+- `backend\.venv\Scripts\python.exe -m pytest backend\tests --ignore=backend\tests\test_postgres_store.py --ignore=backend\tests\test_alembic_migrations.py -q` → **239 verdes**.
+- `pnpm --filter @truths-forge/web lint` → limpo.
+- `pnpm --filter @truths-forge/web typecheck` → limpo.
+- `pnpm --filter @truths-forge/web test:unit` → **68 verdes**.
+- `pnpm --filter @truths-forge/web exec prettier --check <arquivos tocados>` → limpo.
+- `pnpm --filter @truths-forge/docs build` → limpo com warning conhecido de `vscode-languageserver-types`.
+- Smoke visual local em `http://127.0.0.1:5173` → modal abriu antes do envio, bloqueou título vazio, aceitou `Smoke título obrigatório` e o backend persistiu a sessão com mensagem sem `chat_title_required`.
+
+Limitações: `pnpm --filter @truths-forge/web format:check` completo ainda
+falha por 38 arquivos preexistentes fora do escopo. A suíte backend completa
+sem ignores parou na coleta porque o venv atual não tem `alembic`.
+
 ---
+
+## O que a Onda 5 entregou
+
+**Arquivos novos:**
+
+- `apps/web/src/features/chat/components/ChatTitleRequiredDialog.tsx`
+- `apps/web/src/features/chat/components/ChatTitleRequiredDialog.test.tsx`
+- `apps/web/src/features/chat/hooks/useChatTitleGate.ts`
+
+**Arquivos alterados:**
+
+- `apps/web/src/features/chat/chat-domain.ts` centraliza `DEFAULT_CHAT_TITLES`,
+  normalização de título e `chatSessionNeedsTitle`.
+- `apps/web/src/App.tsx` abre o modal antes de `streamChat`, atualiza o título
+  local da sessão, envia `title` no payload e restaura o draft quando o backend
+  devolve `chat_title_required`.
+- `apps/web/src/lib/api.ts` transforma HTTP 422 JSON em `onError` com
+  `reason: "chat_title_required"` e lança `ChatStreamHttpError` para o caller.
+- `backend/app/api/routes/chat.py` persiste `payload.title` em rascunhos já
+  criados como `Novo chat` antes do primeiro envio.
+- `infra/docker-compose.dev.yml` e `infra/.env.example` ligam
+  `TRUTHS_FORGE_REQUIRE_CHAT_TITLE=true`.
+
+**Contrato de UI:**
+
+- `ChatTitleRequiredDialog` usa `role="dialog"`, `aria-modal`, autofocus no
+  input, ESC para cancelar e Enter para confirmar.
+- Confirmar fica bloqueado para vazio/whitespace/`Novo chat`/`New chat` e
+  durante `busy`.
+- O modal não executa envio por texto livre; ele apenas resolve o título para
+  o fluxo do `App.tsx`.
+
+**Pendências imediatas:**
+
+- Rodar o smoke manual da task 5.6.
+- Registrar resultados de validação final nesta seção antes de PR/merge.
 
 ## O que a Onda 4 entregou (detalhe técnico)
 
 ### Sub-etapa 4.1+4.2 — Cards no chat (commit `cf42144`)
 
 **Arquivos novos:**
+
 - `apps/web/src/features/modeling-3d/components/ModelingPlanCard.tsx`
 - `apps/web/src/features/modeling-3d/components/ModelingPlanCard.test.tsx` (12 testes)
 - `apps/web/src/features/modeling-3d/components/ModelingEditCard.tsx`
@@ -42,16 +98,18 @@ Verificação ao fim da Onda 4 (local, Windows):
 - `apps/web/src/features/modeling-3d/hooks/useModelingPlanActions.ts`
 
 **`ModelingPlanCard` — contrato:**
+
 ```ts
 interface ModelingPlanCardProps {
   plan: ModelingPlan;
   onApprove?: (reason?: string) => Promise<void> | void;
   onReject?: (reason: string) => Promise<void> | void;
-  onRetry?: () => Promise<void> | void;     // só em status="failed"
-  onRevise?: () => Promise<void> | void;    // só em status="failed"
+  onRetry?: () => Promise<void> | void; // só em status="failed"
+  onRevise?: () => Promise<void> | void; // só em status="failed"
   isBusy?: boolean;
 }
 ```
+
 - Renderiza prosa (rationale → prompt fallback), badges (software/status
   localizado em pt-BR/planner_source/kind=edit), banner amarelo quando
   há etapa `risk_level="high"` ou `approval_required=true`, lista de
@@ -66,11 +124,13 @@ interface ModelingPlanCardProps {
 - Texto livre **não** dispara nada — reforçado em copy no rodapé.
 
 **`ModelingEditCard` — contrato:**
+
 ```ts
 interface ModelingEditCardProps {
-  plan: ModelingPlan;  // sempre kind="edit"
+  plan: ModelingPlan; // sempre kind="edit"
 }
 ```
+
 - Card compacto, sem botões. Renderiza header com ícone+badge "edição",
   resumo (rationale → prompt → fallback "Edição executada no modelo 3D"),
   contagem de etapas executadas e falhas.
@@ -78,6 +138,7 @@ interface ModelingEditCardProps {
   o caller renderiza `ModelingPlanCard` em vez deste.
 
 **`useModelingPlanActions` — contrato:**
+
 ```ts
 {
   busy: boolean;
@@ -91,6 +152,7 @@ interface ModelingEditCardProps {
   reset(): void;
 }
 ```
+
 - `approve` chama `modeling3dApi.approvePlan(id)` seguido de
   `modeling3dApi.executePlan(id)` em sequência. Mantém os dois retornos
   em `lastPlan` / `lastExecution`.
@@ -107,6 +169,7 @@ interface ModelingEditCardProps {
 `modeling_plan_id` e volta para `discovery`.
 
 **Handlers wire-up:**
+
 - `handleApproveModelingPlan(planId)` → `hook.approve` → `applyPlanToSession(result.plan, "editing")`
 - `handleRejectModelingPlan(planId, reason)` → `hook.reject` → `applyPlanToSession(rejected, "discovery")`
 - `handleRetryModelingPlan(planId)` → `hook.retry` → `applyPlanToSession(execution.plan, "editing")`
@@ -124,6 +187,7 @@ imediatamente após o stream completar e antes do `catch`.
 **Trigger:** `modeling3dPayload.enabled && uploadedFileIds.length > 0`.
 
 **Comportamento:**
+
 1. `Promise.all` paralelo sobre `uploadedFileIds`.
 2. Para cada, `modeling3dApi.analyzeAttachment(chatId, fileId)`.
 3. Cada sucesso vira `ChatMessage` assistant local com:
@@ -131,7 +195,7 @@ imediatamente após o stream completar e antes do `catch`.
    - `metadata.attachment_analysis = AttachmentAnalysis` completo
    - `content = analysis.context_text` (pronto para LLM ler)
 4. Falhas viram nota assistant com `response_mode =
-   "modeling_3d_attachment_analysis_error"` e texto humano legível —
+"modeling_3d_attachment_analysis_error"` e texto humano legível —
    nunca quebram o chat.
 5. `void Promise.all` não bloqueia o reset dos `attached*` states.
 
@@ -247,6 +311,7 @@ sub-fase dedicada entre 5 e 6.
 **não é chamado pelo stream handler ainda**.
 
 **O que falta:** o stream handler precisa:
+
 1. Detectar `chat.is_modeling_3d` no início.
 2. Decidir a fase atual via `chat.modeling_stage`.
 3. Chamar `orchestrator.propose_plan(chat, payload)` em `discovery`
@@ -299,7 +364,7 @@ insuficiente (poucas mensagens em discovery).
 `chat.message_count_in_stage == 1` ou similar. Pode ser feito junto
 com o Gap 2 (wire do orchestrator).
 
-### Gap 6 — Modal de título obrigatório no frontend (Onda 5)
+### Gap 6 — Modal de título obrigatório no frontend (resolvido na Onda 5)
 
 **Decisão:** ADR-014. Cliente React precisa exigir título antes da
 primeira mensagem.
@@ -309,19 +374,21 @@ flag `TRUTHS_FORGE_REQUIRE_CHAT_TITLE=true`. Flag está em
 `backend/app/core/config.py`, default `false` para não quebrar o
 frontend legado.
 
-**O que falta:** implementar Onda 5 (ver guia detalhado abaixo).
+**Status:** concluído localmente em `codex/3d-chat-title-required`; falta
+PR/merge.
 
 ---
 
-## Guia step-by-step para a Onda 5
+## Guia histórico da Onda 5
 
-A maior parte do trabalho da Onda 5 é **frontend**. Backend já está
-pronto desde a Onda 2.9 — só precisa flipar a feature flag depois que
-o frontend estiver entregue.
+Este plano fica como registro do que foi implementado. A maior parte do
+trabalho da Onda 5 foi frontend; o backend recebeu apenas o ajuste para
+persistir o título em rascunhos já criados.
 
 ### Contratos backend que o frontend precisa honrar (já implementados)
 
 1. **Campo opcional `title` em `ChatStreamRequest`**:
+
    ```python
    # backend/app/core/contracts.py
    class ChatStreamRequest(BaseModel):
@@ -330,9 +397,11 @@ o frontend estiver entregue.
        title: str | None = None   # ← novo (Onda 2.9)
        ...
    ```
+
    O frontend deve incluir esse campo em todo `POST /api/chat/stream`.
 
 2. **422 quando flag ativa**:
+
    ```python
    # backend/app/api/routes/chat.py
    def _enforce_required_chat_title(payload: ChatStreamRequest) -> None:
@@ -346,6 +415,7 @@ o frontend estiver entregue.
                },
            )
    ```
+
    `DEFAULT_CHAT_TITLES = {"novo chat", "new chat"}` — qualquer um
    desses + vazio → 422.
 
@@ -359,8 +429,8 @@ o frontend estiver entregue.
        )
    )
    ```
-   Quando frontend estiver pronto, flipar para `true` no
-   `infra/.env.example` e no `docker-compose.dev.yml`.
+   Na Onda 5, `infra/.env.example` e `docker-compose.dev.yml` foram
+   atualizados para `true`.
 
 ### Plano de execução da Onda 5
 
@@ -370,6 +440,7 @@ o frontend estiver entregue.
 (criar pasta `components/` se não existir).
 
 **Props:**
+
 ```ts
 interface ChatTitleRequiredDialogProps {
   open: boolean;
@@ -381,15 +452,17 @@ interface ChatTitleRequiredDialogProps {
 ```
 
 **Comportamento:**
+
 - Modal acessível (`role="dialog"`, `aria-modal="true"`).
 - Input texto com `min_length=1`, autofocus.
 - Botão "Confirmar" desabilita enquanto título vazio/whitespace ou
   está em `DEFAULT_CHAT_TITLES` (`"Novo chat"`, `"New chat"`).
 - ESC cancela; Enter confirma se válido.
-- Copy: "Dê um título para esse chat antes de começar — isso ajuda
+- Copy: "Dê um título para esse chat antes de começar: isso ajuda
   você a encontrá-lo depois e economiza chamadas ao modelo."
 
 **Test file:** `ChatTitleRequiredDialog.test.tsx` cobrindo:
+
 - Modal abre/fecha com prop `open`
 - Confirma desabilitado com título vazio/default
 - ESC fecha
@@ -401,6 +474,7 @@ interface ChatTitleRequiredDialogProps {
 **Onde:** `apps/web/src/features/chat/hooks/useChatTitleGate.ts`.
 
 **API sugerida:**
+
 ```ts
 function useChatTitleGate(activeSession: ChatSession | null) {
   // Retorna { needsTitle: boolean, openTitleDialog, ... }
@@ -428,6 +502,7 @@ function useChatTitleGate(activeSession: ChatSession | null) {
 
 Precisa que o `onError` callback do `streamChat` seja chamado com algo
 do tipo:
+
 ```ts
 onError({
   reason: "chat_title_required",
@@ -439,6 +514,7 @@ onError({
 #### 5.5 — Flag flip + smoke test
 
 Após 5.1–5.4 mergeado:
+
 1. Adicionar `TRUTHS_FORGE_REQUIRE_CHAT_TITLE=true` em
    `infra/docker-compose.dev.yml` e `infra/.env.example`.
 2. Rodar manualmente: criar chat novo, tentar enviar mensagem sem
@@ -467,16 +543,16 @@ Total: pequeno-médio. Compatível com um único PR.
 
 ## Mapa de contratos de API (frontend ↔ backend)
 
-| Endpoint | Quem chama | Estado |
-|---|---|---|
-| `POST /api/chat/stream` | `streamChat` em `lib/api.ts` | Aceita `title` opcional (Onda 2.9). Retorna SSE com `modeling_plan` event quando 3D. |
-| `POST /api/chat/sessions/{chat_id}/attachments/analyze` | `modeling3dApi.analyzeAttachment` | Onda 2.7. Retorna `ChatAttachmentAnalyzeResponse`. |
-| `GET /api/3d/capabilities` | `modeling3dApi.capabilities` | Diagnóstico, mantido. |
-| `GET /api/3d/plans` | `modeling3dApi.plans` | Read-only para diagnóstico. |
-| `POST /api/3d/plans/{id}/approve` | `modeling3dApi.approvePlan` / `rejectPlan` | Onda 4. Body `{decision, reason}`. |
-| `POST /api/3d/plans/{id}/execute` | `modeling3dApi.executePlan` | Onda 4. Sem body. |
-| ~~`POST /api/3d/plans`~~ | — | **Removido na Onda 2.11**. |
-| ~~`POST /api/3d/steps/{id}/approve`~~ | — | **Removido na Onda 2.11**. |
+| Endpoint                                                | Quem chama                                 | Estado                                                                               |
+| ------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `POST /api/chat/stream`                                 | `streamChat` em `lib/api.ts`               | Aceita `title` opcional (Onda 2.9). Retorna SSE com `modeling_plan` event quando 3D. |
+| `POST /api/chat/sessions/{chat_id}/attachments/analyze` | `modeling3dApi.analyzeAttachment`          | Onda 2.7. Retorna `ChatAttachmentAnalyzeResponse`.                                   |
+| `GET /api/3d/capabilities`                              | `modeling3dApi.capabilities`               | Diagnóstico, mantido.                                                                |
+| `GET /api/3d/plans`                                     | `modeling3dApi.plans`                      | Read-only para diagnóstico.                                                          |
+| `POST /api/3d/plans/{id}/approve`                       | `modeling3dApi.approvePlan` / `rejectPlan` | Onda 4. Body `{decision, reason}`.                                                   |
+| `POST /api/3d/plans/{id}/execute`                       | `modeling3dApi.executePlan`                | Onda 4. Sem body.                                                                    |
+| ~~`POST /api/3d/plans`~~                                | —                                          | **Removido na Onda 2.11**.                                                           |
+| ~~`POST /api/3d/steps/{id}/approve`~~                   | —                                          | **Removido na Onda 2.11**.                                                           |
 
 ## Mapa de state machine
 
@@ -503,6 +579,7 @@ Transitions implementadas em `backend/app/modeling/chat_state.py`
 
 Eventos emitidos pelo `ModelingChatOrchestrator` (todos com
 `metadata.chat_id`):
+
 - `modeling.chat.discovery_started`
 - `modeling.chat.clarification_asked`
 - `modeling.chat.plan_proposed`

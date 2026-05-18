@@ -26,9 +26,8 @@ def _post_stream(client: TestClient, payload: dict) -> dict:
     response = client.post("/api/chat/stream", json=payload)
     return {
         "status": response.status_code,
-        "json": response.json() if response.headers.get("content-type", "").startswith(
-            "application/json"
-        )
+        "json": response.json()
+        if response.headers.get("content-type", "").startswith("application/json")
         else None,
         "text": response.text,
     }
@@ -88,6 +87,48 @@ def test_meaningful_title_does_not_trigger_422() -> None:
         detail = response["json"].get("detail")
         if isinstance(detail, dict):
             assert detail.get("error") != "chat_title_required"
+
+
+def test_existing_empty_draft_requires_meaningful_title() -> None:
+    client = TestClient(app)
+    draft = client.post("/api/chat/sessions", json={"title": "Novo chat"})
+    assert draft.status_code == 200
+
+    response = _post_stream(
+        client,
+        {
+            "session_id": draft.json()["id"],
+            "message": "olá",
+            "title": "Novo chat",
+        },
+    )
+
+    assert response["status"] == 422
+    assert response["json"]["detail"]["error"] == "chat_title_required"
+
+
+def test_existing_empty_draft_persists_meaningful_stream_title() -> None:
+    client = TestClient(app)
+    draft = client.post("/api/chat/sessions", json={"title": "Novo chat"})
+    assert draft.status_code == 200
+    session_id = draft.json()["id"]
+
+    response = _post_stream(
+        client,
+        {
+            "session_id": session_id,
+            "message": "olá",
+            "title": "Briefing do suporte 3D",
+        },
+    )
+
+    if response["status"] == 422 and isinstance(response["json"], dict):
+        detail = response["json"].get("detail")
+        if isinstance(detail, dict):
+            assert detail.get("error") != "chat_title_required"
+    details = client.get(f"/api/chat/sessions/{session_id}")
+    assert details.status_code == 200
+    assert details.json()["title"] == "Briefing do suporte 3D"
 
 
 def test_flag_off_keeps_legacy_default_title_accepted(
