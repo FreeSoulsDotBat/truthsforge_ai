@@ -537,6 +537,9 @@ def test_chat_stream_can_create_modeling_plan_inline() -> None:
     assert sessions.status_code == 200
     session = next(item for item in sessions.json() if item["project_id"] == project_id)
     assert session["title"].startswith("Crie no Blender")
+    assert session["is_modeling_3d"] is True
+    assert session["modeling_software_preference"] == "blender"
+    assert session["modeling_stage"] == "editing"
     details = client.get(f"/api/chat/sessions/{session['id']}")
     assert details.status_code == 200
     messages = details.json()["messages"]
@@ -551,6 +554,61 @@ def test_chat_stream_can_create_modeling_plan_inline() -> None:
     assert plan["steps"]
     assert all(step["tool_name"] != "project_store.create_snapshot" for step in plan["steps"])
     assert all(step["approval_required"] is False for step in plan["steps"])
+
+
+def test_chat_stream_promotes_empty_draft_to_modeling_chat() -> None:
+    client = TestClient(app)
+    project = client.post(
+        "/api/projects",
+        json={"name": f"Projeto draft 3D {uuid4().hex}", "description": "modelagem via draft"},
+    )
+    assert project.status_code == 200
+    project_id = project.json()["id"]
+    agent = client.post(
+        "/api/agents",
+        json={
+            "name": f"JUDITE draft 3D {uuid4().hex}",
+            "description": "Orquestradora 3D de draft",
+            "system_prompt": "Planeje modelagem 3D.",
+            "role": "orchestrator",
+            "allowed_project_ids": [project_id],
+        },
+    )
+    assert agent.status_code == 200
+
+    draft = client.post(
+        "/api/chat/sessions",
+        json={"title": "Novo chat", "project_id": project_id, "agent_id": agent.json()["id"]},
+    )
+    assert draft.status_code == 200
+    draft_session = draft.json()
+    assert draft_session["is_modeling_3d"] is False
+
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "session_id": draft_session["id"],
+            "message": "Crie um cubo simples para impressão 3D",
+            "project_id": project_id,
+            "agent_id": agent.json()["id"],
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "safe_auto",
+                "software_override": "blender",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert "event: modeling_plan" in response.text
+    details = client.get(f"/api/chat/sessions/{draft_session['id']}")
+    assert details.status_code == 200
+    session = details.json()
+    assert session["is_modeling_3d"] is True
+    assert session["modeling_software_preference"] == "blender"
+    assert session["modeling_stage"] == "editing"
+    assert session["modeling_plan_id"] is not None
+    assert session["messages"][-1]["metadata"]["response_mode"] == "modeling_3d"
 
 
 def test_chat_stream_preserves_modeling_plan_when_inline_execution_fails(monkeypatch) -> None:

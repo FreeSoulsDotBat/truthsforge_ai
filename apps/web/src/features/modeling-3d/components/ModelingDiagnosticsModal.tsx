@@ -57,7 +57,9 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, onClose }: M
         <div className="flex items-start justify-between gap-3 border-b border-forge-line p-4">
           <div>
             <p className="text-xs uppercase text-forge-muted">Diagnóstico MCP</p>
-            <h3 id={titleId} className="text-lg font-semibold">Modelagem 3D</h3>
+            <h3 id={titleId} className="text-lg font-semibold">
+              Modelagem 3D
+            </h3>
             <p className="text-sm text-forge-muted">Adapters, tool calls, printability e artifacts do chat 3D.</p>
           </div>
           <button
