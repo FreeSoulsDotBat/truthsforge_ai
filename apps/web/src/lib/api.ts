@@ -304,6 +304,7 @@ export const api = {
 export interface StreamChatPayload {
   message: string;
   session_id?: string;
+  title?: string;
   model_id?: string;
   agent_id?: string;
   agent_ids?: string[];
@@ -333,6 +334,38 @@ export interface StreamStatusEvent {
 
 export type StreamEventPayload = Record<string, unknown>;
 
+export class ChatStreamHttpError extends Error {
+  status: number;
+  reason?: string;
+
+  constructor(message: string, options: { status: number; reason?: string }) {
+    super(message);
+    this.name = "ChatStreamHttpError";
+    this.status = options.status;
+    this.reason = options.reason;
+  }
+}
+
+async function parseChatStreamHttpError(response: Response): Promise<Record<string, string>> {
+  const fallback = {
+    status: String(response.status),
+    message: `Chat stream returned ${response.status}`
+  };
+  const payload = await response
+    .clone()
+    .json()
+    .catch(() => null);
+  if (!payload || typeof payload !== "object") return fallback;
+  const detail = (payload as { detail?: unknown }).detail;
+  if (typeof detail === "string") return { ...fallback, message: detail };
+  if (!detail || typeof detail !== "object") return fallback;
+  const entries = Object.entries(detail).map(([key, value]) => [
+    key,
+    typeof value === "string" ? value : value == null ? "" : JSON.stringify(value)
+  ]);
+  return { ...fallback, ...Object.fromEntries(entries) };
+}
+
 export async function streamChat(
   payload: StreamChatPayload,
   handlers: {
@@ -351,6 +384,15 @@ export async function streamChat(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
+
+  if (!response.ok) {
+    const errorData = await parseChatStreamHttpError(response);
+    handlers.onError?.(errorData);
+    throw new ChatStreamHttpError(errorData.message ?? `Chat stream returned ${response.status}`, {
+      status: response.status,
+      reason: errorData.reason
+    });
+  }
 
   if (!response.body) {
     throw new Error(`Chat stream returned ${response.status}`);

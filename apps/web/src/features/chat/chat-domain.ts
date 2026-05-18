@@ -1,6 +1,22 @@
 import type { StreamStatusEvent } from "../../lib/api";
-import type { ChatMessage, ChatModeling3DContext } from "../../types/api";
+import type { ChatMessage, ChatModeling3DContext, ChatSession } from "../../types/api";
 import type { ModelingPlan } from "../modeling-3d/types";
+
+export const DEFAULT_CHAT_TITLES = ["novo chat", "new chat"] as const;
+
+export function normalizeRequiredChatTitle(value: string | null | undefined): string {
+  return (value ?? "").trim();
+}
+
+export function isDefaultChatTitle(value: string | null | undefined): boolean {
+  const normalized = normalizeRequiredChatTitle(value).toLowerCase();
+  return !normalized || DEFAULT_CHAT_TITLES.includes(normalized as (typeof DEFAULT_CHAT_TITLES)[number]);
+}
+
+export function chatSessionNeedsTitle(session: ChatSession | null): boolean {
+  if (!session) return true;
+  return isDefaultChatTitle(session.title);
+}
 
 export type ChatMessageMetadata = {
   runtime_status?: StreamStatusEvent;
