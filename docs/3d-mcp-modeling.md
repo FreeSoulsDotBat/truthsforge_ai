@@ -490,6 +490,15 @@ painel 3D no dashboard**.
 - **`ModelingEditCard`** (mini-plano) — versão compacta que aparece em
   `editing`. Sem botões; só resumo do que foi executado e link para detalhes
   no modal de diagnóstico.
+
+> **Status de implementação (Onda 4, PR #25):** `ModelingPlanCard` e
+> `ModelingEditCard` vivem em
+> `apps/web/src/features/modeling-3d/components/`, com 16 testes Vitest
+> cobrindo as transições visuais. O hook `useModelingPlanActions`
+> encapsula `approvePlan + executePlan`, `rejectPlan`, retry e revise
+> sobre `modeling3dApi`; o `App.tsx` instancia o hook e injeta
+> `modelingPlanActions` em cada `MessageBubble` de chat 3D ativo. Texto
+> livre **não** aciona execução em nenhum momento.
 - **`ModelingDiagnosticsModal`** — read-only, acessível pelo ícone de
   diagnóstico no cabeçalho do chat 3D. Abas: Adapters, Snapshots, Tool calls,
   Model versions, Printability reports.

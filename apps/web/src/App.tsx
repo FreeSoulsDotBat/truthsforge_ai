@@ -62,6 +62,7 @@ import {
   type ChatMessageAttachment,
   initialAssistantStatus,
   localAssistantMessage,
+  messageMetadata,
   normalizeStreamExecutionModes,
   withModelingPlan,
   withReasoningSummary,
@@ -92,7 +93,9 @@ import {
   ModelingDiagnosticsModal
 } from "./features/modeling-3d/components";
 import { isModeling3DChat } from "./features/modeling-3d/chat-domain";
-import { useModeling3dChat } from "./features/modeling-3d/hooks";
+import { modeling3dApi } from "./features/modeling-3d";
+import { useModeling3dChat, useModelingPlanActions } from "./features/modeling-3d/hooks";
+import type { ModelingPlanCardActions } from "./components/app-chat";
 import { useModeling3DStore } from "./features/modeling-3d/store";
 import { Modeling3DSettingsSection } from "./features/modeling-3d/settings";
 import { HistorySection } from "./features/sidebar/history-section";
@@ -333,6 +336,7 @@ function App() {
     resetForNewChat: resetModeling3dForNewChat,
     chatContext: modeling3dChatContext
   } = useModeling3dChat();
+  const modelingPlanActionsRuntime = useModelingPlanActions();
   const modelingDiagnosticsOpen = useModeling3DStore((state) => state.diagnosticsOpen);
   const setModelingDiagnosticsOpen = useModeling3DStore((state) => state.setDiagnosticsOpen);
   const modelingEnableDialogOpen = useModeling3DStore((state) => state.enableDialogOpen);
@@ -673,6 +677,88 @@ function App() {
   const activeSessionIsModeling3D = isModeling3DChat(activeSession);
   const modeling3dEnabled = nextChatIs3D || activeSessionIsModeling3D;
   const activeModelingPlanId = activeSession?.modeling_plan_id ?? null;
+
+  // Onda 4.4 — mirror approve/reject/retry/revise outcomes from
+  // useModelingPlanActions onto the local session graph so the
+  // ModelingPlanCard reflects the new status / kind without a refetch.
+  // We don't yet receive a dedicated SSE stream for plan execution;
+  // until that arrives the hook is the single source of truth.
+  const applyPlanToSession = useCallback(
+    (plan: ModelingPlan, nextStage: ChatSession["modeling_stage"]) => {
+      setSessions((current) =>
+        current.map((session) => {
+          if (session.id !== plan.conversation_id) return session;
+          const messages = session.messages.map((message) =>
+            messageMetadata(message).modeling_plan?.id === plan.id
+              ? withModelingPlan(message, plan)
+              : message
+          );
+          return {
+            ...session,
+            modeling_stage: nextStage,
+            modeling_plan_id:
+              nextStage === "discovery" ? null : plan.id ?? session.modeling_plan_id,
+            messages
+          };
+        })
+      );
+    },
+    [setSessions]
+  );
+
+  const handleApproveModelingPlan = useCallback(
+    async (planId: string) => {
+      const execution = await modelingPlanActionsRuntime.approve(planId);
+      if (!execution) return;
+      const next = execution.plan.status === "failed" ? "editing" : "editing";
+      applyPlanToSession(execution.plan, next);
+    },
+    [applyPlanToSession, modelingPlanActionsRuntime]
+  );
+
+  const handleRejectModelingPlan = useCallback(
+    async (planId: string, reason: string) => {
+      const rejected = await modelingPlanActionsRuntime.reject(planId, reason);
+      if (!rejected) return;
+      applyPlanToSession(rejected, "discovery");
+    },
+    [applyPlanToSession, modelingPlanActionsRuntime]
+  );
+
+  const handleRetryModelingPlan = useCallback(
+    async (planId: string) => {
+      const execution = await modelingPlanActionsRuntime.retry(planId);
+      if (!execution) return;
+      applyPlanToSession(execution.plan, "editing");
+    },
+    [applyPlanToSession, modelingPlanActionsRuntime]
+  );
+
+  const handleReviseModelingPlan = useCallback(
+    async (planId: string) => {
+      const rejected = await modelingPlanActionsRuntime.revise(planId);
+      if (!rejected) return;
+      applyPlanToSession(rejected, "discovery");
+    },
+    [applyPlanToSession, modelingPlanActionsRuntime]
+  );
+
+  const modelingPlanActions = useMemo<ModelingPlanCardActions>(
+    () => ({
+      onApprove: handleApproveModelingPlan,
+      onReject: handleRejectModelingPlan,
+      onRetry: handleRetryModelingPlan,
+      onRevise: handleReviseModelingPlan,
+      isBusy: modelingPlanActionsRuntime.busy
+    }),
+    [
+      handleApproveModelingPlan,
+      handleRejectModelingPlan,
+      handleRetryModelingPlan,
+      handleReviseModelingPlan,
+      modelingPlanActionsRuntime.busy
+    ]
+  );
   const platformFilesById = useMemo(
     () =>
       Object.fromEntries(platformFiles.map((platformFile) => [platformFile.id, platformFile])) as Record<
@@ -1358,6 +1444,68 @@ function App() {
       setAttachedFiles([]);
       setAttachedPlatformFileIds([]);
       setAttachedDocumentIds([]);
+
+      // Onda 4.3 — when the chat is marked as 3D and the user attached
+      // image/3D files alongside the message, fire the attachment
+      // analyzer in the background. Each successful analysis is posted
+      // back to the session as a local assistant note so the agent
+      // (and the user) can read the structured summary without an
+      // extra round-trip.
+      if (modeling3dPayload.enabled && uploadedFileIds.length > 0) {
+        const chatIdForAnalysis = sessionId ?? activeSession?.id ?? null;
+        if (chatIdForAnalysis) {
+          void Promise.all(
+            uploadedFileIds.map((fileId) =>
+              modeling3dApi
+                .analyzeAttachment(chatIdForAnalysis, fileId)
+                .then((analysis) => ({ ok: true as const, analysis }))
+                .catch((exc: unknown) => ({
+                  ok: false as const,
+                  fileId,
+                  error: exc instanceof Error ? exc.message : "Falha ao analisar anexo 3D."
+                }))
+            )
+          ).then((results) => {
+            const notes = results.map((entry, index) => {
+              const baseId = `m3d_note_${Date.now()}_${index}`;
+              if (entry.ok) {
+                return {
+                  id: baseId,
+                  session_id: chatIdForAnalysis,
+                  role: "assistant" as const,
+                  content: entry.analysis.context_text,
+                  model_id: null,
+                  metadata: {
+                    response_mode: "modeling_3d_attachment_analysis",
+                    attachment_analysis: entry.analysis
+                  } as Record<string, unknown>,
+                  created_at: new Date().toISOString()
+                };
+              }
+              return {
+                id: baseId,
+                session_id: chatIdForAnalysis,
+                role: "assistant" as const,
+                content: `Não consegui analisar o anexo (${entry.fileId}): ${entry.error}`,
+                model_id: null,
+                metadata: { response_mode: "modeling_3d_attachment_analysis_error" } as Record<
+                  string,
+                  unknown
+                >,
+                created_at: new Date().toISOString()
+              };
+            });
+            if (!notes.length) return;
+            setSessions((current) =>
+              current.map((session) =>
+                session.id === chatIdForAnalysis
+                  ? { ...session, messages: [...session.messages, ...notes] }
+                  : session
+              )
+            );
+          });
+        }
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Falha inesperada no chat.";
       const fallbackOptimisticUser =
@@ -2403,7 +2551,12 @@ function App() {
                       </div>
                     )}
                     {(activeSession?.messages.length ? activeSession.messages : []).map((message) => (
-                      <MessageBubble key={message.id} message={message} platformFilesById={platformFilesById} />
+                      <MessageBubble
+                        key={message.id}
+                        message={message}
+                        platformFilesById={platformFilesById}
+                        modelingPlanActions={activeSessionIsModeling3D ? modelingPlanActions : undefined}
+                      />
                     ))}
 
                     {!activeSession?.messages.length && (

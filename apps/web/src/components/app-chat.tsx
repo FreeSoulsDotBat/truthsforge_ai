@@ -8,18 +8,17 @@ import {
   Paperclip,
   Search,
   ShieldCheck,
-  Sparkles,
-  Box
+  Sparkles
 } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { ModelingEditCard, ModelingPlanCard } from "../features/modeling-3d/components";
 import { fileContentUrl, isImagePlatformFile, platformFileLabel } from "../features/files/file-domain";
 import { type ChatMessageAttachment, messageMetadata } from "../features/chat/chat-domain";
 import { imageUrlsFromMarkdown, renderMarkdown, stripImageMarkdown } from "../lib/message-content";
 import type { StreamStatusEvent } from "../lib/api";
 import type { ChatMessage } from "../types/api";
 import type { PlatformFile } from "../types/api";
-import { Badge } from "./ui/Badge";
 
 function OfficialReasoningSummary({ isActive, summary }: { isActive: boolean; summary?: string }) {
   if (!summary && !isActive) return null;
@@ -81,53 +80,6 @@ function ReasoningTrack({ statuses, isActive }: { statuses: StreamStatusEvent[];
           );
         })}
       </div>
-    </div>
-  );
-}
-
-function ModelingPlanCard({ plan }: { plan: NonNullable<ReturnType<typeof messageMetadata>["modeling_plan"]> }) {
-  return (
-    <div className="mt-3 rounded-md border border-forge-amber/40 bg-[#18150f] p-3 text-xs">
-      <div className="flex flex-col justify-between gap-2 md:flex-row md:items-start">
-        <div>
-          <div className="flex items-center gap-2 font-semibold text-forge-text">
-            <Box size={15} className="text-forge-amber" />
-            Plano 3D MCP
-          </div>
-          <p className="mt-1 line-clamp-2 text-forge-muted">{plan.rationale || plan.prompt}</p>
-        </div>
-        <div className="flex flex-wrap gap-1">
-          <Badge>{plan.software_choice}</Badge>
-          <Badge>{plan.mode}</Badge>
-          <Badge>{plan.status}</Badge>
-          {plan.planner_source && (
-            <Badge>{plan.planner_source === "llm" ? "planner: IA" : "planner: heurístico"}</Badge>
-          )}
-        </div>
-      </div>
-      <div className="mt-3 space-y-1">
-        {plan.steps.slice(0, 5).map((step) => (
-          <div key={step.id} className="rounded border border-forge-line bg-[#0e0f0e] px-2 py-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="line-clamp-1 font-medium">
-                {step.seq}. {step.title}
-              </span>
-              <span className="shrink-0 text-forge-muted">{step.status}</span>
-            </div>
-            <p className="mt-1 line-clamp-1 text-forge-muted">
-              {step.tool_name} · risco {step.risk_level}
-              {step.approval_required ? " · aprovação" : " · auto"}
-            </p>
-          </div>
-        ))}
-        {plan.steps.length > 5 && (
-          <p className="text-forge-muted">+ {plan.steps.length - 5} etapa(s) no plano completo.</p>
-        )}
-      </div>
-      <p className="mt-3 text-forge-muted">
-        A conversa executa adições/alterações allowlistadas; aprovação fica só para deleções, destrutivo ou high-risk.
-        Snapshots e rollback continuam como ações manuais no painel 3D.
-      </p>
     </div>
   );
 }
@@ -203,12 +155,28 @@ function resolveAttachments(
   return resolved;
 }
 
+/** Actions passed down from the chat host to make the in-chat plan card
+ *  interactive (Onda 4 — ADR-013). All callbacks receive the plan id so
+ *  the host can route to ``modeling3dApi.approvePlan`` / ``rejectPlan``
+ *  via ``useModelingPlanActions``. When omitted, the card renders as
+ *  read-only and the buttons disappear — useful for historical
+ *  messages where the plan has already terminated. */
+export interface ModelingPlanCardActions {
+  onApprove?: (planId: string) => Promise<void> | void;
+  onReject?: (planId: string, reason: string) => Promise<void> | void;
+  onRetry?: (planId: string) => Promise<void> | void;
+  onRevise?: (planId: string) => Promise<void> | void;
+  isBusy?: boolean;
+}
+
 export function MessageBubble({
   message,
-  platformFilesById
+  platformFilesById,
+  modelingPlanActions
 }: {
   message: ChatMessage;
   platformFilesById: Record<string, PlatformFile>;
+  modelingPlanActions?: ModelingPlanCardActions;
 }) {
   const isUser = message.role === "user";
   const markdownImageUrls = imageUrlsFromMarkdown(message.content);
@@ -269,7 +237,50 @@ export function MessageBubble({
             <OfficialReasoningSummary isActive={reasoningSummaryEnabled && isActive} summary={reasoningSummary} />
           )}
           {markdownText ? <div className="leading-6">{renderMarkdown(markdownText)}</div> : null}
-          {!isUser && metadata.modeling_plan && <ModelingPlanCard plan={metadata.modeling_plan} />}
+          {!isUser && metadata.modeling_plan ? (
+            metadata.modeling_plan.kind === "edit" &&
+            metadata.modeling_plan.status !== "waiting_approval" ? (
+              <ModelingEditCard plan={metadata.modeling_plan} />
+            ) : (
+              <ModelingPlanCard
+                plan={metadata.modeling_plan}
+                isBusy={modelingPlanActions?.isBusy}
+                onApprove={
+                  modelingPlanActions?.onApprove
+                    ? () =>
+                        modelingPlanActions.onApprove?.(
+                          metadata.modeling_plan!.id
+                        )
+                    : undefined
+                }
+                onReject={
+                  modelingPlanActions?.onReject
+                    ? (reason: string) =>
+                        modelingPlanActions.onReject?.(
+                          metadata.modeling_plan!.id,
+                          reason
+                        )
+                    : undefined
+                }
+                onRetry={
+                  modelingPlanActions?.onRetry
+                    ? () =>
+                        modelingPlanActions.onRetry?.(
+                          metadata.modeling_plan!.id
+                        )
+                    : undefined
+                }
+                onRevise={
+                  modelingPlanActions?.onRevise
+                    ? () =>
+                        modelingPlanActions.onRevise?.(
+                          metadata.modeling_plan!.id
+                        )
+                    : undefined
+                }
+              />
+            )
+          ) : null}
           {imageUrls.length > 0 ? (
             <div className={[markdownText ? "mt-3" : "", "grid gap-2"].join(" ").trim()}>
               {imageUrls.map((url) => (

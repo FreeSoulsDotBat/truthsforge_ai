@@ -41,8 +41,8 @@ O backend e uma aplicacao FastAPI. Ele expoe rotas REST e streaming SSE para o c
 
 O frontend React e a primeira experiencia do usuario.
 
-- Sidebar esquerda: sessoes (com `ChatModeling3DBadge` para chats 3D), historico paginado, projetos/pastas e novo chat. Todo chat exige titulo nao vazio antes da primeira mensagem (ADR-014).
-- Centro: chat com streaming, anexos, MCP 3D ativado por chat (ADR-013) e upload rapido. Chats 3D mostram `ModelingPlanCard` (aprovacao por botoes inline) e `ModelingEditCard` (mini-planos executados). Botao de diagnostico no cabecalho abre `ModelingDiagnosticsModal` read-only.
+- Sidebar esquerda: sessoes (com `ChatModeling3DBadge` para chats 3D), historico paginado, projetos/pastas e novo chat. Todo chat exige titulo nao vazio antes da primeira mensagem (ADR-014) — backend valida com HTTP 422 quando a flag `TRUTHS_FORGE_REQUIRE_CHAT_TITLE` esta ativa; modal frontend `ChatTitleRequiredDialog` planejado para Onda 5.
+- Centro: chat com streaming, anexos, MCP 3D ativado por chat (ADR-013) e upload rapido. Chats 3D mostram `ModelingPlanCard` (aprovacao por botoes inline em `apps/web/src/features/modeling-3d/components/`, com banner para etapas high-risk e estados `executing`/`completed`/`failed` com retry+revise) e `ModelingEditCard` (mini-planos auto-aprovados). Anexos (imagem ou arquivo 3D) disparam `analyze_attachment` em background apos o envio. Botao de diagnostico no cabecalho abre `ModelingDiagnosticsModal` read-only.
 - Painel direito: contexto, custos, RAG, auditoria, prompts, configuracao, arquivos, bases, projetos e agentes. O painel 3D no dashboard foi removido com ADR-013; toda interacao 3D ocorre no chat.
 - Configuracoes: API keys por provedor, registry editavel de modelos e secao "Modelagem 3D" (Blender path, Fusion MCP URL, transport, timeouts, status de adapters).
 - Arquivos: biblioteca bruta de arquivos enviados, recebidos, gerados ou importados, com paginacao, filtros, preview/download e status de indexacao.

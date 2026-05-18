@@ -60,14 +60,17 @@ function buildMessage(plan: ModelingPlan): ChatMessage {
 
 describe("MessageBubble modeling 3D", () => {
   it("renders a modeling plan card inside the assistant message", () => {
+    // ``mode`` and the "painel 3D" copy were removed by ADR-013 (Onda 2/3);
+    // the v2 card surfaces software, status (label-mapped) and the steps
+    // through the shared ModelingPlanCard component.
     render(<MessageBubble message={buildMessage(buildPlan())} platformFilesById={{}} />);
 
     expect(screen.getByText("Plano 3D MCP")).toBeTruthy();
     expect(screen.getByText("fusion")).toBeTruthy();
-    expect(screen.getByText("safe_auto")).toBeTruthy();
-    expect(screen.getAllByText("completed")).toHaveLength(2);
+    // status label gets localised to pt-BR by the new card.
+    expect(screen.getByText("concluído")).toBeTruthy();
     expect(screen.getByText("1. Criar sketch")).toBeTruthy();
     expect(screen.getByText(/fusion.add_rectangle/)).toBeTruthy();
-    expect(screen.getByText(/aprovação fica só para deleções/)).toBeTruthy();
+    expect(screen.getByText(/Plano executado/)).toBeTruthy();
   });
 });
