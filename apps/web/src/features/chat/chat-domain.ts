@@ -1,5 +1,6 @@
 import type { StreamStatusEvent } from "../../lib/api";
-import type { ChatMessage, ModelingPlan } from "../../types/api";
+import type { ChatMessage } from "../../types/api";
+import type { ModelingPlan } from "../modeling-3d/types";
 
 export type ChatMessageMetadata = {
   runtime_status?: StreamStatusEvent;

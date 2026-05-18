@@ -22,7 +22,7 @@ Refatoração v2 (chat-first integral + título obrigatório) em curso na branch
 | 2.9 — Gate de título obrigatório (feature flag) | em PR | `aa4abd4` |
 | 2.7 — Endpoint `attachments/analyze` | em PR | `f42f7eb` |
 | 2.8 — Mini-planos auto-aprovados em editing | coberto pelo orchestrator (`propose_edit_plan`) | — |
-| 3 — Frontend feature module 3D | não iniciada | — |
+| 3 — Frontend feature module 3D | em PR | `devin/onda-3-3d-mcp-solidificacao` |
 | 4 — Frontend cards/aprovação | não iniciada | — |
 | 5 — Título obrigatório do chat (frontend) | não iniciada | — |
 | 6 — QA / docs finais | não iniciada | — |
@@ -79,19 +79,22 @@ localmente. `alembic history` linear `001 → 002 → 003 → 004`.
    que a Onda 5 (React) garantir que o frontend exige título antes de
    enviar a primeira mensagem. Backend já está pronto, mas a flag
    permanece off por default para não quebrar a UI legada.
-3. Iniciar **Onda 3 — Frontend feature module 3D**:
-   - Criar `apps/web/src/features/modeling-3d/`.
-   - Migrar funções 3D de `apps/web/src/lib/api.ts`.
+3. Finalizar revisão/CI da **Onda 3 — Frontend feature module 3D**:
+   - Módulo `apps/web/src/features/modeling-3d/` criado.
+   - Leituras/diagnóstico 3D isoladas em `features/modeling-3d/api`; criação
+     e execução de planos seguem exclusivamente pelo chat-first backend.
    - Hooks `useModeling3dChat`, `useAttachmentAnalysis`,
-     `useModeling3dDiagnostics`.
-   - Remover `ModelingDashboard` e `ModelingStepCard` do
-     `dashboard-sections.tsx`.
-   - Remover view `"modeling"` do `App.tsx`.
-   - Mover flags 3D de `app/store.ts` para `features/modeling-3d/store.ts`.
-   - Atualizar tipos em `types/api.ts` para refletir
-     `is_modeling_3d`, `modeling_stage`, `kind`, `parent_plan_id` etc.
+     `useModeling3dDiagnostics` criados.
+   - `ModelingDashboard`, `ModelingStepCard` e view `"modeling"` removidos.
+   - Flags 3D removidas de `app/store.ts`; `nextChatIs3D` e preferência de
+     software ficam no store local não persistente do bounded context.
+   - Tipos frontend atualizados para `ChatSession.is_modeling_3d`,
+     `modeling_stage`, `ModelingPlan.kind`, `parent_plan_id` e análise de anexos.
    - `ChatModeling3DBadge`, `EnableModeling3DDialog`,
-     `ModelingDiagnosticsModal`, seção 3D em Configurações gerais.
+     `ModelingDiagnosticsModal` e seção 3D em Configurações gerais criados.
+   - Seletor frontend de modo removido; o chat 3D envia sempre `safe_auto`,
+     preservando aprovação humana apenas para deleções/destrutivo/high-risk
+     conforme policy.
 4. Onda 4 (cards + fluxo de aprovação) e Onda 5 (título obrigatório
    no frontend) só começam depois que Onda 3 estiver em main, para
    evitar conflitos no `App.tsx` (3.156 linhas) e em

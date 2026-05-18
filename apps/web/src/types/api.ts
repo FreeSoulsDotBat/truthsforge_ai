@@ -2,6 +2,8 @@ export type ProviderName = "openai" | "anthropic" | "google";
 export type JobStatus = "pending" | "running" | "completed" | "failed";
 export type ModelingSoftware = "auto" | "blender" | "fusion";
 export type ModelingExecutionMode = "plan_only" | "approval_required" | "safe_auto";
+export type ChatModelingStage = "discovery" | "planning" | "approved" | "executing" | "editing" | "completed";
+export type ModelingPlanKind = "primary" | "edit";
 export type ModelingPlanStatus =
   | "draft"
   | "waiting_approval"
@@ -104,6 +106,8 @@ export interface ModelingPlan {
   steps: ModelingPlanStep[];
   planner_source?: ModelingPlannerSource | null;
   fallback_reason?: string | null;
+  kind?: ModelingPlanKind;
+  parent_plan_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -321,10 +325,26 @@ export interface ChatSession {
   context_document_ids: string[];
   context_knowledge_base_ids: string[];
   archived: boolean;
+  is_modeling_3d?: boolean;
+  modeling_software_preference?: ModelingSoftware | null;
+  modeling_stage?: ChatModelingStage | null;
+  modeling_plan_id?: string | null;
   metadata?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
   messages: ChatMessage[];
+}
+
+export interface ChatAttachmentAnalyzeResponse {
+  file_id: string;
+  filename: string;
+  kind: "image" | "mesh" | "blend" | "cad" | "unsupported";
+  ok: boolean;
+  summary: string;
+  metrics: Record<string, unknown>;
+  suggestions: string[];
+  error?: string | null;
+  context_text: string;
 }
 
 export interface ChatSessionDeleteResult {

@@ -3,7 +3,6 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import type { DashboardView, Panel } from "./ui-state";
-import type { ModelingExecutionMode, ModelingSoftware } from "../types/api";
 
 type ChatProjectScopeMode = "project_only" | "project_plus_global" | "global_only";
 type ReasoningOverride = "default" | "long";
@@ -11,9 +10,35 @@ type ResponseMode = "text" | "image";
 type ShortcutSubmenu = "agent" | "scope" | null;
 
 type Updater<T> = SetStateAction<T>;
+const dashboardViews: DashboardView[] = ["chat", "agents", "projects", "knowledge", "files"];
 
 function applyUpdater<T>(current: T, next: Updater<T>): T {
   return typeof next === "function" ? (next as (value: T) => T)(current) : next;
+}
+
+function isDashboardView(value: unknown): value is DashboardView {
+  return typeof value === "string" && dashboardViews.includes(value as DashboardView);
+}
+
+const staleKeys = ["modeling3dEnabled", "modeling3dMode", "modeling3dSoftware"] as const;
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function migratePersistedState(persistedState: unknown, version: number): unknown {
+  if (!persistedState || typeof persistedState !== "object") {
+    return persistedState;
+  }
+
+  const state = { ...(persistedState as Record<string, unknown>) };
+
+  for (const key of staleKeys) {
+    delete state[key];
+  }
+
+  if (!isDashboardView(state.activeView)) {
+    state.activeView = initialState.activeView;
+  }
+
+  return state;
 }
 
 export type AppStoreState = {
@@ -33,9 +58,6 @@ export type AppStoreState = {
   imageModelId: string | null;
   reasoningSummary: boolean;
   multiAgentMode: boolean;
-  modeling3dEnabled: boolean;
-  modeling3dMode: ModelingExecutionMode;
-  modeling3dSoftware: ModelingSoftware;
   shortcutMenuOpen: boolean;
   shortcutSubmenu: ShortcutSubmenu;
   executionMenuOpen: boolean;
@@ -59,9 +81,6 @@ type AppStoreActions = {
   setImageModelId: (next: Updater<string | null>) => void;
   setReasoningSummary: (next: Updater<boolean>) => void;
   setMultiAgentMode: (next: Updater<boolean>) => void;
-  setModeling3dEnabled: (next: Updater<boolean>) => void;
-  setModeling3dMode: (next: Updater<ModelingExecutionMode>) => void;
-  setModeling3dSoftware: (next: Updater<ModelingSoftware>) => void;
   setShortcutMenuOpen: (next: Updater<boolean>) => void;
   setShortcutSubmenu: (next: Updater<ShortcutSubmenu>) => void;
   setExecutionMenuOpen: (next: Updater<boolean>) => void;
@@ -87,9 +106,6 @@ const initialState: AppStoreState = {
   imageModelId: null,
   reasoningSummary: false,
   multiAgentMode: false,
-  modeling3dEnabled: false,
-  modeling3dMode: "safe_auto",
-  modeling3dSoftware: "auto",
   shortcutMenuOpen: false,
   shortcutSubmenu: null,
   executionMenuOpen: false,
@@ -121,11 +137,6 @@ export const useAppStore = create<AppStore>()(
       setImageModelId: (next) => set((state) => ({ imageModelId: applyUpdater(state.imageModelId, next) })),
       setReasoningSummary: (next) => set((state) => ({ reasoningSummary: applyUpdater(state.reasoningSummary, next) })),
       setMultiAgentMode: (next) => set((state) => ({ multiAgentMode: applyUpdater(state.multiAgentMode, next) })),
-      setModeling3dEnabled: (next) =>
-        set((state) => ({ modeling3dEnabled: applyUpdater(state.modeling3dEnabled, next) })),
-      setModeling3dMode: (next) => set((state) => ({ modeling3dMode: applyUpdater(state.modeling3dMode, next) })),
-      setModeling3dSoftware: (next) =>
-        set((state) => ({ modeling3dSoftware: applyUpdater(state.modeling3dSoftware, next) })),
       setShortcutMenuOpen: (next) => set((state) => ({ shortcutMenuOpen: applyUpdater(state.shortcutMenuOpen, next) })),
       setShortcutSubmenu: (next) => set((state) => ({ shortcutSubmenu: applyUpdater(state.shortcutSubmenu, next) })),
       setExecutionMenuOpen: (next) =>
@@ -134,7 +145,9 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: "truths-forge-ui-state-v1",
+      version: 1,
       storage: createJSONStorage(() => localStorage),
+      migrate: migratePersistedState,
       partialize: (state) => ({
         activeView: state.activeView,
         activePanel: state.activePanel,
@@ -151,10 +164,7 @@ export const useAppStore = create<AppStore>()(
         responseMode: state.responseMode,
         imageModelId: state.imageModelId,
         reasoningSummary: state.reasoningSummary,
-        multiAgentMode: state.multiAgentMode,
-        modeling3dEnabled: state.modeling3dEnabled,
-        modeling3dMode: state.modeling3dMode,
-        modeling3dSoftware: state.modeling3dSoftware
+        multiAgentMode: state.multiAgentMode
       })
     }
   )

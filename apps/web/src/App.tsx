@@ -1,7 +1,6 @@
 import {
   Activity,
   Bot,
-  Box,
   Check,
   ChevronRight,
   Database,
@@ -84,9 +83,17 @@ import {
   AgentDashboard,
   FilesDashboard,
   KnowledgeDashboard,
-  ModelingDashboard,
   ProjectsDashboard
 } from "./features/dashboard/dashboard-sections";
+import {
+  ChatModeling3DBadge,
+  EnableModeling3DDialog,
+  ModelingDiagnosticsModal
+} from "./features/modeling-3d/components";
+import { isModeling3DChat } from "./features/modeling-3d/chat-domain";
+import { useModeling3dChat } from "./features/modeling-3d/hooks";
+import { useModeling3DStore } from "./features/modeling-3d/store";
+import { Modeling3DSettingsSection } from "./features/modeling-3d/settings";
 import { HistorySection } from "./features/sidebar/history-section";
 import { ProjectExplorerSection } from "./features/sidebar/project-explorer-section";
 import { csvToList, delay, sortSessionsByNewest } from "./shared/utils/common";
@@ -106,9 +113,7 @@ import type {
   KnowledgeBaseUpsert,
   DocumentSearchResult,
   ModelConfig,
-  ModelingExecutionMode,
   ModelingPlan,
-  ModelingSoftware,
   PlatformFile,
   PlatformFileIndexingStatus,
   PlatformFileUpdate,
@@ -251,9 +256,6 @@ function App() {
     imageModelId,
     reasoningSummary,
     multiAgentMode,
-    modeling3dEnabled,
-    modeling3dMode,
-    modeling3dSoftware,
     shortcutMenuOpen,
     shortcutSubmenu,
     executionMenuOpen,
@@ -274,9 +276,6 @@ function App() {
     setImageModelId,
     setReasoningSummary,
     setMultiAgentMode,
-    setModeling3dEnabled,
-    setModeling3dMode,
-    setModeling3dSoftware,
     setShortcutMenuOpen,
     setShortcutSubmenu,
     setExecutionMenuOpen,
@@ -299,9 +298,6 @@ function App() {
       imageModelId: state.imageModelId,
       reasoningSummary: state.reasoningSummary,
       multiAgentMode: state.multiAgentMode,
-      modeling3dEnabled: state.modeling3dEnabled,
-      modeling3dMode: state.modeling3dMode,
-      modeling3dSoftware: state.modeling3dSoftware,
       shortcutMenuOpen: state.shortcutMenuOpen,
       shortcutSubmenu: state.shortcutSubmenu,
       executionMenuOpen: state.executionMenuOpen,
@@ -322,15 +318,24 @@ function App() {
       setImageModelId: state.setImageModelId,
       setReasoningSummary: state.setReasoningSummary,
       setMultiAgentMode: state.setMultiAgentMode,
-      setModeling3dEnabled: state.setModeling3dEnabled,
-      setModeling3dMode: state.setModeling3dMode,
-      setModeling3dSoftware: state.setModeling3dSoftware,
       setShortcutMenuOpen: state.setShortcutMenuOpen,
       setShortcutSubmenu: state.setShortcutSubmenu,
       setExecutionMenuOpen: state.setExecutionMenuOpen,
       setMobileMenuOpen: state.setMobileMenuOpen
     }))
   );
+  const {
+    nextChatIs3D,
+    software: modeling3dSoftware,
+    setNextChatIs3D: setModeling3dEnabled,
+    setSoftware: setModeling3dSoftware,
+    resetForNewChat: resetModeling3dForNewChat,
+    chatContext: modeling3dChatContext
+  } = useModeling3dChat();
+  const modelingDiagnosticsOpen = useModeling3DStore((state) => state.diagnosticsOpen);
+  const setModelingDiagnosticsOpen = useModeling3DStore((state) => state.setDiagnosticsOpen);
+  const modelingEnableDialogOpen = useModeling3DStore((state) => state.enableDialogOpen);
+  const setModelingEnableDialogOpen = useModeling3DStore((state) => state.setEnableDialogOpen);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -664,6 +669,9 @@ function App() {
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
     [activeSessionId, sessions]
   );
+  const activeSessionIsModeling3D = isModeling3DChat(activeSession);
+  const modeling3dEnabled = nextChatIs3D || activeSessionIsModeling3D;
+  const activeModelingPlanId = activeSession?.modeling_plan_id ?? null;
   const platformFilesById = useMemo(
     () =>
       Object.fromEntries(platformFiles.map((platformFile) => [platformFile.id, platformFile])) as Record<
@@ -865,11 +873,7 @@ function App() {
       .slice(0, 8);
   }, [activeMention, mentionOptions]);
   const executionLabels = [
-    modeling3dEnabled
-      ? `MCP 3D (${modeling3dSoftware === "auto" ? "auto" : modeling3dSoftware}, ${
-          modeling3dMode === "plan_only" ? "planejar" : "fluido"
-        })`
-      : null,
+    modeling3dEnabled ? `MCP 3D (${modeling3dSoftware === "auto" ? "auto" : modeling3dSoftware})` : null,
     reasoningOverride === "long" ? "Raciocínio longo" : null,
     reasoningSummary ? "Resumo oficial" : null,
     deepResearch ? "Pesquisa OpenAI" : null,
@@ -925,12 +929,6 @@ function App() {
       setReasoningSummary(false);
     }
   }, [reasoningSummary, reasoningSummaryUnavailable, setReasoningSummary]);
-
-  useEffect(() => {
-    if (modeling3dMode === "approval_required") {
-      setModeling3dMode("safe_auto");
-    }
-  }, [modeling3dMode, setModeling3dMode]);
 
   useEffect(() => {
     if (!selectedKnowledgeBase) {
@@ -1064,6 +1062,18 @@ function App() {
     const uploadedFileIds: string[] = [...attachedPlatformFileIds];
     let optimisticUser: ChatMessage | null = null;
     let optimisticAssistant: ChatMessage | null = null;
+    const modeling3dPayload = activeSessionIsModeling3D
+      ? {
+          enabled: true,
+          mode: "safe_auto" as const,
+          software_override:
+            activeSession?.modeling_software_preference && activeSession.modeling_software_preference !== "auto"
+              ? activeSession.modeling_software_preference
+              : modeling3dSoftware === "auto"
+                ? null
+                : modeling3dSoftware
+        }
+      : modeling3dChatContext();
     const optimisticStatus = initialAssistantStatus({
       reasoningOverride,
       deepResearch,
@@ -1153,11 +1163,7 @@ function App() {
           multi_agent_mode: multiAgentMode,
           attached_document_ids: attachedDocumentIds,
           attached_file_ids: uploadedFileIds,
-          modeling_3d: {
-            enabled: modeling3dEnabled,
-            mode: modeling3dMode,
-            software_override: modeling3dSoftware === "auto" ? null : modeling3dSoftware
-          }
+          modeling_3d: modeling3dPayload
         },
         {
           onMeta: (meta) => {
@@ -1194,6 +1200,10 @@ function App() {
                   context_project_ids: normalizedContextProjectIds,
                   context_document_ids: normalizedContextDocumentIds,
                   context_knowledge_base_ids: normalizedContextKnowledgeBaseIds,
+                  is_modeling_3d: modeling3dPayload.enabled,
+                  modeling_software_preference: modeling3dPayload.software_override ?? "auto",
+                  modeling_stage: modeling3dPayload.enabled ? "discovery" : null,
+                  modeling_plan_id: null,
                   archived: false,
                   metadata: { is_empty_draft: false },
                   created_at: new Date().toISOString(),
@@ -1229,7 +1239,14 @@ function App() {
                     ? withModelingPlan(item, plan)
                     : item
                 );
-                return { ...session, messages };
+                return {
+                  ...session,
+                  is_modeling_3d: true,
+                  modeling_software_preference: plan.software_choice,
+                  modeling_stage: plan.status === "completed" ? "editing" : "executing",
+                  modeling_plan_id: plan.id,
+                  messages
+                };
               })
             );
           },
@@ -1272,7 +1289,7 @@ function App() {
                     title: normalized,
                     metadata: {
                       ...metadata,
-                      title_source: "openai",
+                      title_source: session.is_modeling_3d ? "modeling_3d_prompt" : "openai",
                       is_empty_draft: false
                     }
                   };
@@ -1367,6 +1384,10 @@ function App() {
               context_project_ids: normalizedContextProjectIds,
               context_document_ids: normalizedContextDocumentIds,
               context_knowledge_base_ids: normalizedContextKnowledgeBaseIds,
+              is_modeling_3d: modeling3dPayload.enabled,
+              modeling_software_preference: modeling3dPayload.software_override ?? "auto",
+              modeling_stage: modeling3dPayload.enabled ? "discovery" : null,
+              modeling_plan_id: null,
               archived: false,
               metadata: { is_empty_draft: false },
               created_at: new Date().toISOString(),
@@ -1381,6 +1402,9 @@ function App() {
         );
       }
     } finally {
+      if (nextChatIs3D && !activeSessionIsModeling3D) {
+        setModeling3dEnabled(false);
+      }
       setIsStreaming(false);
     }
   }
@@ -2007,9 +2031,7 @@ function App() {
     setImageModelId(null);
     setReasoningSummary(false);
     setMultiAgentMode(false);
-    setModeling3dEnabled(false);
-    setModeling3dMode("approval_required");
-    setModeling3dSoftware("auto");
+    resetModeling3dForNewChat();
     setShortcutMenuOpen(false);
     setShortcutSubmenu(null);
     setExecutionMenuOpen(false);
@@ -2127,6 +2149,25 @@ function App() {
           onSave={(knowledgeBaseIds) => void saveChatKnowledgeBaseSelection(knowledgeBaseIds)}
         />
       )}
+      <EnableModeling3DDialog
+        open={modelingEnableDialogOpen}
+        software={modeling3dSoftware}
+        onClose={() => setModelingEnableDialogOpen(false)}
+        onConfirm={() => {
+          setModeling3dEnabled(true);
+          setModelingEnableDialogOpen(false);
+          setExecutionMenuOpen(false);
+        }}
+        onSoftwareChange={setModeling3dSoftware}
+      />
+      {modelingDiagnosticsOpen && (
+        <ModelingDiagnosticsModal
+          open={modelingDiagnosticsOpen}
+          planId={activeModelingPlanId}
+          projectId={activeSessionProjectId}
+          onClose={() => setModelingDiagnosticsOpen(false)}
+        />
+      )}
 
       <aside
         className={[
@@ -2210,15 +2251,6 @@ function App() {
                 setMobileMenuOpen(false);
               }}
             />
-            <DashboardNavButton
-              active={activeView === "modeling"}
-              icon={<Box size={15} />}
-              label="3D"
-              onClick={() => {
-                setActiveView("modeling");
-                setMobileMenuOpen(false);
-              }}
-            />
           </div>
 
           <div className="grid grid-cols-2 gap-2 text-xs">
@@ -2248,6 +2280,7 @@ function App() {
             onMoveSession={(sessionId, projectId, folderId) =>
               void moveSessionInExplorer(sessionId, projectId, folderId)
             }
+            renderSessionBadge={(session) => (isModeling3DChat(session) ? <ChatModeling3DBadge compact /> : null)}
           />
 
           <HistorySection
@@ -2263,6 +2296,7 @@ function App() {
               setMobileMenuOpen(false);
             }}
             onDeleteSession={(session) => void deleteChatSession(session)}
+            renderSessionBadge={(session) => (isModeling3DChat(session) ? <ChatModeling3DBadge compact /> : null)}
           />
         </div>
       </aside>
@@ -2279,18 +2313,19 @@ function App() {
               <Menu size={18} />
             </Button>
             <div className="min-w-0">
-              <h2 className="truncate text-base font-semibold">
-                {activeView === "chat"
-                  ? (activeSession?.title ?? "Novo chat com JUDITE")
-                  : activeView === "agents"
-                    ? "Dashboard de agentes"
-                    : activeView === "projects"
-                      ? "Projetos e contexto"
-                      : activeView === "knowledge"
-                        ? "Bases de conhecimento"
-                        : activeView === "files"
-                          ? "Arquivos da plataforma"
-                          : "Modelagem 3D"}
+              <h2 className="flex min-w-0 items-center gap-2 truncate text-base font-semibold">
+                {activeSessionIsModeling3D && <ChatModeling3DBadge />}
+                <span className="truncate">
+                  {activeView === "chat"
+                    ? (activeSession?.title ?? "Novo chat com JUDITE")
+                    : activeView === "agents"
+                      ? "Dashboard de agentes"
+                      : activeView === "projects"
+                        ? "Projetos e contexto"
+                        : activeView === "knowledge"
+                          ? "Bases de conhecimento"
+                          : "Arquivos da plataforma"}
+                </span>
               </h2>
               <p className="truncate text-xs text-forge-muted">
                 {activeView === "chat"
@@ -2301,9 +2336,7 @@ function App() {
                       ? "Estruture projetos, pastas e escopo de recuperação"
                       : activeView === "knowledge"
                         ? "Coleções curadas para RAG e agentes"
-                        : activeView === "files"
-                          ? "Uploads, imports e arquivos gerados"
-                          : "Blender e Fusion 360 via MCP local"}
+                        : "Uploads, imports e arquivos gerados"}
               </p>
             </div>
           </div>
@@ -2432,36 +2465,15 @@ function App() {
                               </select>
                             </label>
                           )}
-                          {modeling3dEnabled && (
-                            <>
-                              <label className="inline-flex h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted">
-                                <span>Software 3D</span>
-                                <select
-                                  value={modeling3dSoftware}
-                                  onChange={(event) => setModeling3dSoftware(event.target.value as ModelingSoftware)}
-                                  className="h-6 rounded border border-forge-line bg-[#080908] px-2 text-forge-text"
-                                  aria-label="Software MCP 3D"
-                                  title="Software MCP 3D"
-                                >
-                                  <option value="auto">auto</option>
-                                  <option value="blender">Blender</option>
-                                  <option value="fusion">Fusion 360</option>
-                                </select>
-                              </label>
-                              <label className="inline-flex h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted">
-                                <span>Modo 3D</span>
-                                <select
-                                  value={modeling3dMode}
-                                  onChange={(event) => setModeling3dMode(event.target.value as ModelingExecutionMode)}
-                                  className="h-6 rounded border border-forge-line bg-[#080908] px-2 text-forge-text"
-                                  aria-label="Modo MCP 3D"
-                                  title="Modo MCP 3D"
-                                >
-                                  <option value="plan_only">planejar</option>
-                                  <option value="safe_auto">fluido</option>
-                                </select>
-                              </label>
-                            </>
+                          {activeSessionIsModeling3D && (
+                            <Button
+                              className="h-8 px-2 text-xs"
+                              onClick={() => setModelingDiagnosticsOpen(true)}
+                              aria-label="Abrir diagnóstico MCP 3D"
+                              title="Abrir diagnóstico MCP 3D"
+                            >
+                              Diagnóstico 3D
+                            </Button>
                           )}
                         </div>
 
@@ -2485,7 +2497,7 @@ function App() {
                                   active={modeling3dEnabled}
                                   title="Usa o chat para criar plano estruturado Blender/Fusion via MCP."
                                   onClick={() => {
-                                    setModeling3dEnabled((current) => !current);
+                                    setModelingEnableDialogOpen(true);
                                     setResponseMode("text");
                                     setDeepResearch(false);
                                     setReasoningSummary(false);
@@ -2517,7 +2529,7 @@ function App() {
                                     setDeepResearch((current) => !current);
                                     setResponseMode("text");
                                     setReasoningSummary(false);
-                                    setModeling3dEnabled(false);
+                                    if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
                                   }}
                                 />
                                 <ExecutionMenuItem
@@ -2527,7 +2539,7 @@ function App() {
                                     setResponseMode((current) => (current === "image" ? "text" : "image"));
                                     setDeepResearch(false);
                                     setReasoningSummary(false);
-                                    setModeling3dEnabled(false);
+                                    if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
                                   }}
                                 />
                                 <ExecutionMenuItem
@@ -2535,7 +2547,7 @@ function App() {
                                   active={multiAgentMode}
                                   onClick={() => {
                                     setMultiAgentMode((current) => !current);
-                                    setModeling3dEnabled(false);
+                                    if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
                                   }}
                                 />
                                 <button
@@ -2982,6 +2994,7 @@ function App() {
 
                 {activePanel === "config" && (
                   <PanelStack>
+                    <Modeling3DSettingsSection software={modeling3dSoftware} onSoftwareChange={setModeling3dSoftware} />
                     <PanelTitle icon={<KeyRound size={18} />} title="Provedores" />
                     {providerStatuses.map((provider) => (
                       <div key={provider.provider} className="rounded-md border border-forge-line bg-[#171716] p-3">
@@ -3089,19 +3102,6 @@ function App() {
               onSetFolderDraftParentId={setFolderDraftParentId}
               onSaveProject={() => void saveProject()}
               onCreateFolder={() => void createProjectFolder()}
-            />
-          ) : activeView === "modeling" ? (
-            <ModelingDashboard
-              projects={projects}
-              onOpenChat={() => {
-                setActiveView("chat");
-                setActivePanel("contexto");
-                setModeling3dEnabled(true);
-                setMultiAgentMode(false);
-                setDeepResearch(false);
-                setReasoningSummary(false);
-                setResponseMode("text");
-              }}
             />
           ) : activeView === "files" ? (
             <FilesDashboard
