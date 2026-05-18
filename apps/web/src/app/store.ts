@@ -10,9 +10,27 @@ type ResponseMode = "text" | "image";
 type ShortcutSubmenu = "agent" | "scope" | null;
 
 type Updater<T> = SetStateAction<T>;
+const dashboardViews: DashboardView[] = ["chat", "agents", "projects", "knowledge", "files"];
 
 function applyUpdater<T>(current: T, next: Updater<T>): T {
   return typeof next === "function" ? (next as (value: T) => T)(current) : next;
+}
+
+function isDashboardView(value: unknown): value is DashboardView {
+  return typeof value === "string" && dashboardViews.includes(value as DashboardView);
+}
+
+function migratePersistedState(persistedState: unknown): unknown {
+  if (!persistedState || typeof persistedState !== "object") {
+    return persistedState;
+  }
+
+  const state = persistedState as Partial<AppStoreState> & { activeView?: unknown };
+  if (isDashboardView(state.activeView)) {
+    return persistedState;
+  }
+
+  return { ...state, activeView: initialState.activeView };
 }
 
 export type AppStoreState = {
@@ -119,7 +137,9 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: "truths-forge-ui-state-v1",
+      version: 1,
       storage: createJSONStorage(() => localStorage),
+      migrate: migratePersistedState,
       partialize: (state) => ({
         activeView: state.activeView,
         activePanel: state.activePanel,
