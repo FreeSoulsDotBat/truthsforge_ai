@@ -538,6 +538,30 @@ def _knowledge_base_document_index(
 # (validado em ChatSessionCreate + Onda 2.9 no stream handler).
 
 
+def _enforce_required_chat_title(payload: ChatStreamRequest) -> None:
+    """Reject the first turn of a new chat when title is missing or default.
+
+    Controlled by ``settings.require_chat_title`` so the legacy frontend
+    keeps working until the Onda 5 UI ships. When enabled, the React
+    modal must send ``payload.title`` with a user-typed value; otherwise
+    the backend responds with ``HTTP 422`` and a clear error code.
+    """
+
+    raw = payload.title
+    normalized = (raw or "").strip().lower()
+    if not normalized or normalized in DEFAULT_CHAT_TITLES:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "chat_title_required",
+                "message": (
+                    "Esse chat precisa de um título antes da primeira mensagem. "
+                    "Renomeie o chat e envie de novo."
+                ),
+            },
+        )
+
+
 def select_orchestration_agents(
     agents: list[Agent],
     selected_agent_id: str | None,
@@ -1159,7 +1183,12 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
         runtime_allowed_project_ids=runtime_allowed_project_ids,
     )
     if session is None:
+        is_new_session = True
+        if settings.require_chat_title:
+            _enforce_required_chat_title(payload)
         session = store.get_or_create_session(payload)
+    else:
+        is_new_session = False
     effective_folder_id = payload.folder_id if payload.folder_id is not None else session.folder_id
     if (
         effective_project_id != session.project_id or effective_folder_id != session.folder_id

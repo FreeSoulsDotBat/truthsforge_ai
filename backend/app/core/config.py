@@ -87,6 +87,17 @@ class Settings(BaseModel):
             "http://127.0.0.1:5173,http://localhost:5173,tauri://localhost,capacitor://localhost",
         )
     )
+    # ADR-014 (Onda 2.9): when enabled, ``POST /api/chat/stream`` rejects
+    # the first turn of a new chat unless the client provided a
+    # non-default, non-blank title. Default OFF so the legacy frontend
+    # keeps working until the Onda 5 UI ships; flip to ``true`` once
+    # the React side enforces the title modal.
+    require_chat_title: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_REQUIRE_CHAT_TITLE", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
 
     @property
     def allowed_origins(self) -> list[str]:

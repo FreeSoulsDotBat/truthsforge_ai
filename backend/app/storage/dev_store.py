@@ -1236,8 +1236,11 @@ class DevStore:
             project_id, folder_id = self._resolve_chat_project_and_folder(
                 payload.project_id, payload.folder_id
             )
+            explicit_title = (payload.title or "").strip()
+            derived_title = (payload.message or "")[:48].strip()
+            session_title = explicit_title or derived_title or "Novo chat"
             session = ChatSession(
-                title=payload.message[:48] or "Novo chat",
+                title=session_title,
                 model_id=payload.model_id,
                 agent_id=payload.agent_id,
                 project_id=project_id,

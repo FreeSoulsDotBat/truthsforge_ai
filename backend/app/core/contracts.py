@@ -489,6 +489,13 @@ class ChatModeling3DContext(BaseModel):
 class ChatStreamRequest(BaseModel):
     message: str
     session_id: str | None = None
+    # ADR-014 (Onda 2.9): when ``settings.require_chat_title`` is on, the
+    # client must include this field with a non-default, non-blank title
+    # the user typed in the rename modal. ``None`` means "fall back to
+    # legacy behavior" (derive from the first message). Once the Onda 5
+    # React UI ships and the flag is flipped, the client should always
+    # send a value here.
+    title: str | None = None
     model_id: str | None = None
     agent_id: str | None = None
     agent_ids: list[str] = Field(default_factory=list)
