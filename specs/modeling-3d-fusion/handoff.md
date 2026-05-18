@@ -2,9 +2,26 @@
 
 ## Estado
 
-Refatoração v2 (chat-first integral + título obrigatório) está em curso. A
-**Onda 0** (specs/docs/ADRs) está sendo aplicada nesta sessão. Implementação
-de código (Ondas 1–6) ainda não começou.
+Refatoração v2 (chat-first integral + título obrigatório) em curso na branch
+`refactor/3d-backend-foundations`.
+
+| Onda | Status | Commit |
+|---|---|---|
+| 0 — Specs/docs/ADRs | concluída | `bf9395a` |
+| 1.1 — Allowlist unificada (`tool_registry`) | concluída | `0546ff8` |
+| 1.2 — Campo `kind`/`parent_plan_id` em `ModelingPlan` | concluída | `821b66a` |
+| 1.3 — Split do `ModelingService` em 5 serviços | concluída | `89b1b21` |
+| 1.4 — Alembic + migrações `001`/`004` | concluída | `0e1e78e` |
+| 1.5 — Validação final | em curso (testes verdes; falta esse commit) | — |
+| 2 — Backend orquestração chat-first | não iniciada | — |
+| 3 — Frontend feature module 3D | não iniciada | — |
+| 4 — Frontend cards/aprovação | não iniciada | — |
+| 5 — Título obrigatório do chat | não iniciada | — |
+| 6 — QA / docs finais | não iniciada | — |
+
+Verificação backend ao fim da Onda 1: `pytest tests/` (excluindo
+`tests/test_postgres_store.py` que requer `psycopg-binary`) = 166 testes
+verdes localmente.
 
 ## Decisões consolidadas com o dono do produto
 
@@ -49,15 +66,24 @@ de código (Ondas 1–6) ainda não começou.
 
 ## Próximos passos
 
-1. Finalizar Onda 0 (este checkpoint): atualizar `docs/decisions.md` com
-   ADR-013 e ADR-014, `docs/3d-mcp-modeling.md` com state machine e novo
-   conjunto de tools, `docs/architecture.md` e `docs/application-map.md` para
-   refletir remoção do painel 3D.
-2. Confirmar com o dono o nome de branch e mensagem de commit semântico
-   antes de iniciar Onda 1.
-3. Confirmar com o dono a adoção do Alembic para migrações versionadas.
-   Plano B aceito: manter `init_schema()` com `schema_version` interno.
-4. Executar Onda 1 (backend: fundação) em PR separado.
+1. Abrir PR de `refactor/3d-backend-foundations` para `master` (Ondas 0+1)
+   quando o dono aprovar.
+2. Iniciar **Onda 2 — Backend chat-first orchestration**:
+   - Migrações Alembic `002_chats_title_not_null` e `003_chats_modeling_fields`.
+   - Campos do chat (`title NOT NULL`, `is_modeling_3d`,
+     `modeling_software_preference`, `modeling_stage`, `modeling_plan_id`).
+   - State machine no domain do chat.
+   - Tools dedicadas (`3d.ask_clarification`, `3d.propose_plan`,
+     `3d.propose_edit_plan`, `3d.request_high_risk_approval`,
+     `3d.analyze_attachment`) substituindo `3d.generate_plan`.
+   - System prompt `backend/app/modeling/prompts/discovery_system.md`.
+   - `ModelingAttachmentAnalyzer` (vision + Blender headless).
+   - Validação backend de `chat.title` em `POST /api/chat/stream`.
+   - Backfill de título para chats existentes.
+   - Remoção de `POST /api/3d/plans` e `POST /api/3d/steps/{id}/approve`.
+3. Onda 3 só começa depois que Onda 2 estiver em main, para evitar
+   conflitos no `App.tsx` (3.156 linhas) e em
+   `dashboard-sections.tsx` (2.623 linhas).
 
 ## Pontos abertos
 

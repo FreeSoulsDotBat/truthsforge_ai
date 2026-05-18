@@ -23,28 +23,30 @@ Tasks pendentes da v1 são absorvidas pela Onda 6 da v2:
 
 ## v2 — chat-first integral + título obrigatório
 
-### Onda 0 — Specs, ADRs e docs
+### Onda 0 — Specs, ADRs e docs (concluída, commit `bf9395a`)
 
-- [ ] [P0] [any] Atualizar `specs/modeling-3d-fusion/spec.md` com novo fluxo chat-first integral.
-- [ ] [P0] [any] Atualizar `specs/modeling-3d-fusion/plan.md` com 6 ondas.
-- [ ] [P0] [any] Atualizar `specs/modeling-3d-fusion/tasks.md` (este arquivo).
-- [ ] [P0] [any] Atualizar `specs/modeling-3d-fusion/handoff.md`.
-- [ ] [P0] [any] Adicionar ADR-013 em `docs/decisions.md`: 3D chat-first sem painel; aprovação inline; fluxo único.
-- [ ] [P0] [any] Adicionar ADR-014 em `docs/decisions.md`: título de chat obrigatório; remoção da auto-titulação OpenAI.
-- [ ] [P0] [any] Atualizar `docs/3d-mcp-modeling.md` com state machine, novas tools e remoção do painel.
-- [ ] [P0] [any] Atualizar `docs/architecture.md` removendo referência ao módulo modeling como dashboard.
-- [ ] [P0] [any] Atualizar `docs/application-map.md` removendo painel 3D do painel direito.
-- [ ] [P0] [any] Revisar `docs/delivery-checklist.md` para refletir novo fluxo.
+- [x] [P0] [any] Atualizar `specs/modeling-3d-fusion/spec.md` com novo fluxo chat-first integral.
+- [x] [P0] [any] Atualizar `specs/modeling-3d-fusion/plan.md` com 6 ondas.
+- [x] [P0] [any] Atualizar `specs/modeling-3d-fusion/tasks.md` (este arquivo).
+- [x] [P0] [any] Atualizar `specs/modeling-3d-fusion/handoff.md`.
+- [x] [P0] [any] Adicionar ADR-013 em `docs/decisions.md`: 3D chat-first sem painel; aprovação inline; fluxo único.
+- [x] [P0] [any] Adicionar ADR-014 em `docs/decisions.md`: título de chat obrigatório; remoção da auto-titulação OpenAI.
+- [x] [P0] [any] Atualizar `docs/3d-mcp-modeling.md` com state machine, novas tools e remoção do painel.
+- [x] [P0] [any] Atualizar `docs/architecture.md` removendo referência ao módulo modeling como dashboard.
+- [x] [P0] [any] Atualizar `docs/application-map.md` removendo painel 3D do painel direito.
+- [x] [P0] [any] Revisar `docs/delivery-checklist.md` para refletir novo fluxo.
 
-### Onda 1 — Backend: fundação refatorada
+### Onda 1 — Backend: fundação refatorada (concluída)
 
-- [ ] [P1] [any] Criar `backend/app/modeling/tool_registry.py` como única fonte da allowlist.
-- [ ] [P1] [any] Migrar `planner.py`, `policy.py` e adapters para derivarem de `TOOL_REGISTRY`.
-- [ ] [P1] [any] Split do `ModelingService` em `discovery.py`, `planner_service.py`, `executor.py`, `snapshot_service.py`, `artifacts.py`; `service.py` vira facade.
-- [ ] [P1] [any] Adicionar `kind` (`primary`/`edit`) em `ModelingPlan`.
-- [ ] [P1] [any] Confirmar adoção do Alembic com o dono; criar migrações `001_initial_baseline` e `004_modeling_plans_kind`.
-- [ ] [P1] [any] Atualizar `backend/tests/test_modeling_routes.py` e `test_planner_llm.py` para os novos serviços.
-- [ ] [P1] [any] Criar `backend/tests/test_tool_registry.py` e `test_modeling_services_split.py`.
+Branch: `refactor/3d-backend-foundations`. Commits: `0546ff8` (1.1), `821b66a` (1.2), `89b1b21` (1.3), `0e1e78e` (1.4). 60 testes verdes em `tests/test_tool_registry.py + test_modeling_services_split.py + test_modeling_routes.py + test_planner_llm.py + test_alembic_migrations.py`.
+
+- [x] [P1] [any] Criar `backend/app/modeling/tool_registry.py` como única fonte da allowlist (1.1).
+- [x] [P1] [any] Migrar `planner.py`, `policy.py` e adapters para derivarem de `TOOL_REGISTRY` (1.1).
+- [x] [P1] [any] Split do `ModelingService` em `planner_service.py`, `executor.py`, `snapshot_service.py`, `artifacts.py`, `printability.py`; `service.py` vira facade (1.3). `discovery.py` fica para a Onda 2 quando a state machine de chat 3D nascer.
+- [x] [P1] [any] Adicionar `kind` (`primary`/`edit`) + `parent_plan_id` em `ModelingPlan` e `ModelingPlanCreate` (1.2).
+- [x] [P1] [any] Adoção do Alembic confirmada com o dono. Migrações `001_initial_baseline` (espelha estado atual idempotente) e `004_modeling_plans_kind` (índices `idx_modeling_plans_kind` e `idx_modeling_plans_parent`) criadas (1.4). Migrações `002` e `003` ficam para a Onda 2.
+- [x] [P1] [any] Atualizar `backend/tests/test_modeling_routes.py` e `test_planner_llm.py` para os novos serviços.
+- [x] [P1] [any] Criar `backend/tests/test_tool_registry.py` (18), `test_modeling_services_split.py` (7) e `test_alembic_migrations.py` (4).
 
 ### Onda 2 — Backend: orquestração chat-first
 
