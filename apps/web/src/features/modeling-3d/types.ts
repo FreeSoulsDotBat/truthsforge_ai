@@ -9,14 +9,19 @@ import type {
 } from "../../types/api";
 
 export type {
+  ChatModeling3DContext,
+  ChatSession,
+  ModelingApprovalRequest,
+  ModelingExecutionResult,
   ModelingPlan,
   ModelingPlanKind,
+  ModelingPlanStatus,
   ModelingPlanStep,
   ModelingPrintabilityReport,
+  ModelingRiskLevel,
   ModelingSoftware,
-  ModelingToolCall,
-  ChatModeling3DContext,
-  ChatSession
+  ModelingStepStatus,
+  ModelingToolCall
 } from "../../types/api";
 
 export type Modeling3DSoftwarePreference = ModelingSoftware;

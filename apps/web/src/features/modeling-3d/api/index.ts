@@ -1,7 +1,9 @@
 import { apiRequest } from "../../../lib/api";
 import type {
   ChatAttachmentAnalyzeResponse,
+  ModelingApprovalRequest,
   ModelingCapabilities,
+  ModelingExecutionResult,
   ModelingModelVersion,
   ModelingPlan,
   ModelingPrintabilityReport,
@@ -36,6 +38,31 @@ export const modeling3dApi = {
     apiRequest<ChatAttachmentAnalyzeResponse>(`/api/chat/sessions/${chatId}/attachments/analyze`, {
       method: "POST",
       body: JSON.stringify({ file_id: fileId })
+    }),
+  /**
+   * Approve a plan from the in-chat card (Onda 4). ADR-013 prescribes
+   * a global plan-level approval — high-risk steps in edit plans
+   * reopen approval via the same endpoint instead of per-step.
+   */
+  approvePlan: (planId: string, payload: ModelingApprovalRequest = { decision: "approve" }) =>
+    apiRequest<ModelingPlan>(`/api/3d/plans/${planId}/approve`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  rejectPlan: (planId: string, reason: string) =>
+    apiRequest<ModelingPlan>(`/api/3d/plans/${planId}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ decision: "reject", reason })
+    }),
+  /**
+   * Trigger plan execution. Today this is still a separate call after
+   * approval; once the chat orchestrator is wired into the stream
+   * handler (final sub-fase da Onda 2), the orchestrator runs it
+   * automatically and this method becomes a manual escape hatch.
+   */
+  executePlan: (planId: string) =>
+    apiRequest<ModelingExecutionResult>(`/api/3d/plans/${planId}/execute`, {
+      method: "POST"
     })
 };
 
