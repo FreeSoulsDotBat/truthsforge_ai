@@ -1349,7 +1349,7 @@ function App() {
               })
             );
             if (sessionId) {
-              await loadSessionPage(sessionId);
+              await loadSessionPage(sessionId).catch(() => undefined);
             }
             await refreshSessionSummaries();
           }
