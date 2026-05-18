@@ -62,6 +62,7 @@ import {
   type ChatMessageAttachment,
   initialAssistantStatus,
   localAssistantMessage,
+  normalizeStreamExecutionModes,
   withModelingPlan,
   withReasoningSummary,
   withRuntimeStatus
@@ -1074,13 +1075,21 @@ function App() {
                 : modeling3dSoftware
         }
       : modeling3dChatContext();
-    const optimisticStatus = initialAssistantStatus({
+    const streamExecutionModes = normalizeStreamExecutionModes({
       reasoningOverride,
       deepResearch,
       responseMode,
-      multiAgentMode,
       reasoningSummary,
-      modeling3dEnabled
+      multiAgentMode,
+      modeling3d: modeling3dPayload
+    });
+    const optimisticStatus = initialAssistantStatus({
+      reasoningOverride: streamExecutionModes.reasoningOverride,
+      deepResearch: streamExecutionModes.deepResearch,
+      responseMode: streamExecutionModes.responseMode,
+      multiAgentMode: streamExecutionModes.multiAgentMode,
+      reasoningSummary: streamExecutionModes.reasoningSummary,
+      modeling3dEnabled: streamExecutionModes.modeling3dEnabled
     });
 
     try {
@@ -1154,13 +1163,14 @@ function App() {
           context_project_ids: normalizedContextProjectIds,
           context_document_ids: normalizedContextDocumentIds,
           context_knowledge_base_ids: normalizedContextKnowledgeBaseIds,
-          reasoning_override: reasoningOverride,
-          deep_research: deepResearch,
+          reasoning_override: streamExecutionModes.reasoningOverride,
+          deep_research: streamExecutionModes.deepResearch,
           deep_research_max_tool_calls: deepResearchMaxToolCalls,
-          response_mode: responseMode,
-          image_model_id: responseMode === "image" ? (effectiveImageModel?.id ?? undefined) : undefined,
-          reasoning_summary: reasoningSummary ? "auto" : "off",
-          multi_agent_mode: multiAgentMode,
+          response_mode: streamExecutionModes.responseMode,
+          image_model_id:
+            streamExecutionModes.responseMode === "image" ? (effectiveImageModel?.id ?? undefined) : undefined,
+          reasoning_summary: streamExecutionModes.reasoningSummary ? "auto" : "off",
+          multi_agent_mode: streamExecutionModes.multiAgentMode,
           attached_document_ids: attachedDocumentIds,
           attached_file_ids: uploadedFileIds,
           modeling_3d: modeling3dPayload
@@ -1205,7 +1215,10 @@ function App() {
                   modeling_stage: modeling3dPayload.enabled ? "discovery" : null,
                   modeling_plan_id: null,
                   archived: false,
-                  metadata: { is_empty_draft: false },
+                  metadata: {
+                    is_empty_draft: false,
+                    ...(modeling3dPayload.enabled ? { modeling_3d: modeling3dPayload } : {})
+                  },
                   created_at: new Date().toISOString(),
                   updated_at: new Date().toISOString(),
                   messages: [resolvedUserMessage, resolvedAssistantMessage]
@@ -1351,7 +1364,8 @@ function App() {
           created_at: new Date().toISOString()
         } as ChatMessage);
       const fallbackOptimisticAssistant =
-        optimisticAssistant ?? localAssistantMessage(sessionId ?? "pending", optimisticStatus, reasoningSummary);
+        optimisticAssistant ??
+        localAssistantMessage(sessionId ?? "pending", optimisticStatus, streamExecutionModes.reasoningSummary);
       const failedAssistant = withRuntimeStatus(
         { ...fallbackOptimisticAssistant, content: `Não consegui enviar a mensagem: ${errorMessage}` },
         { stage: "error", label: "Falha no envio", detail: errorMessage }
@@ -1389,7 +1403,10 @@ function App() {
               modeling_stage: modeling3dPayload.enabled ? "discovery" : null,
               modeling_plan_id: null,
               archived: false,
-              metadata: { is_empty_draft: false },
+              metadata: {
+                is_empty_draft: false,
+                ...(modeling3dPayload.enabled ? { modeling_3d: modeling3dPayload } : {})
+              },
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
               messages: [
@@ -1402,7 +1419,7 @@ function App() {
         );
       }
     } finally {
-      if (nextChatIs3D && !activeSessionIsModeling3D) {
+      if (streamExecutionModes.modeling3dEnabled && !activeSessionIsModeling3D) {
         setModeling3dEnabled(false);
       }
       setIsStreaming(false);

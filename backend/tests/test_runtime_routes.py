@@ -611,6 +611,62 @@ def test_chat_stream_promotes_empty_draft_to_modeling_chat() -> None:
     assert session["messages"][-1]["metadata"]["response_mode"] == "modeling_3d"
 
 
+def test_chat_stream_promotes_legacy_modeling_message_session() -> None:
+    client = TestClient(app)
+    project = client.post(
+        "/api/projects",
+        json={"name": f"Projeto legado 3D {uuid4().hex}", "description": "modelagem legado"},
+    )
+    assert project.status_code == 200
+    project_id = project.json()["id"]
+    agent = client.post(
+        "/api/agents",
+        json={
+            "name": f"JUDITE legado 3D {uuid4().hex}",
+            "description": "Orquestradora 3D de legado",
+            "system_prompt": "Planeje modelagem 3D.",
+            "role": "orchestrator",
+            "allowed_project_ids": [project_id],
+        },
+    )
+    assert agent.status_code == 200
+    draft = client.post(
+        "/api/chat/sessions",
+        json={
+            "title": "Crie um cubo simples para impressão 3D",
+            "project_id": project_id,
+            "agent_id": agent.json()["id"],
+        },
+    )
+    assert draft.status_code == 200
+    session_id = draft.json()["id"]
+
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "session_id": session_id,
+            "message": "Crie um cubo simples para impressão 3D",
+            "project_id": project_id,
+            "agent_id": agent.json()["id"],
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "safe_auto",
+                "software_override": "blender",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert "event: modeling_plan" in response.text
+    details = client.get(f"/api/chat/sessions/{session_id}")
+    assert details.status_code == 200
+    session = details.json()
+    assert session["is_modeling_3d"] is True
+    assert session["modeling_software_preference"] == "blender"
+    assert session["modeling_stage"] == "editing"
+    assert session["modeling_plan_id"] is not None
+
+
 def test_chat_stream_preserves_modeling_plan_when_inline_execution_fails(monkeypatch) -> None:
     from app.api.routes import chat as chat_route
     from app.modeling import service as service_module

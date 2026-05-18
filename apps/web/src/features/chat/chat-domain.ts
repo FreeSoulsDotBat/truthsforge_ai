@@ -1,5 +1,5 @@
 import type { StreamStatusEvent } from "../../lib/api";
-import type { ChatMessage } from "../../types/api";
+import type { ChatMessage, ChatModeling3DContext } from "../../types/api";
 import type { ModelingPlan } from "../modeling-3d/types";
 
 export type ChatMessageMetadata = {
@@ -122,5 +122,43 @@ export function withModelingPlan(message: ChatMessage, plan: ModelingPlan): Chat
       modeling_plan: plan,
       modeling_plan_id: plan.id
     }
+  };
+}
+
+export function normalizeStreamExecutionModes({
+  reasoningOverride,
+  deepResearch,
+  responseMode,
+  reasoningSummary,
+  multiAgentMode,
+  modeling3d
+}: {
+  reasoningOverride: "default" | "long";
+  deepResearch: boolean;
+  responseMode: "text" | "image";
+  reasoningSummary: boolean;
+  multiAgentMode: boolean;
+  modeling3d: ChatModeling3DContext;
+}) {
+  if (!modeling3d.enabled) {
+    return {
+      reasoningOverride,
+      deepResearch,
+      responseMode,
+      reasoningSummary,
+      multiAgentMode,
+      imageModelEnabled: responseMode === "image",
+      modeling3dEnabled: false
+    };
+  }
+
+  return {
+    reasoningOverride: "default" as const,
+    deepResearch: false,
+    responseMode: "text" as const,
+    reasoningSummary: false,
+    multiAgentMode: false,
+    imageModelEnabled: false,
+    modeling3dEnabled: true
   };
 }
