@@ -463,6 +463,31 @@ class ChatSessionDeleteResult(BaseModel):
     deleted_file_ids: list[str] = Field(default_factory=list)
 
 
+class ChatAttachmentAnalyzeRequest(BaseModel):
+    """Body for ``POST /api/chat/{chat_id}/attachments/analyze`` (Onda 2.7).
+
+    The client uploads a :class:`PlatformFile` first (existing pipeline)
+    and then points this request at the resulting ``file_id`` so the
+    modeling discovery agent can incorporate the analysis as context.
+    """
+
+    file_id: str = Field(min_length=1)
+
+
+class ChatAttachmentAnalyzeResponse(BaseModel):
+    """Pydantic shape of an :class:`AttachmentAnalysis` over the wire."""
+
+    file_id: str
+    filename: str
+    kind: Literal["image", "mesh", "blend", "cad", "unsupported"]
+    ok: bool
+    summary: str
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    suggestions: list[str] = Field(default_factory=list)
+    error: str | None = None
+    context_text: str = ""
+
+
 class ChatSessionMoveRequest(BaseModel):
     project_id: str
     folder_id: str | None = None

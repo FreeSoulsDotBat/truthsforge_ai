@@ -23,6 +23,8 @@ from app.core.contracts import (
     MAX_CONTEXT_KNOWLEDGE_BASE_IDS,
     Agent,
     AuditEvent,
+    ChatAttachmentAnalyzeRequest,
+    ChatAttachmentAnalyzeResponse,
     ChatMessage,
     ChatSession,
     ChatSessionContextUpdate,
@@ -45,6 +47,7 @@ from app.core.contracts import (
     ProviderName,
     now_utc,
 )
+from app.modeling.attachment_analyzer import ModelingAttachmentAnalyzer
 from app.cost_governor.service import (
     estimate_cost,
     estimate_tokens,
@@ -792,6 +795,63 @@ async def _search_knowledge_base_context(
 
     ranked.sort(key=lambda value: value[0], reverse=True)
     return [item for _score, item in ranked[:MAX_CONTEXT_DOCUMENTS]]
+
+
+@router.post(
+    "/sessions/{chat_id}/attachments/analyze",
+    response_model=ChatAttachmentAnalyzeResponse,
+)
+def analyze_attachment_for_chat(
+    chat_id: str, payload: ChatAttachmentAnalyzeRequest
+) -> ChatAttachmentAnalyzeResponse:
+    """Run the deep-analysis pipeline for an attachment in a 3D chat.
+
+    ADR-013 (Onda 2.7): the discovery agent calls this endpoint after
+    the user uploads an image or a 3D file. The response carries a
+    structured analysis (vision summary for images, mesh stats from
+    Blender headless for STL/OBJ/3MF/BLEND, metadata-only for STEP)
+    plus a ready-to-inject ``context_text`` block for the next LLM
+    turn.
+    """
+
+    store = get_store()
+    chat = None
+    if hasattr(store, "get_chat_session"):
+        chat = store.get_chat_session(chat_id)
+    if chat is None:
+        # Fall back to the summary list when ``get_chat_session`` is
+        # unavailable (legacy stores). Match by id only.
+        chat = next(
+            (item for item in store.list_chat_sessions() if item.id == chat_id),
+            None,
+        )
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Chat não encontrado.")
+    if not chat.is_modeling_3d:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "chat_is_not_modeling_3d",
+                "message": (
+                    "Análise de anexo para modelagem 3D só é aceita em chats "
+                    "marcados como is_modeling_3d=true."
+                ),
+            },
+        )
+
+    analyzer = ModelingAttachmentAnalyzer(store=store)
+    analysis = analyzer.analyze(payload.file_id)
+    return ChatAttachmentAnalyzeResponse(
+        file_id=analysis.file_id,
+        filename=analysis.filename,
+        kind=analysis.kind,
+        ok=analysis.ok,
+        summary=analysis.summary,
+        metrics=analysis.metrics,
+        suggestions=analysis.suggestions,
+        error=analysis.error,
+        context_text=analysis.to_context_text(),
+    )
 
 
 @router.get("/sessions", response_model=list[ChatSessionWithMessages])
