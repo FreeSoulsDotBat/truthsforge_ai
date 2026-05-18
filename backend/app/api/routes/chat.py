@@ -302,6 +302,8 @@ def _promote_modeling_session(
 def _sync_modeling_plan_session(store, session: ChatSession, plan: ModelingPlan) -> ChatSession:
     updated = session.model_copy(
         update={
+            "is_modeling_3d": True,
+            "modeling_software_preference": plan.software_choice,
             "modeling_stage": ChatModelingStage.editing,
             "modeling_plan_id": plan.id,
             "updated_at": now_utc(),

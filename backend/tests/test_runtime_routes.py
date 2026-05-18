@@ -718,7 +718,12 @@ def test_chat_stream_preserves_modeling_plan_when_inline_execution_fails(monkeyp
     sessions = client.get("/api/chat/sessions")
     session = next(item for item in sessions.json() if item["project_id"] == project_id)
     details = client.get(f"/api/chat/sessions/{session['id']}")
-    assistant = details.json()["messages"][-1]
+    session = details.json()
+    assert session["is_modeling_3d"] is True
+    assert session["modeling_software_preference"] == "blender"
+    assert session["modeling_stage"] == "editing"
+    assert session["modeling_plan_id"] is not None
+    assistant = session["messages"][-1]
     metadata = assistant["metadata"]
     assert metadata["modeling_plan_id"] == metadata["modeling_plan"]["id"]
     assert metadata["modeling_plan"]["status"] == "approved"

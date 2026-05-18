@@ -1348,6 +1348,9 @@ function App() {
                 return { ...session, messages };
               })
             );
+            if (sessionId) {
+              await loadSessionPage(sessionId);
+            }
             await refreshSessionSummaries();
           }
         }
