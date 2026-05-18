@@ -1130,7 +1130,11 @@ function App() {
         },
         created_at: new Date().toISOString()
       };
-      optimisticAssistant = localAssistantMessage(sessionId ?? "pending", optimisticStatus, reasoningSummary);
+      optimisticAssistant = localAssistantMessage(
+        sessionId ?? "pending",
+        optimisticStatus,
+        streamExecutionModes.reasoningSummary
+      );
 
       const optimisticUserMessage = optimisticUser;
       const optimisticAssistantMessage = optimisticAssistant;
@@ -1193,7 +1197,7 @@ function App() {
             const resolvedAssistantMessage: ChatMessage = optimisticAssistant
               ? { ...optimisticAssistant, id: meta.message_id, session_id: meta.session_id }
               : {
-                  ...localAssistantMessage(meta.session_id, optimisticStatus, reasoningSummary),
+                  ...localAssistantMessage(meta.session_id, optimisticStatus, streamExecutionModes.reasoningSummary),
                   id: meta.message_id,
                   session_id: meta.session_id
                 };
