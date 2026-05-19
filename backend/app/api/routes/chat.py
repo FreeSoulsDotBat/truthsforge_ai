@@ -66,6 +66,7 @@ from app.llm_gateway.providers import (
     token_event,
 )
 from app.modeling.attachment_analyzer import ModelingAttachmentAnalyzer
+from app.modeling.observability import get_tracer
 from app.modeling.service import get_modeling_service
 from app.rag.embeddings import embed_text
 from app.rag.indexing import ensure_document_for_platform_file
@@ -1425,6 +1426,20 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 "Enviando o prompt ao planner MCP 3D com contexto do chat.",
             )
             modeling_service = get_modeling_service(store)
+
+            # Inicia trace de observabilidade ANTES da chamada do planner.
+            # Esta rota não passa pelo ModelingChatOrchestrator (chama o
+            # service direto), então o start_trace tem que vir aqui senão
+            # planner_service.record(...) cai em no-op por falta de
+            # contextvar. Ver app/modeling/observability.py.
+            _modeling_tracer = get_tracer(
+                store if hasattr(store, "record_trace_events_bulk") else None
+            )
+            _modeling_tracer.start_trace(
+                session_id=session.id,
+                project_id=effective_project_id,
+            )
+
             try:
                 plan = await modeling_service.create_plan_async(
                     ModelingPlanCreate(
@@ -1436,7 +1451,12 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                         knowledge_base_ids=effective_knowledge_base_ids,
                     )
                 )
+                # Flush imediato — frontend que ler /api/3d/plans/{id}/trace
+                # logo após receber o SSE ``modeling_plan`` precisa ver tudo
+                # já persistido (não fica em buffer).
+                _modeling_tracer.flush()
             except Exception as exc:  # noqa: BLE001 - stream must surface domain failures
+                _modeling_tracer.flush()  # garante que o trace de erro chegue ao DB
                 error_message = f"Não consegui criar o plano 3D via MCP: {exc}"
                 assistant_message.content = error_message
                 assistant_message.metadata["provider_error"] = str(exc)
