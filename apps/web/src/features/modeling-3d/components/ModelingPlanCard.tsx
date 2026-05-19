@@ -150,7 +150,23 @@ export function ModelingPlanCard({
           <Badge>{plan.software_choice}</Badge>
           <Badge>{statusLabel(plan.status)}</Badge>
           {plan.planner_source && (
-            <Badge>{plan.planner_source === "llm" ? "planner: IA" : "planner: heurístico"}</Badge>
+            <span
+              // Vermelho quando o planner caiu em fallback heurístico — o
+              // bug "uma bola virou retângulo" era invisível porque esse
+              // sinal não aparecia. Tooltip nativo mostra a razão.
+              className={
+                plan.planner_source === "heuristic"
+                  ? "inline-flex items-center rounded-full border border-forge-red/60 bg-[#2a0f0f] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-forge-red"
+                  : "inline-flex items-center rounded-full border border-forge-line bg-[#171716] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-forge-muted"
+              }
+              title={
+                plan.planner_source === "heuristic" && plan.fallback_reason
+                  ? `Fallback heurístico ativado.\nMotivo: ${plan.fallback_reason}`
+                  : undefined
+              }
+            >
+              {plan.planner_source === "llm" ? "planner: IA" : "planner: fallback"}
+            </span>
           )}
           {plan.kind === "edit" && <Badge>edição</Badge>}
         </div>

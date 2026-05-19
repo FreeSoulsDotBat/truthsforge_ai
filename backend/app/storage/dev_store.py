@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.contracts import (
     DEFAULT_GENERAL_PROJECT_ID,
     DEFAULT_GENERAL_PROJECT_NAME,
+    MODELING_TRACE_DEVSTORE_MAX_EVENTS,
     Agent,
     AgentCreate,
     AgentGraph,
@@ -43,6 +44,9 @@ from app.core.contracts import (
     ModelingSession,
     ModelingSnapshot,
     ModelingToolCall,
+    ModelingTraceEvent,
+    ModelingTraceLevel,
+    ModelingTraceSource,
     ModelUpsert,
     PermissionMode,
     PermissionPolicy,
@@ -76,6 +80,7 @@ def default_seed_data() -> dict[str, Any]:
             id="openai/default-chat",
             provider=ProviderName.openai,
             display_name="OpenAI - modelo configurável",
+            provider_model_id="gpt-4o",
             default=True,
             capabilities=[
                 ModelCapability.chat,
@@ -301,17 +306,27 @@ class DevStore:
     def _ensure_seed_models(self) -> None:
         seed_models = default_seed_data().get("models", [])
         existing_models = self._data.setdefault("models", [])
-        existing_ids = {
-            str(model.get("id")) for model in existing_models if isinstance(model, dict)
+        existing_by_id = {
+            str(m.get("id")): m for m in existing_models if isinstance(m, dict)
         }
         changed = False
         for model in seed_models:
-            model_id = str(model.get("id")) if isinstance(model, dict) else ""
-            if not model_id or model_id in existing_ids:
+            if not isinstance(model, dict):
                 continue
-            existing_models.append(model)
-            existing_ids.add(model_id)
-            changed = True
+            model_id = str(model.get("id", ""))
+            if not model_id:
+                continue
+            if model_id not in existing_by_id:
+                existing_models.append(model)
+                existing_by_id[model_id] = model
+                changed = True
+            else:
+                # Propaga provider_model_id da seed para modelos existentes que estejam sem ele
+                existing = existing_by_id[model_id]
+                seed_pmid = model.get("provider_model_id")
+                if seed_pmid and not existing.get("provider_model_id"):
+                    existing["provider_model_id"] = seed_pmid
+                    changed = True
         if changed:
             self._write(self._data)
 
@@ -1456,6 +1471,51 @@ class DevStore:
             self._data["modeling_tool_calls"].append(_dump_model(record))
             self._write()
             return record
+
+    # ------------------------------------------------------------------
+    # Modeling trace events (observabilidade)
+    # ------------------------------------------------------------------
+    # DevStore carrega o JSON inteiro em memória, então mantemos um ring
+    # buffer cap em MODELING_TRACE_DEVSTORE_MAX_EVENTS para não explodir
+    # RAM em sessões longas. Eventos mais antigos são descartados.
+
+    def record_trace_events_bulk(self, events: list[ModelingTraceEvent]) -> None:
+        if not events:
+            return
+        with self._lock:
+            self._ensure_key("modeling_trace_events", [])
+            bucket = self._data["modeling_trace_events"]
+            bucket.extend(_dump_model(event) for event in events)
+            # Aplica cap do ring buffer (descarta os mais antigos do início).
+            overflow = len(bucket) - MODELING_TRACE_DEVSTORE_MAX_EVENTS
+            if overflow > 0:
+                del bucket[:overflow]
+            self._write()
+
+    def list_trace_events(
+        self,
+        *,
+        trace_id: str | None = None,
+        plan_id: str | None = None,
+        levels: list[ModelingTraceLevel] | None = None,
+        sources: list[ModelingTraceSource] | None = None,
+        limit: int = 500,
+    ) -> list[ModelingTraceEvent]:
+        self._ensure_key("modeling_trace_events", [])
+        events = self._list("modeling_trace_events", ModelingTraceEvent)
+        if trace_id:
+            events = [e for e in events if e.trace_id == trace_id]
+        if plan_id:
+            events = [e for e in events if e.plan_id == plan_id]
+        if levels:
+            allowed_levels = {level.value for level in levels}
+            events = [e for e in events if e.level.value in allowed_levels]
+        if sources:
+            allowed_sources = {source.value for source in sources}
+            events = [e for e in events if e.source.value in allowed_sources]
+        # Ordena por (sequence, created_at) ASC, consistente com Postgres.
+        events.sort(key=lambda e: (e.sequence, e.created_at))
+        return events[:limit]
 
     def list_modeling_printability_reports(
         self, *, plan_id: str | None = None, file_id: str | None = None

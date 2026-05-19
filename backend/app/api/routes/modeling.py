@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+import time
+from collections import defaultdict, deque
+from threading import Lock
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.core.contracts import (
     ModelingApprovalRequest,
@@ -17,7 +22,12 @@ from app.core.contracts import (
     ModelingSnapshotRestore,
     ModelingSnapshotRestoreResult,
     ModelingToolCall,
+    ModelingTraceEvent,
+    ModelingTraceEventCreate,
+    ModelingTraceLevel,
+    ModelingTraceSource,
 )
+from app.modeling.observability import get_tracer
 from app.modeling.service import get_modeling_service
 from app.storage.store import get_store
 
@@ -171,3 +181,182 @@ def list_model_versions(project_id: str | None = Query(default=None)) -> list[Mo
     if not hasattr(store, "list_modeling_model_versions"):
         return []
     return store.list_modeling_model_versions(project_id=project_id)
+
+
+# ---------------------------------------------------------------------------
+# Observabilidade do módulo 3D (ver app/modeling/observability.py)
+# ---------------------------------------------------------------------------
+
+# Rate-limiter simples em memória para o endpoint POST de eventos do cliente.
+# Decisão: deixar in-process (não Redis) nesta iteração — tráfego previsto é
+# baixo (UI events) e cada réplica de backend mantém seu próprio bucket. Se
+# o app sair de single-replica em prod, mover para Valkey/Redis.
+_CLIENT_TRACE_RATE_WINDOW_SECONDS = 60
+_CLIENT_TRACE_RATE_MAX_EVENTS = 60
+_client_trace_timestamps: dict[str, deque[float]] = defaultdict(deque)
+_client_trace_lock = Lock()
+
+
+def _require_trace_store(store: Any) -> Any:
+    """Garante que a store implementa CRUD de trace events.
+
+    Backends que rodam só com DevStore antigo não suportam — devolve 501
+    para o frontend mostrar erro amigável em vez de 500.
+    """
+
+    if not hasattr(store, "list_trace_events") or not hasattr(store, "record_trace_events_bulk"):
+        raise HTTPException(
+            status_code=501,
+            detail="Observabilidade 3D não suportada neste backend.",
+        )
+    return store
+
+
+def _parse_csv_enum_query(raw: str | None, enum_cls: type, name: str) -> list | None:
+    """Converte ``?level=warn,error`` em ``[ModelingTraceLevel.warn, ...]``.
+
+    Inválidos viram 400 explícito — evita acidentes silenciosos onde o
+    filtro é ignorado e o usuário vê todos os eventos sem entender.
+    """
+
+    if not raw:
+        return None
+    try:
+        return [enum_cls(value.strip()) for value in raw.split(",") if value.strip()]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Valor inválido em filtro {name}: {exc}",
+        ) from exc
+
+
+@router.get("/plans/{plan_id}/trace", response_model=list[ModelingTraceEvent])
+def list_plan_trace(
+    plan_id: str,
+    level: str | None = Query(default=None, description="CSV: debug,info,warn,error"),
+    source: str | None = Query(default=None, description="CSV: ui,backend,mcp,fusion,blender"),
+    limit: int = Query(default=500, ge=1, le=5000),
+) -> list[ModelingTraceEvent]:
+    """Lista trace events de um plano, ordenados por (sequence, created_at) ASC.
+
+    Usado pelo modal de diagnóstico do frontend após receber o evento SSE
+    ``modeling_plan`` (que carrega o ``trace_id``). Suporta filtros por
+    nível e fonte para reduzir payload em traces longos.
+    """
+
+    store = _require_trace_store(get_store())
+    levels = _parse_csv_enum_query(level, ModelingTraceLevel, "level")
+    sources = _parse_csv_enum_query(source, ModelingTraceSource, "source")
+    return store.list_trace_events(plan_id=plan_id, levels=levels, sources=sources, limit=limit)
+
+
+@router.get("/traces/{trace_id}", response_model=list[ModelingTraceEvent])
+def list_trace_events_endpoint(
+    trace_id: str,
+    level: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=5000),
+) -> list[ModelingTraceEvent]:
+    """Lista eventos por ``trace_id`` direto, sem precisar do plan_id.
+
+    Útil quando o frontend só tem o trace_id (ex: vindo de um log do
+    backend) e quer reconstruir a trilha.
+    """
+
+    store = _require_trace_store(get_store())
+    levels = _parse_csv_enum_query(level, ModelingTraceLevel, "level")
+    sources = _parse_csv_enum_query(source, ModelingTraceSource, "source")
+    return store.list_trace_events(trace_id=trace_id, levels=levels, sources=sources, limit=limit)
+
+
+@router.post("/traces/events", response_model=ModelingTraceEvent)
+def record_client_trace_event(
+    payload: ModelingTraceEventCreate, request: Request
+) -> ModelingTraceEvent:
+    """Aceita eventos vindos do cliente web (clicks, modal opens, retries).
+
+    Segurança:
+    - ``source`` é forçado para ``ui`` server-side; clientes não conseguem
+      forjar eventos pretendendo vir de fusion/backend.
+    - Rate limit: 60 eventos por minuto por IP. UI bugged em loop não
+      derruba o backend.
+    """
+
+    store = _require_trace_store(get_store())
+    client_id = (
+        (request.client.host if request.client else "unknown") + ":" + (payload.trace_id or "")
+    )
+
+    # Token bucket por client_id em janela deslizante.
+    now = time.time()
+    with _client_trace_lock:
+        bucket = _client_trace_timestamps[client_id]
+        cutoff = now - _CLIENT_TRACE_RATE_WINDOW_SECONDS
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        if len(bucket) >= _CLIENT_TRACE_RATE_MAX_EVENTS:
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit excedido para eventos de trace do cliente.",
+            )
+        bucket.append(now)
+
+    # Constrói o evento server-side com defaults seguros.
+    event = ModelingTraceEvent(
+        trace_id=payload.trace_id,
+        plan_id=payload.plan_id,
+        event_type=payload.event_type,
+        source=ModelingTraceSource.ui,  # forçado, ignora qualquer source do cliente
+        level=payload.level,
+        message=payload.message,
+        payload=payload.payload or {},
+        duration_ms=payload.duration_ms,
+    )
+    store.record_trace_events_bulk([event])
+    return event
+
+
+@router.get("/plans/{plan_id}/diagnostics")
+def get_plan_diagnostics(plan_id: str) -> dict[str, Any]:
+    """Endpoint consolidado de diagnóstico para um plano.
+
+    Combina o plano, tool calls, printability reports e os últimos N
+    eventos de trace em um único JSON exportável — útil para gerar
+    bundles de bug report (``curl ... > bug-bundle.json``).
+    """
+
+    store = get_store()
+    plan = store.get_modeling_plan(plan_id) if hasattr(store, "get_modeling_plan") else None
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plano 3D não encontrado.")
+    tool_calls = (
+        store.list_modeling_tool_calls(plan_id=plan_id)
+        if hasattr(store, "list_modeling_tool_calls")
+        else []
+    )
+    trace_events: list[ModelingTraceEvent] = []
+    if hasattr(store, "list_trace_events"):
+        trace_events = store.list_trace_events(plan_id=plan_id, limit=1000)
+    printability = (
+        store.list_modeling_printability_reports(plan_id=plan_id)
+        if hasattr(store, "list_modeling_printability_reports")
+        else []
+    )
+    return {
+        "plan": plan.model_dump(mode="json"),
+        "tool_calls": [tc.model_dump(mode="json") for tc in tool_calls],
+        "trace_events": [te.model_dump(mode="json") for te in trace_events],
+        "printability_reports": [pr.model_dump(mode="json") for pr in printability],
+        "schema_version": 1,
+    }
+
+
+# Wire o tracer global na inicialização do módulo para que mesmo chamadas
+# diretas (testes, scripts) tenham a store conectada. Sem isso, get_tracer()
+# sem argumento criava um tracer no-op.
+try:
+    _store = get_store()
+    if hasattr(_store, "record_trace_events_bulk"):
+        get_tracer(_store)
+except Exception:  # noqa: BLE001 - never crash module import on tracer wiring
+    pass

@@ -42,7 +42,6 @@ from app.modeling.mcp_servers.protocol import (
     decode_message,
     encode_message,
 )
-
 from app.modeling.tool_registry import FUSION_TOOLS as _REGISTRY_FUSION_TOOLS
 
 logger = logging.getLogger(__name__)

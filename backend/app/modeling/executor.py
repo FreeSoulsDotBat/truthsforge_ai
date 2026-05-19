@@ -25,10 +25,13 @@ from app.core.contracts import (
     ModelingStepStatus,
     ModelingToolCall,
     ModelingToolCallStatus,
+    ModelingTraceLevel,
+    ModelingTraceSource,
     now_utc,
 )
 from app.modeling.artifacts import ModelingArtifactService
 from app.modeling.mcp_client import LocalMCPClient
+from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.snapshot_service import ModelingSnapshotService
 
 
@@ -82,6 +85,8 @@ class ModelingExecutorService:
         self.mcp_client = mcp_client
         self.snapshots = snapshots
         self.artifacts = artifacts
+        # Tracer compartilhado (no-op se a store não tem record_trace_events_bulk).
+        self._tracer = get_tracer(store if hasattr(store, "record_trace_events_bulk") else None)
 
     def execute_plan(self, plan: ModelingPlan) -> ModelingExecutionResult:
         """Execute every runnable step of ``plan`` and persist the result."""
@@ -106,11 +111,45 @@ class ModelingExecutorService:
             if step.error:
                 blocked_step_ids.append(step.id)
                 next_steps.append(step)
+                self._tracer.record(
+                    "executor.step_skipped",
+                    source=ModelingTraceSource.backend,
+                    level=ModelingTraceLevel.warn,
+                    message=f"Step {step.seq} bloqueado por erro prévio",
+                    payload={"step_id": step.id, "tool_name": step.tool_name, "error": step.error},
+                    plan_id=plan.id,
+                )
                 continue
             if step.approval_required and step.status != ModelingStepStatus.approved:
                 blocked_step_ids.append(step.id)
                 next_steps.append(step)
+                self._tracer.record(
+                    "executor.step_blocked",
+                    source=ModelingTraceSource.backend,
+                    level=ModelingTraceLevel.info,
+                    message=f"Step {step.seq} aguardando aprovação humana",
+                    payload={
+                        "step_id": step.id,
+                        "tool_name": step.tool_name,
+                        "risk_level": step.risk_level.value,
+                    },
+                    plan_id=plan.id,
+                )
                 continue
+
+            self._tracer.record(
+                "executor.step_started",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.info,
+                message=f"Step {step.seq}: {step.tool_name}",
+                payload={
+                    "step_id": step.id,
+                    "seq": step.seq,
+                    "tool_name": step.tool_name,
+                    "input": step.input_json,
+                },
+                plan_id=plan.id,
+            )
 
             started_at = time.perf_counter()
             output = self._dispatch_step(step, plan=plan)
@@ -126,6 +165,29 @@ class ModelingExecutorService:
             executed_step_ids.append(step.id)
             event_verb = "executado" if output.get("transport") != "mock" else "preparado"
             events.append(f"{step.seq}. {step.tool_name} {event_verb} via {output['mcp_server']}")
+
+            step_ok = output.get("ok") is not False
+            self._tracer.record(
+                "executor.step_ok" if step_ok else "executor.step_error",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.info if step_ok else ModelingTraceLevel.error,
+                message=(
+                    f"Step {step.seq} OK"
+                    if step_ok
+                    else f"Step {step.seq} falhou: {output.get('message') or output.get('error')}"
+                ),
+                payload={
+                    "step_id": step.id,
+                    "tool_name": step.tool_name,
+                    "transport": output.get("transport"),
+                    "mcp_server": output.get("mcp_server"),
+                    "error_code": output.get("error_code"),
+                    "error_message": output.get("message") or output.get("error"),
+                    "retryable": output.get("retryable"),
+                },
+                duration_ms=duration_ms,
+                plan_id=plan.id,
+            )
 
             if output.get("ok") is False:
                 blocked_step_ids.append(step.id)
@@ -170,6 +232,7 @@ class ModelingExecutorService:
                     "blocked_step_ids": blocked_step_ids,
                     "tool_call_ids": tool_call_ids,
                 },
+                trace_id=current_trace_id(),
             ),
         )
         return ModelingExecutionResult(

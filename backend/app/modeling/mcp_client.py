@@ -4,10 +4,11 @@ import logging
 from typing import Any
 
 from app.core.config import settings
-from app.core.contracts import ModelingPlanStep, ModelingSoftware
+from app.core.contracts import ModelingPlanStep, ModelingSoftware, ModelingTraceSource
 from app.modeling.blender_adapter import BLENDER_TOOLS, BlenderAdapter
 from app.modeling.fusion_adapter import FUSION_TOOLS as FUSION_ADAPTER_TOOLS
 from app.modeling.fusion_adapter import FusionDesktopAdapter
+from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.stdio_client import (
     StdioMCPClient,
     StdioServerError,
@@ -172,6 +173,11 @@ class LocalMCPClient:
             # stdio is enabled — they live inside the backend itself.
             return self._execute_step_in_process(step, plan_id=plan_id, project_id=project_id)
 
+        # Propaga trace_id ativo para o servidor MCP via campo reservado
+        # ``_trace_id`` no meta do JSON-RPC. O servidor (Fusion addin,
+        # Blender runner) reflete em ``trace_events: []`` na resposta para
+        # eventos emitidos do lado do adapter.
+        trace_id = current_trace_id()
         meta = {
             "plan_id": plan_id,
             "project_id": project_id,
@@ -181,11 +187,27 @@ class LocalMCPClient:
             "software": step.software.value,
             "risk_level": step.risk_level.value,
             "approval_required": step.approval_required,
+            "_trace_id": trace_id,
         }
         try:
             result = client.tool_call(step.tool_name, arguments=step.input_json, meta=meta)
         except StdioServerError as exc:
-            logger.warning("Servidor stdio '%s' falhou: %s", server_name, exc)
+            logger.error(
+                "Servidor stdio '%s' falhou: %s", server_name, exc, exc_info=True
+            )
+            tracer = get_tracer()
+            tracer.record(
+                "mcp.transport_error",
+                source=ModelingTraceSource.mcp,
+                level="error",
+                message=str(exc),
+                payload={
+                    "server": server_name,
+                    "tool_name": step.tool_name,
+                    "stdio_code": exc.code,
+                    "stdio_data": exc.data,
+                },
+            )
             return {
                 "ok": False,
                 "mcp_server": server_name,
@@ -200,6 +222,24 @@ class LocalMCPClient:
                 "host_details": {"stdio_code": exc.code, "stdio_data": exc.data},
             }
         if isinstance(result, dict):
+            # Drena eventos de trace emitidos pelo adapter (Fusion/Blender).
+            # O adapter acumula eventos durante a execução do tool e os
+            # retorna como ``trace_events: []``. Aqui incorporamos ao trace
+            # ativo via ModelingTracer.ingest_external_events.
+            trace_events = result.get("trace_events")
+            if isinstance(trace_events, list) and trace_events:
+                default_source = (
+                    ModelingTraceSource.fusion
+                    if server_name == "fusion_mcp"
+                    else ModelingTraceSource.blender
+                )
+                get_tracer().ingest_external_events(
+                    trace_events, default_source=default_source
+                )
+                # Não exporta para o caller (poluiria a interface dict
+                # consumida pelo executor) — já está nos eventos
+                # persistidos via tracer.
+                result = {k: v for k, v in result.items() if k != "trace_events"}
             return result
         return {
             "ok": False,

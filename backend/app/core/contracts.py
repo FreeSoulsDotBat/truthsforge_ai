@@ -200,6 +200,12 @@ class AuditEvent(BaseModel):
     tokens_out: int = 0
     estimated_cost_brl: float = 0
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Optional correlation to a modeling trace (only set on anchor events such as
+    # modeling.plan_created, modeling.chat.plan_proposed, modeling.chat.execution_*).
+    # Lets observers navigate from a compliance/cost-bearing audit row to the
+    # full debug trace stored in modeling_trace_events. Never used as a foreign
+    # key (traces may be GC'd before audits).
+    trace_id: str | None = None
     created_at: datetime = Field(default_factory=now_utc)
 
 
@@ -1040,6 +1046,86 @@ class ModelingExecutionResult(BaseModel):
     blocked_step_ids: list[str] = Field(default_factory=list)
     events: list[str] = Field(default_factory=list)
     tool_call_ids: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Observabilidade (módulo de modelagem 3D)
+# ---------------------------------------------------------------------------
+# Ver C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md
+# Schema dedicado para trace events de modelagem 3D — separado do AuditEvent
+# (que tem semântica de compliance/custo, não debug). AuditEvent ganhou um
+# trace_id opcional para navegação bidirecional.
+
+
+class ModelingTraceSource(StrEnum):
+    """Origem do evento de trace. ``ui`` é cliente web; demais são backend/edge."""
+
+    ui = "ui"
+    backend = "backend"
+    mcp = "mcp"
+    fusion = "fusion"
+    blender = "blender"
+
+
+class ModelingTraceLevel(StrEnum):
+    debug = "debug"
+    info = "info"
+    warn = "warn"
+    error = "error"
+
+
+# Tamanho máximo do payload por evento (em bytes do JSON dump). Acima disso
+# o tracer trunca e marca ``_truncated: true`` no payload. Cap intencional
+# para evitar JSONB pesado e protelar memória do DevStore.
+MODELING_TRACE_PAYLOAD_LIMIT_BYTES = 50_000
+
+# Capacidade máxima do ring buffer do DevStore (lista única JSON carregada
+# em memória inteira). Acima disso eventos mais antigos são descartados.
+MODELING_TRACE_DEVSTORE_MAX_EVENTS = 5_000
+
+
+class ModelingTraceEvent(BaseModel):
+    """Evento estruturado de um trace de modelagem 3D ponta-a-ponta.
+
+    Um trace é uma sequência de eventos compartilhando ``trace_id`` (ULID
+    sortable) emitidos por UI, backend, MCP e adapters (Fusion/Blender)
+    durante a vida de um plano. Eventos de nível ``warn``/``error`` são
+    espelhados para o stream SSE em tempo real; ``info``/``debug`` ficam
+    apenas em armazenamento para inspeção posterior.
+    """
+
+    id: str = Field(default_factory=lambda: new_id("mte"))
+    trace_id: str
+    plan_id: str | None = None
+    session_id: str | None = None
+    project_id: str | None = None
+    event_type: str  # dotted namespace, ex: "planner.fallback_used"
+    source: ModelingTraceSource
+    level: ModelingTraceLevel = ModelingTraceLevel.info
+    message: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: int | None = None
+    # Número monotônico dentro do trace, usado pelo frontend para dedupe
+    # entre o GET histórico e eventos SSE subsequentes ao abrir o modal.
+    sequence: int = 0
+    schema_version: int = 1
+    created_at: datetime = Field(default_factory=now_utc)
+
+
+class ModelingTraceEventCreate(BaseModel):
+    """Payload aceito pelo endpoint POST /api/modeling/traces/events.
+
+    O ``source`` é forçado para ``ui`` server-side por segurança; clientes
+    nunca conseguem emitir eventos pretendendo vir de fusion/backend.
+    """
+
+    trace_id: str
+    plan_id: str | None = None
+    event_type: str
+    level: ModelingTraceLevel = ModelingTraceLevel.info
+    message: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: int | None = None
 
 
 class Document(BaseModel):

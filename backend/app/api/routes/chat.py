@@ -1208,6 +1208,11 @@ def _runtime_status(stage: str, label: str, detail: str | None = None) -> str:
 
 
 def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
+    # Importação local para evitar ciclo (chat.py é importado cedo no app
+    # startup). ``current_trace_id`` lê o contextvar bindado pelo
+    # ModelingChatOrchestrator.propose_plan.
+    from app.modeling.observability import current_trace_id
+
     return {
         "id": plan.id,
         "project_id": plan.project_id,
@@ -1224,6 +1229,12 @@ def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
         "knowledge_base_ids": plan.knowledge_base_ids,
         "planner_source": plan.planner_source.value if plan.planner_source else None,
         "fallback_reason": plan.fallback_reason,
+        # ``trace_id`` permite que o frontend chame
+        # ``GET /api/modeling/plans/{id}/trace`` ou
+        # ``GET /api/modeling/traces/{trace_id}`` ao abrir o modal de
+        # diagnóstico. Lido do contextvar — None se observability
+        # estiver desligada ou se o handler não passou pelo orchestrator.
+        "trace_id": current_trace_id(),
         "created_at": plan.created_at.isoformat(),
         "updated_at": plan.updated_at.isoformat(),
         "steps": [

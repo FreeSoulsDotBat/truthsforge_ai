@@ -1,0 +1,330 @@
+"""Testes do módulo de observabilidade (``app.modeling.observability``).
+
+Cobre:
+- ``ModelingTracer.start_trace`` + propagação via contextvars.
+- ``record`` quando observability está desligado vira no-op.
+- ``record_span`` mede duração e emite ``.completed``/``.failed``.
+- Truncate de payload acima de ``MODELING_TRACE_PAYLOAD_LIMIT_BYTES``.
+- Mapping de exceção do gateway → event_type específico via
+  ``classify_provider_exception`` + ``_LLM_ERROR_EVENT_TYPES``.
+
+Não cobre o pipeline ponta-a-ponta — isso fica para teste de integração
+via ``scripts/smoke-modeling-trace.ps1`` rodando contra a stack
+containerizada (ver docs/local-dev.md).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from app.core.contracts import (
+    MODELING_TRACE_PAYLOAD_LIMIT_BYTES,
+    ModelingTraceEvent,
+    ModelingTraceLevel,
+    ModelingTraceSource,
+)
+from app.llm_gateway.exceptions import (
+    LLMAuthError,
+    LLMInvalidResponseError,
+    LLMProviderError,
+    LLMRateLimitError,
+    LLMTimeoutError,
+    classify_provider_exception,
+)
+from app.modeling.observability import (
+    ModelingTracer,
+    _plan_id_var,
+    _project_id_var,
+    _sequence_var,
+    _session_id_var,
+    _trace_id_var,
+    _truncate_payload,
+    current_trace_id,
+    generate_trace_id,
+    reset_tracer,
+)
+
+
+class _FakeStore:
+    """Store mínima para satisfazer ``TraceEventStore``.
+
+    Captura tudo em memória para asserções. ``raise_on_flush`` permite
+    simular falha do banco e verificar que o tracer não propaga exceção.
+    """
+
+    def __init__(self, *, raise_on_flush: bool = False) -> None:
+        self.events: list[ModelingTraceEvent] = []
+        self.raise_on_flush = raise_on_flush
+
+    def record_trace_events_bulk(self, events: list[ModelingTraceEvent]) -> None:
+        if self.raise_on_flush:
+            raise RuntimeError("simulated DB failure")
+        self.events.extend(events)
+
+
+@pytest.fixture(autouse=True)
+def _reset_tracer_singleton() -> None:
+    """Garante isolamento entre testes (o tracer é singleton no módulo).
+
+    Resetar TANTO o singleton quanto os contextvars — eventos emitidos
+    em testes anteriores deixam o trace_id pendurado e contaminam o
+    próximo teste se não limparmos.
+    """
+
+    reset_tracer()
+    _trace_id_var.set(None)
+    _plan_id_var.set(None)
+    _session_id_var.set(None)
+    _project_id_var.set(None)
+    _sequence_var.set(0)
+    yield
+    reset_tracer()
+    _trace_id_var.set(None)
+    _plan_id_var.set(None)
+    _session_id_var.set(None)
+    _project_id_var.set(None)
+    _sequence_var.set(0)
+
+
+def test_generate_trace_id_is_sortable_by_time() -> None:
+    import time as _time
+
+    a = generate_trace_id()
+    _time.sleep(0.002)  # garante ms diferente (vs apenas randomness)
+    b = generate_trace_id()
+    # Propriedade real: o prefixo de timestamp (parte após "mt_" e antes
+    # do segundo "_") é monotônico não-decrescente. Sufixo random pode
+    # variar; comparar apenas a parte temporal.
+    ts_a = a.split("_")[1]
+    ts_b = b.split("_")[1]
+    assert ts_a < ts_b
+
+
+def test_start_trace_binds_contextvar_and_emits_started_event() -> None:
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=100)
+    trace_id = tracer.start_trace(session_id="sess-1", project_id="proj-1")
+
+    assert current_trace_id() == trace_id
+    assert tracer._buffers[trace_id].events[0].event_type == "trace.started"
+    assert tracer._buffers[trace_id].events[0].source == ModelingTraceSource.backend
+    assert tracer._buffers[trace_id].events[0].payload["session_id"] == "sess-1"
+
+
+def test_record_without_active_trace_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store)
+    # Sem start_trace, não há contextvar — deve retornar None silenciosamente.
+    result = tracer.record("planner.foo", source=ModelingTraceSource.backend)
+    assert result is None
+    assert store.events == []
+
+
+def test_record_when_observability_disabled_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.modeling import observability as obs
+
+    monkeypatch.setattr(obs.settings, "modeling_observability_enabled", False)
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store)
+    tracer.start_trace(session_id="sess")
+    result = tracer.record("planner.foo", source=ModelingTraceSource.backend)
+    assert result is None
+
+
+def test_batch_flush_at_batch_size() -> None:
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=3)
+    tracer.start_trace(session_id="sess")
+    # start_trace emite 1 evento (trace.started). Mais 2 → 3 → flush.
+    tracer.record("a", source=ModelingTraceSource.backend)
+    assert store.events == []  # ainda buffered
+    tracer.record("b", source=ModelingTraceSource.backend)
+    # Agora bateu o batch_size, flush automático aconteceu.
+    assert len(store.events) == 3
+
+
+def test_explicit_flush_drains_buffer() -> None:
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=100)
+    tracer.start_trace(session_id="sess")
+    tracer.record("a", source=ModelingTraceSource.backend)
+    assert store.events == []
+    tracer.flush()
+    assert len(store.events) == 2  # trace.started + "a"
+
+
+def test_flush_failure_is_swallowed() -> None:
+    """Tracer nunca pode derrubar o fluxo do usuário por falha de I/O."""
+
+    store = _FakeStore(raise_on_flush=True)
+    tracer = ModelingTracer(store=store, batch_size=2)
+    tracer.start_trace(session_id="sess")
+    # Não deve levantar mesmo com a store quebrada.
+    tracer.record("a", source=ModelingTraceSource.backend)
+    tracer.record("b", source=ModelingTraceSource.backend)
+    tracer.flush()
+
+
+def test_record_span_emits_completed_with_duration() -> None:
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=100)
+    tracer.start_trace(session_id="sess")
+
+    with tracer.record_span("planner.llm_request") as span:
+        span.attach({"tokens": 42})
+
+    tracer.flush()
+    by_type = [e.event_type for e in store.events]
+    assert "planner.llm_request" in by_type
+    assert "planner.llm_request.completed" in by_type
+    completed = next(e for e in store.events if e.event_type == "planner.llm_request.completed")
+    assert completed.duration_ms is not None and completed.duration_ms >= 0
+    assert completed.payload["tokens"] == 42
+
+
+def test_record_span_emits_failed_and_reraises() -> None:
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=100)
+    tracer.start_trace(session_id="sess")
+
+    with pytest.raises(ValueError):
+        with tracer.record_span("planner.llm_request"):
+            raise ValueError("boom")
+
+    tracer.flush()
+    types = [e.event_type for e in store.events]
+    assert "planner.llm_request.failed" in types
+    failed = next(e for e in store.events if e.event_type == "planner.llm_request.failed")
+    assert failed.level == ModelingTraceLevel.error
+    assert failed.payload["exception"] == "ValueError"
+
+
+def test_truncate_payload_under_limit_returns_as_is() -> None:
+    payload: dict[str, Any] = {"a": "x" * 100}
+    assert _truncate_payload(payload) is payload
+
+
+def test_truncate_payload_over_limit_marks_truncated() -> None:
+    huge = "x" * (MODELING_TRACE_PAYLOAD_LIMIT_BYTES * 2)
+    out = _truncate_payload({"prompt": huge, "model": "y"})
+    assert out.get("_truncated") is True
+    assert out["_original_size_bytes"] >= len(huge)
+    assert "prompt" in out["_keys"] and "model" in out["_keys"]
+
+
+def test_truncate_payload_non_serializable() -> None:
+    class NotSerializable:
+        pass
+
+    out = _truncate_payload({"obj": NotSerializable()})
+    # default=str do json.dumps na verdade serializa quase tudo — então
+    # o truncate primeiro vai conseguir serializar via default. O caso
+    # de erro de serialização real é quando o default falha; aqui o
+    # objeto vira a representação string e o tamanho não excede.
+    assert isinstance(out, dict)
+
+
+def test_ingest_external_events_records_with_default_source() -> None:
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=100)
+    tracer.start_trace(session_id="sess")
+
+    tracer.ingest_external_events(
+        [
+            {
+                "event_type": "fusion.tool_completed",
+                "level": "info",
+                "message": "OK",
+                "payload": {"tool": "add_sphere"},
+            }
+        ],
+        default_source=ModelingTraceSource.fusion,
+    )
+    tracer.flush()
+    fusion_events = [e for e in store.events if e.source == ModelingTraceSource.fusion]
+    assert len(fusion_events) == 1
+    assert fusion_events[0].event_type == "fusion.tool_completed"
+
+
+def test_ingest_external_events_tolerates_malformed() -> None:
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=100)
+    tracer.start_trace(session_id="sess")
+
+    # Source inválido — deve descartar o evento mas não quebrar.
+    tracer.ingest_external_events(
+        [
+            {"event_type": "x.malformed", "source": "INVALID"},
+            {"event_type": "x.ok", "source": "fusion", "level": "info"},
+        ]
+    )
+    tracer.flush()
+    types = [e.event_type for e in store.events]
+    assert "x.ok" in types
+    assert "x.malformed" not in types
+
+
+# ---------------------------------------------------------------------------
+# Exception classifier
+# ---------------------------------------------------------------------------
+
+
+class _FakeAuthError(Exception):
+    """Simula openai.AuthenticationError sem importar a SDK."""
+
+
+class _FakeTimeoutError(Exception):
+    pass
+
+
+class _FakeRateLimitError(Exception):
+    pass
+
+
+@pytest.mark.parametrize(
+    "exc_class, expected_type",
+    [
+        (_FakeAuthError, LLMAuthError),
+        (_FakeTimeoutError, LLMTimeoutError),
+        (_FakeRateLimitError, LLMRateLimitError),
+    ],
+)
+def test_classify_provider_exception_maps_by_name(
+    exc_class: type, expected_type: type[LLMProviderError]
+) -> None:
+    result = classify_provider_exception(exc_class("error message"))
+    assert isinstance(result, expected_type)
+
+
+def test_classify_provider_exception_unknown_returns_base() -> None:
+    class _RandomError(Exception):
+        pass
+
+    result = classify_provider_exception(_RandomError("???"))
+    assert isinstance(result, LLMProviderError)
+    assert type(result) is LLMProviderError
+
+
+def test_classify_provider_exception_detects_timeout_by_message() -> None:
+    class _GenericError(Exception):
+        pass
+
+    result = classify_provider_exception(_GenericError("Request timed out after 30s"))
+    assert isinstance(result, LLMTimeoutError)
+
+
+def test_llm_auth_error_is_not_retryable() -> None:
+    err = LLMAuthError("API key invalid")
+    assert err.retryable is False
+
+
+def test_llm_timeout_error_is_retryable() -> None:
+    err = LLMTimeoutError("Request timed out")
+    assert err.retryable is True
+
+
+def test_llm_invalid_response_error_is_not_retryable() -> None:
+    err = LLMInvalidResponseError("malformed JSON")
+    assert err.retryable is False

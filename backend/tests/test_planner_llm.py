@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi.testclient import TestClient
-
 from app.core.contracts import (
     KnowledgeBase,
     ModelCapability,
@@ -16,7 +14,6 @@ from app.core.contracts import (
     ProviderName,
 )
 from app.llm_gateway.providers import ProviderExecutionError
-from app.main import app
 from app.modeling.planner import (
     EXECUTION_PLAN_SCHEMA,
     PLANNER_TOOLSET,

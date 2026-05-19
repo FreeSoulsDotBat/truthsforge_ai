@@ -106,6 +106,10 @@ export interface ModelingPlan {
   steps: ModelingPlanStep[];
   planner_source?: ModelingPlannerSource | null;
   fallback_reason?: string | null;
+  // Presente apenas quando o plano é serializado via SSE (rota chat stream).
+  // Endpoints REST que devolvem ``ModelingPlan`` puro não populam — use
+  // ``GET /api/3d/plans/{id}/trace`` consultando pelo plan_id nesse caso.
+  trace_id?: string | null;
   kind?: ModelingPlanKind;
   parent_plan_id?: string | null;
   created_at: string;
@@ -119,6 +123,38 @@ export interface ModelingPlanCreate {
   mode?: ModelingExecutionMode;
   software_override?: ModelingSoftware | null;
   knowledge_base_ids?: string[];
+}
+
+// Observabilidade — alinhado com backend/app/core/contracts.py
+// ``ModelingTraceSource``, ``ModelingTraceLevel`` e ``ModelingTraceEvent``.
+export type ModelingTraceSource = "ui" | "backend" | "mcp" | "fusion" | "blender";
+export type ModelingTraceLevel = "debug" | "info" | "warn" | "error";
+
+export interface ModelingTraceEvent {
+  id: string;
+  trace_id: string;
+  plan_id: string | null;
+  session_id: string | null;
+  project_id: string | null;
+  event_type: string;
+  source: ModelingTraceSource;
+  level: ModelingTraceLevel;
+  message: string | null;
+  payload: Record<string, unknown>;
+  duration_ms: number | null;
+  sequence: number;
+  schema_version: number;
+  created_at: string;
+}
+
+export interface ModelingTraceEventCreate {
+  trace_id: string;
+  plan_id?: string | null;
+  event_type: string;
+  level?: ModelingTraceLevel;
+  message?: string | null;
+  payload?: Record<string, unknown>;
+  duration_ms?: number | null;
 }
 
 export interface ChatModeling3DContext {

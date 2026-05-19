@@ -10,7 +10,11 @@ import type {
   ModelingSession,
   ModelingSnapshot,
   ModelingSoftware,
-  ModelingToolCall
+  ModelingToolCall,
+  ModelingTraceEvent,
+  ModelingTraceEventCreate,
+  ModelingTraceLevel,
+  ModelingTraceSource
 } from "../../../types/api";
 
 function queryString(params: Record<string, string | number | null | undefined>): string {
@@ -63,6 +67,44 @@ export const modeling3dApi = {
   executePlan: (planId: string) =>
     apiRequest<ModelingExecutionResult>(`/api/3d/plans/${planId}/execute`, {
       method: "POST"
+    }),
+  /**
+   * Observabilidade (ver backend/app/modeling/observability.py).
+   */
+  planTrace: (
+    planId: string,
+    params: {
+      level?: ModelingTraceLevel[];
+      source?: ModelingTraceSource[];
+      limit?: number;
+    } = {}
+  ) => {
+    const qs = queryString({
+      level: params.level?.join(","),
+      source: params.source?.join(","),
+      limit: params.limit
+    });
+    return apiRequest<ModelingTraceEvent[]>(`/api/3d/plans/${planId}/trace${qs}`);
+  },
+  trace: (
+    traceId: string,
+    params: {
+      level?: ModelingTraceLevel[];
+      source?: ModelingTraceSource[];
+      limit?: number;
+    } = {}
+  ) => {
+    const qs = queryString({
+      level: params.level?.join(","),
+      source: params.source?.join(","),
+      limit: params.limit
+    });
+    return apiRequest<ModelingTraceEvent[]>(`/api/3d/traces/${traceId}${qs}`);
+  },
+  recordClientTraceEvent: (event: ModelingTraceEventCreate) =>
+    apiRequest<ModelingTraceEvent>("/api/3d/traces/events", {
+      method: "POST",
+      body: JSON.stringify(event)
     })
 };
 

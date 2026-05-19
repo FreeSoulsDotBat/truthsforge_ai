@@ -630,6 +630,15 @@ def _make_handler_class() -> type[socketserver.StreamRequestHandler]:
             finally:
                 with _pending_lock:
                     _pending_requests.pop(dispatch_id, None)
+            # Observabilidade: o backend propaga ``_trace_id`` no _meta.
+            # O addin não tem ModelingTracer próprio, mas devolve uma
+            # lista ``trace_events: []`` com pelo menos um evento por
+            # tool call para o backend incorporar via
+            # ``ModelingTracer.ingest_external_events``. Ver
+            # backend/app/modeling/observability.py e o plano em
+            # C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md
+            trace_id = meta.get("_trace_id") if isinstance(meta, dict) else None
+
             if not outcome.get("ok"):
                 payload = {
                     "ok": False,
@@ -643,6 +652,23 @@ def _make_handler_class() -> type[socketserver.StreamRequestHandler]:
                     "message": str(outcome.get("error") or "Falha desconhecida."),
                     "host_details": {"traceback_tail": outcome.get("traceback_tail")},
                     "input": arguments,
+                    "trace_events": (
+                        [
+                            {
+                                "event_type": "fusion.tool_error",
+                                "source": "fusion",
+                                "level": "error",
+                                "message": str(outcome.get("error") or "Falha desconhecida."),
+                                "payload": {
+                                    "tool_name": name,
+                                    "traceback_tail": outcome.get("traceback_tail"),
+                                    "_trace_id": trace_id,
+                                },
+                            }
+                        ]
+                        if trace_id
+                        else []
+                    ),
                 }
                 self._send(_build_result(request_id, payload))
                 return
@@ -657,6 +683,26 @@ def _make_handler_class() -> type[socketserver.StreamRequestHandler]:
                 "input": arguments,
                 "artifact_paths": tool_result.get("artifact_paths") or [],
                 "result": tool_result,
+                "trace_events": (
+                    [
+                        {
+                            "event_type": "fusion.tool_completed",
+                            "source": "fusion",
+                            "level": "info",
+                            "message": (
+                                tool_result.get("message")
+                                or f"Tool {name} executada no Fusion"
+                            ),
+                            "payload": {
+                                "tool_name": name,
+                                "artifact_paths": tool_result.get("artifact_paths") or [],
+                                "_trace_id": trace_id,
+                            },
+                        }
+                    ]
+                    if trace_id
+                    else []
+                ),
             }
             self._send(_build_result(request_id, payload))
 
