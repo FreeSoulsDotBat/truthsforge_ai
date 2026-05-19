@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections import defaultdict, deque
+from collections import deque
 from threading import Lock
 from typing import Any
 
@@ -27,7 +27,7 @@ from app.core.contracts import (
     ModelingTraceLevel,
     ModelingTraceSource,
 )
-from app.modeling.observability import get_tracer
+from app.modeling.observability import _truncate_payload, get_tracer
 from app.modeling.service import get_modeling_service
 from app.storage.store import get_store
 
@@ -193,7 +193,12 @@ def list_model_versions(project_id: str | None = Query(default=None)) -> list[Mo
 # o app sair de single-replica em prod, mover para Valkey/Redis.
 _CLIENT_TRACE_RATE_WINDOW_SECONDS = 60
 _CLIENT_TRACE_RATE_MAX_EVENTS = 60
-_client_trace_timestamps: dict[str, deque[float]] = defaultdict(deque)
+# Bucket por client_id (ip:trace_id) com timestamps em janela deslizante.
+# Dict normal (NÃO defaultdict) para evitar criação implícita de chaves em
+# leitura — todo acesso passa por _get_or_create_bucket que escreve
+# intencionalmente. PR#28 review (issue 1) flagrou que defaultdict +
+# nunca-deletar = leak de memória conforme novos trace_ids únicos chegam.
+_client_trace_timestamps: dict[str, deque[float]] = {}
 _client_trace_lock = Lock()
 
 
@@ -288,18 +293,54 @@ def record_client_trace_event(
     )
 
     # Token bucket por client_id em janela deslizante.
+    # PR#28 review (issue 1): após pruning, removemos a chave se ficou vazia
+    # E fazemos sweep periódico (a cada N requests) para chaves órfãs que
+    # ficaram com timestamps todos expirados sem serem visitadas. Sem isso,
+    # cada trace_id único viraria entrada permanente.
     now = time.time()
+    cutoff = now - _CLIENT_TRACE_RATE_WINDOW_SECONDS
     with _client_trace_lock:
-        bucket = _client_trace_timestamps[client_id]
-        cutoff = now - _CLIENT_TRACE_RATE_WINDOW_SECONDS
+        bucket = _client_trace_timestamps.get(client_id)
+        if bucket is None:
+            bucket = deque()
+            _client_trace_timestamps[client_id] = bucket
         while bucket and bucket[0] < cutoff:
             bucket.popleft()
         if len(bucket) >= _CLIENT_TRACE_RATE_MAX_EVENTS:
+            # Não removemos o bucket aqui — ele está ativo, só limitado.
             raise HTTPException(
                 status_code=429,
                 detail="Rate limit excedido para eventos de trace do cliente.",
             )
         bucket.append(now)
+        # Sweep barato a cada chamada: se algum bucket OUTRO virou totalmente
+        # obsoleto (todos timestamps abaixo do cutoff e nenhuma escrita
+        # recente), remove. Custo O(N) onde N = #clients ativos no minuto,
+        # tipicamente <50. Aceitável vs alternativas mais complexas.
+        stale_keys = [
+            k
+            for k, b in _client_trace_timestamps.items()
+            if k != client_id and (not b or b[-1] < cutoff)
+        ]
+        for k in stale_keys:
+            del _client_trace_timestamps[k]
+
+    # PR#28 review (issue 8): atribui sequence monotonico server-side
+    # baseado no maior sequence ja existente para este trace_id. Sem isso,
+    # todos os eventos do cliente ficavam com sequence=0 e desorganizavam
+    # a timeline do modal. Best-effort: se o lookup falhar, mantem 0.
+    next_seq = 0
+    try:
+        existing = store.list_trace_events(trace_id=payload.trace_id, limit=5000)
+        if existing:
+            next_seq = max(e.sequence for e in existing) + 1
+    except Exception:  # noqa: BLE001 - sequence é nice-to-have, não bloqueia
+        pass
+
+    # PR#28 review (issue 3): aplica truncate_payload server-side. Evita
+    # que cliente malicioso/bugged envie payload arbitrariamente grande
+    # direto pro JSONB do Postgres bypassando os 50KB do tracer.record().
+    safe_payload = _truncate_payload(payload.payload or {})
 
     # Constrói o evento server-side com defaults seguros.
     event = ModelingTraceEvent(
@@ -309,8 +350,9 @@ def record_client_trace_event(
         source=ModelingTraceSource.ui,  # forçado, ignora qualquer source do cliente
         level=payload.level,
         message=payload.message,
-        payload=payload.payload or {},
+        payload=safe_payload,
         duration_ms=payload.duration_ms,
+        sequence=next_seq,
     )
     store.record_trace_events_bulk([event])
     return event
@@ -351,12 +393,25 @@ def get_plan_diagnostics(plan_id: str) -> dict[str, Any]:
     }
 
 
-# Wire o tracer global na inicialização do módulo para que mesmo chamadas
-# diretas (testes, scripts) tenham a store conectada. Sem isso, get_tracer()
-# sem argumento criava um tracer no-op.
-try:
-    _store = get_store()
-    if hasattr(_store, "record_trace_events_bulk"):
-        get_tracer(_store)
-except Exception:  # noqa: BLE001 - never crash module import on tracer wiring
-    pass
+# PR#28 review (issue 4): wire o tracer LAZY no startup do FastAPI em vez
+# de import-time. No padrão antigo, se ``get_store()`` falhasse no import
+# (DB não pronto), o try silencioso engolia o erro e algum service init
+# subsequente podia criar o singleton com store=None (no-op permanente
+# até restart). Esta função é chamada no ``lifespan`` em ``app/main.py``.
+def wire_tracer_store() -> None:
+    """Re-conecta o tracer singleton à store quando o app está pronto.
+
+    Idempotente. Se o singleton já foi criado com store válida, é no-op.
+    Se foi criado com store=None (caso degradado), faz reset + reconnect.
+    """
+
+    from app.modeling.observability import reset_tracer
+
+    try:
+        store = get_store()
+    except Exception:  # noqa: BLE001 - app não deve crashar no startup por isso
+        return
+    if not hasattr(store, "record_trace_events_bulk"):
+        return
+    reset_tracer()
+    get_tracer(store)

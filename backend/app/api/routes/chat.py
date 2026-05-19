@@ -66,7 +66,7 @@ from app.llm_gateway.providers import (
     token_event,
 )
 from app.modeling.attachment_analyzer import ModelingAttachmentAnalyzer
-from app.modeling.observability import get_tracer
+from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.service import get_modeling_service
 from app.rag.embeddings import embed_text
 from app.rag.indexing import ensure_document_for_platform_file
@@ -1440,6 +1440,10 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 project_id=effective_project_id,
             )
 
+            # PR#28 review (issue 2): close_trace() é chamado em TODOS os
+            # exit points abaixo (early-return error paths + happy path)
+            # para garantir cleanup do buffer. Sem isso o trace ficaria
+            # preso indefinidamente (apenas eviccionado pelo cap FIFO).
             try:
                 plan = await modeling_service.create_plan_async(
                     ModelingPlanCreate(
@@ -1454,9 +1458,10 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 # Flush imediato — frontend que ler /api/3d/plans/{id}/trace
                 # logo após receber o SSE ``modeling_plan`` precisa ver tudo
                 # já persistido (não fica em buffer).
-                _modeling_tracer.flush()
+                _modeling_tracer.flush(current_trace_id())
             except Exception as exc:  # noqa: BLE001 - stream must surface domain failures
-                _modeling_tracer.flush()  # garante que o trace de erro chegue ao DB
+                _modeling_tracer.flush(current_trace_id())  # garante que o trace de erro chegue ao DB
+                _modeling_tracer.close_trace()
                 error_message = f"Não consegui criar o plano 3D via MCP: {exc}"
                 assistant_message.content = error_message
                 assistant_message.metadata["provider_error"] = str(exc)
@@ -1478,9 +1483,10 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                     # Fix #7: garante que trace events do executor saiam
                     # do buffer mesmo se executor.execute_plan tiver feito
                     # o flush — defesa em profundidade contra regressao.
-                    _modeling_tracer.flush()
+                    _modeling_tracer.flush(current_trace_id())
                 except Exception as exc:  # noqa: BLE001 - keep plan linked on execution failure
-                    _modeling_tracer.flush()  # flush antes de propagar erro
+                    _modeling_tracer.flush(current_trace_id())  # flush antes de propagar erro
+                    _modeling_tracer.close_trace()
                     plan_metadata = _modeling_plan_metadata(plan)
                     session = _sync_modeling_plan_session(store, session, plan)
                     error_message = f"Plano 3D criado, mas a execução MCP falhou: {exc}"
@@ -1562,6 +1568,8 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 )
             )
             yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
+            # PR#28 review (issue 2): cleanup do buffer no happy path.
+            _modeling_tracer.close_trace()
 
         return StreamingResponse(modeling_events(), media_type="text/event-stream")
 

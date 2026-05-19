@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
+from app.api.routes.modeling import wire_tracer_store
 from app.core.config import settings
 from app.workers.import_queue import start_import_worker
 from app.workers.index_queue import start_index_worker
@@ -11,6 +12,10 @@ from app.workers.index_queue import start_index_worker
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # PR#28 review (issue 4): wire o ModelingTracer singleton à store AGORA,
+    # com o app inicializado. Evita o caso degradado onde import-time tinha
+    # store=None.
+    wire_tracer_store()
     start_index_worker()
     start_import_worker()
     yield

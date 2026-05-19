@@ -317,7 +317,9 @@ class ModelingExecutorService:
         # modal de diagnostico ficava vazio mesmo apos execucao OK.
         # O caso de 01:12 (porta-figurinhas, 16 steps + fallback)
         # funcionava por sorte — passava de 25 events e batia auto-flush.
-        self._tracer.flush()
+        # PR#28 review (issue 6): passa trace_id explicito para evitar
+        # iterar buffers de outros traces em execucao concorrente.
+        self._tracer.flush(current_trace_id())
         return ModelingExecutionResult(
             plan=updated,
             executed_step_ids=executed_step_ids,

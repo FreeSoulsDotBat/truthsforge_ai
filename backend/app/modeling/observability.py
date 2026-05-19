@@ -197,12 +197,25 @@ class ModelingTracer:
     """
 
     DEFAULT_BATCH_SIZE = 25
+    # PR#28 review (issue 2): bounded capacity defensiva. O design espera
+    # que ``close_trace()`` seja chamado no fim de cada request (agora wired
+    # em chat.py finally block), mas se algum caller esquecer, o buffer
+    # ficaria preso. Quando atingimos o limite, eviccionamos o trace mais
+    # antigo (flush + remove) antes de criar um novo.
+    DEFAULT_MAX_BUFFERS = 1000
 
-    def __init__(self, store: TraceEventStore | None, *, batch_size: int | None = None) -> None:
+    def __init__(
+        self,
+        store: TraceEventStore | None,
+        *,
+        batch_size: int | None = None,
+        max_buffers: int | None = None,
+    ) -> None:
         self._store = store
         self._batch_size = batch_size or self.DEFAULT_BATCH_SIZE
-        # Buffers por trace_id. Mantemos limitado para não vazar memória
-        # se um trace nunca for fechado (defensive).
+        self._max_buffers = max_buffers or self.DEFAULT_MAX_BUFFERS
+        # Buffers por trace_id. dict normal (insertion-ordered no Py3.7+)
+        # para conseguir evictar FIFO se atingirmos o cap.
         self._buffers: dict[str, _TraceBuffer] = {}
         self._buffers_lock = Lock()
 
@@ -416,12 +429,19 @@ class ModelingTracer:
         ctx = _SpanContext(payload=span_payload)
         try:
             yield ctx
-        except Exception as exc:
+        except BaseException as exc:
+            # PR#28 review (issue 9): captura BaseException ao inves de
+            # Exception para tambem fechar spans em CancelledError
+            # (asyncio.CancelledError em Python 3.9+ herda de BaseException,
+            # nao Exception). Sem isso, spans cancelados ficavam orfaos
+            # (apenas o start event, sem .completed nem .failed), poluindo
+            # o trace e dificultando o diagnostico.
             duration_ms = int((time.perf_counter() - start) * 1000)
+            is_cancel = exc.__class__.__name__ in ("CancelledError",)
             self.record(
-                f"{event_type}.failed",
+                f"{event_type}.cancelled" if is_cancel else f"{event_type}.failed",
                 source=source,
-                level=ModelingTraceLevel.error,
+                level=ModelingTraceLevel.warn if is_cancel else ModelingTraceLevel.error,
                 payload={**ctx.payload, "exception": exc.__class__.__name__, "error": str(exc)},
                 duration_ms=duration_ms,
             )
@@ -472,9 +492,35 @@ class ModelingTracer:
         with self._buffers_lock:
             buffer = self._buffers.get(trace_id)
             if buffer is None:
+                # PR#28 review (issue 2): evict FIFO se atingimos o cap.
+                # Caller deveria chamar close_trace() ao fim de cada request,
+                # mas se esquecer, isto evita leak ilimitado. Flush antes de
+                # remover preserva os eventos no DB.
+                if len(self._buffers) >= self._max_buffers:
+                    oldest_tid = next(iter(self._buffers))
+                    self._evict_locked(oldest_tid)
                 buffer = _TraceBuffer()
                 self._buffers[trace_id] = buffer
             return buffer
+
+    def _evict_locked(self, trace_id: str) -> None:
+        """Remove um buffer flushando antes. Caller MUST hold ``_buffers_lock``."""
+
+        buffer = self._buffers.pop(trace_id, None)
+        if buffer is None:
+            return
+        with buffer.lock:
+            pending = buffer.events
+            buffer.events = []
+        if pending and self._store is not None:
+            try:
+                self._store.record_trace_events_bulk(pending)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Falha ao flush %d eventos antes de evictar buffer trace_id=%s",
+                    len(pending),
+                    trace_id,
+                )
 
 
 @dataclass

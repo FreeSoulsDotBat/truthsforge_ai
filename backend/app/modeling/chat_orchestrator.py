@@ -210,8 +210,9 @@ class ModelingChatOrchestrator:
         )
         # Flush dos eventos buffered — garante que o frontend que ler o
         # endpoint /trace logo após receber o ``modeling_plan`` SSE veja
-        # tudo já persistido.
-        self._tracer.flush()
+        # tudo já persistido. PR#28 review: close_trace para liberar buffer.
+        self._tracer.flush(current_trace_id())
+        self._tracer.close_trace()
         return updated, plan
 
     def approve_plan(
@@ -299,7 +300,8 @@ class ModelingChatOrchestrator:
                 "tool_call_ids": execution.tool_call_ids,
             },
         )
-        self._tracer.flush()
+        self._tracer.flush(current_trace_id())
+        self._tracer.close_trace()
         return chat, execution.plan, execution
 
     def reject_plan(

@@ -428,6 +428,89 @@ def test_tracer_explicit_flush_drains_partial_buffer() -> None:
     assert types.count("executor.step_4") == 1
 
 
+# ---------------------------------------------------------------------------
+# PR#28 review regressões
+# ---------------------------------------------------------------------------
+
+
+def test_close_trace_removes_buffer_and_flushes() -> None:
+    """PR#28 issue 2: close_trace deve flushar e remover o buffer.
+
+    Sem isso, cada request acumula uma entrada permanente em ``_buffers``.
+    """
+
+    from app.modeling.observability import ModelingTracer
+
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=100)
+    trace_id = tracer.start_trace(session_id="sess-1")
+    tracer.record(
+        "executor.step_started",
+        source=ModelingTraceSource.backend,
+        payload={"seq": 1},
+    )
+    # Buffer existe antes do close.
+    assert trace_id in tracer._buffers
+    tracer.close_trace()
+    # Buffer foi removido E os eventos chegaram na store.
+    assert trace_id not in tracer._buffers
+    assert any(e.event_type == "executor.step_started" for e in store.events)
+
+
+def test_buffers_evict_fifo_when_capacity_exceeded() -> None:
+    """PR#28 issue 2: bounded capacity FIFO se close_trace nunca for chamado.
+
+    Defesa em profundidade — em produção close_trace é wired, mas se
+    algum caller esquecer não pode vazar memória ilimitada.
+    """
+
+    from app.modeling.observability import ModelingTracer
+
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=100, max_buffers=3)
+    # 3 traces ocupam o cap, o 4o evicta o primeiro (FIFO).
+    for i in range(4):
+        tracer.start_trace(session_id=f"sess-{i}")
+        tracer.record(
+            f"event-{i}", source=ModelingTraceSource.backend, payload={"i": i}
+        )
+    assert len(tracer._buffers) == 3
+    # O primeiro trace foi flushado durante a eviccão — store tem seus eventos.
+    types_in_store = [e.event_type for e in store.events]
+    assert "event-0" in types_in_store
+
+
+def test_record_span_handles_cancellation_with_warn_event() -> None:
+    """PR#28 issue 9: CancelledError (BaseException) também fecha o span.
+
+    Antes, só ``Exception`` era capturado → spans cancelados ficavam orfãos
+    (start sem .completed nem .failed).
+    """
+
+    from app.modeling.observability import ModelingTracer
+
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=1)
+    tracer.start_trace(session_id="sess")
+
+    class _Cancel(BaseException):
+        """Mimics asyncio.CancelledError (BaseException, not Exception)."""
+
+    # Sub-classe customizada — verifica que o catch de BaseException pega.
+    _Cancel.__name__ = "CancelledError"
+
+    with pytest.raises(_Cancel):
+        with tracer.record_span("planner.llm_request"):
+            raise _Cancel()
+    tracer.close_trace()
+    event_types = [e.event_type for e in store.events]
+    assert "planner.llm_request.cancelled" in event_types
+    cancelled_event = next(
+        e for e in store.events if e.event_type == "planner.llm_request.cancelled"
+    )
+    assert cancelled_event.level == ModelingTraceLevel.warn
+
+
 def test_fusion_script_template_compiles_for_every_tool() -> None:
     """O template f-string de fusion_mcp_scripts é fonte de bugs sutis.
 
