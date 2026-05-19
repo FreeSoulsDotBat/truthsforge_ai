@@ -289,6 +289,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _export(args, fmt):
+            # Fix #5: STL e 3MF crashavam com InternalValidationError quando
+            # o design não tinha bodies (consequência dos sketches falhados
+            # antes dos fixes #0+#2). Adicionado guard explícito para retornar
+            # um erro tipado em vez de propagar o crash da SDK do Fusion,
+            # que vinha como traceback opaco. STEP funciona com design vazio
+            # porque exporta a estrutura mesmo sem geometria.
             design = _design()
             target = str(args.get("target") or "preview." + fmt)
             target_path = Path(target)
@@ -299,8 +305,18 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if fmt == "step":
                 options = export_manager.createSTEPExportOptions(str(target_path), _root(design))
             elif fmt == "stl":
+                if _root(design).bRepBodies.count == 0:
+                    raise ToolError(
+                        "fusion.no_geometry",
+                        "STL requer pelo menos um body sólido; o design está vazio.",
+                    )
                 options = export_manager.createSTLExportOptions(_root(design), str(target_path))
             elif fmt == "3mf":
+                if _root(design).bRepBodies.count == 0:
+                    raise ToolError(
+                        "fusion.no_geometry",
+                        "3MF requer pelo menos um body sólido; o design está vazio.",
+                    )
                 options = export_manager.createC3MFExportOptions(_root(design), str(target_path))
             else:
                 raise ToolError("fusion.invalid_export_format", "Formato não suportado.")
