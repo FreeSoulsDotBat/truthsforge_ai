@@ -43,7 +43,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
         import adsk.fusion
 
         TOOL_NAME = {json.dumps(tool_name)}
-        ARGUMENTS = {json.dumps(arguments, ensure_ascii=False, sort_keys=True)}
+        # Fix #4: ARGUMENTS é desserializado em runtime via json.loads em vez
+        # de interpolado direto como literal. O JSON usa ``true``/``false``/
+        # ``null`` mas Python espera ``True``/``False``/``None``, então
+        # qualquer arg booleano ou nulo crashava o script com
+        # ``NameError: name 'true' is not defined``. Pego no trace do bug
+        # porta-figurinhas WC2026 (fusion.export_stl com {{"binary": true}}).
+        ARGUMENTS = json.loads({repr(json.dumps(arguments, ensure_ascii=False, sort_keys=True))})
 
 
         class ToolError(Exception):
