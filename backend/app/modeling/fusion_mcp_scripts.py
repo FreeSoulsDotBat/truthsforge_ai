@@ -216,20 +216,69 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _set_parameter(args):
+            # Fix #1: aceita dois formatos:
+            # (a) singular legado: {"name": "X", "expression": "10mm", "unit": "mm"}
+            # (b) bulk emitido pelo LLM: {"parameters": {"album_width_mm": 210, ...}}
+            #     onde a unidade é inferida do sufixo do nome (_mm/_cm/_deg) e
+            #     o valor numérico vira ``expression`` como string.
+            # Pegado via trace do bug porta-figurinhas WC2026, onde o LLM
+            # mandava bulk e o adapter rejeitava com "name e expression
+            # obrigatórios", mas o step ficava marcado como ok por causa
+            # do bug do executor (corrigido no fix #0).
             design = _design()
+
+            def _unit_for(param_name, default_unit):
+                lower_name = str(param_name).lower()
+                if lower_name.endswith("_mm"):
+                    return "mm"
+                if lower_name.endswith("_cm"):
+                    return "cm"
+                if lower_name.endswith("_deg"):
+                    return "deg"
+                if lower_name.endswith("_rad"):
+                    return "rad"
+                return default_unit
+
+            def _ensure_param(param_name, expression, unit, comment):
+                if not param_name or not expression:
+                    raise ToolError(
+                        "fusion.invalid_parameter",
+                        "name e expression são obrigatórios.",
+                    )
+                existing = design.userParameters.itemByName(param_name)
+                if existing is not None:
+                    existing.expression = expression
+                else:
+                    design.userParameters.add(
+                        param_name,
+                        adsk.core.ValueInput.createByString(expression),
+                        unit,
+                        comment,
+                    )
+
+            bulk = args.get("parameters")
+            if isinstance(bulk, dict) and bulk:
+                default_unit = str(args.get("unit") or "mm")
+                applied = []
+                for raw_name, raw_value in bulk.items():
+                    param_name = str(raw_name).strip()
+                    expression = str(raw_value).strip()
+                    unit = _unit_for(param_name, default_unit)
+                    _ensure_param(param_name, expression, unit, "")
+                    applied.append(param_name)
+                return {{
+                    "message": "{{}} parâmetro(s) aplicado(s): {{}}.".format(
+                        len(applied), ", ".join(applied)
+                    ),
+                    "applied": applied,
+                }}
+
+            # fallback: formato singular legado
             name = str(args.get("name") or "").strip()
             expression = str(args.get("expression") or "").strip()
-            if not name or not expression:
-                raise ToolError("fusion.invalid_parameter", "name e expression são obrigatórios.")
-            existing = design.userParameters.itemByName(name)
-            if existing is not None:
-                existing.expression = expression
-            else:
-                unit = str(args.get("unit") or "mm")
-                comment = str(args.get("comment") or "")
-                design.userParameters.add(
-                    name, adsk.core.ValueInput.createByString(expression), unit, comment
-                )
+            unit = str(args.get("unit") or _unit_for(name, "mm"))
+            comment = str(args.get("comment") or "")
+            _ensure_param(name, expression, unit, comment)
             return {{"message": "Parâmetro '{{}}' = {{}}.".format(name, expression)}}
 
 
