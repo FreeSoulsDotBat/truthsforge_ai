@@ -402,9 +402,12 @@ O serviço de modelagem chama `LLMGateway.generate_structured` ao criar um plano
    que força aprovação humana somente para deleção, ação destrutiva ou high-risk.
 
 Qualquer exceção (chave ausente, modelo offline, JSON inválido, tool fora da allowlist) é
-capturada e o service cai no `create_heuristic_plan` determinístico (3 steps no Blender ou 6 steps no Fusion por
-software). O audit event `modeling.plan_created` registra `planner_source` (`llm` ou
-`heuristic`) e, quando aplicável, `fallback_reason`.
+capturada e o service cai no `create_heuristic_plan` determinístico. O fallback mantém 3
+steps no Blender e 6 steps no Fusion, mas o perfil Fusion é derivado do prompt dentro da
+allowlist: pedidos retangulares usam `fusion.add_rectangle`, pedidos circulares/cilíndricos
+usam `fusion.add_circle`, e medidas explícitas em `mm`/`cm` alimentam sketch e extrusão.
+O audit event `modeling.plan_created` registra `planner_source` (`llm` ou `heuristic`) e,
+quando aplicável, `fallback_reason`.
 
 ### Toolset disponível para o planner
 
@@ -418,8 +421,10 @@ set_parameter, export_step, export_stl, export_3mf, validate_dimensions,
 validate_printability}`
 
 O fallback heurístico para Fusion também usa o contrato real: abre/cria design,
-cria sketch, adiciona perfil retangular dimensionado, extruda, valida
-printability e exporta STL como artifact versionado.
+cria sketch, adiciona perfil retangular ou circular dimensionado pelo prompt, extruda,
+valida printability e exporta STL como artifact versionado. Ele não gera scripts livres
+nem tenta detalhes CAD fora da allowlist; geometrias complexas dependem do planner LLM ou
+de tools Fusion futuras.
 
 ## Printability via bmesh
 

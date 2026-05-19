@@ -85,9 +85,7 @@ def _t(
     category: ToolCategory,
     description: str = "",
 ) -> ToolDescriptor:
-    return ToolDescriptor(
-        name=name, software=software, category=category, description=description
-    )
+    return ToolDescriptor(name=name, software=software, category=category, description=description)
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +409,11 @@ def requires_approval(tool_name: str, risk_level: ModelingRiskLevel | str | None
         return True
     if risk_level is None:
         return False
-    level = ModelingRiskLevel(risk_level) if not isinstance(risk_level, ModelingRiskLevel) else risk_level
+    level = (
+        ModelingRiskLevel(risk_level)
+        if not isinstance(risk_level, ModelingRiskLevel)
+        else risk_level
+    )
     return level is ModelingRiskLevel.high
 
 

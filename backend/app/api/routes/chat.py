@@ -1460,7 +1460,8 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 # já persistido (não fica em buffer).
                 _modeling_tracer.flush(current_trace_id())
             except Exception as exc:  # noqa: BLE001 - stream must surface domain failures
-                _modeling_tracer.flush(current_trace_id())  # garante que o trace de erro chegue ao DB
+                # Garante que o trace de erro chegue ao DB.
+                _modeling_tracer.flush(current_trace_id())
                 _modeling_tracer.close_trace()
                 error_message = f"Não consegui criar o plano 3D via MCP: {exc}"
                 assistant_message.content = error_message

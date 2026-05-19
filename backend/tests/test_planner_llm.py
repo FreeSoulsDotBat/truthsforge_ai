@@ -217,9 +217,41 @@ def test_service_falls_back_to_heuristic_when_gateway_raises() -> None:
     assert matching is not None
     assert len(plan_dict["steps"]) == 3
     assert plan_dict["steps"][0]["tool_name"] == "blender.create_mesh_primitive"
-    assert all(
-        step["tool_name"] != "project_store.create_snapshot" for step in plan_dict["steps"]
+    assert all(step["tool_name"] != "project_store.create_snapshot" for step in plan_dict["steps"])
+
+
+def test_heuristic_fusion_plan_uses_prompt_dimensions_for_rectangle() -> None:
+    payload = ModelingPlanCreate(
+        prompt="crie uma base retangular 80x40x12 mm para suporte",
+        software_override=ModelingSoftware.fusion,
     )
+
+    plan = create_heuristic_plan(payload)
+    rectangle = next(step for step in plan.steps if step.tool_name == "fusion.add_rectangle")
+    extrude = next(step for step in plan.steps if step.tool_name == "fusion.extrude_profile")
+    export = next(step for step in plan.steps if step.tool_name == "fusion.export_stl")
+
+    assert plan.software_choice == ModelingSoftware.fusion
+    assert rectangle.input_json["width_mm"] == 80
+    assert rectangle.input_json["height_mm"] == 40
+    assert extrude.input_json["distance_mm"] == 12
+    assert export.input_json["target"] == "tf-fusion-retangular.stl"
+
+
+def test_heuristic_fusion_plan_uses_circle_for_cylindrical_prompt() -> None:
+    payload = ModelingPlanCreate(
+        prompt="faça um cilindro com diâmetro 30 mm e altura 50 mm no Fusion",
+    )
+
+    plan = create_heuristic_plan(payload)
+    tools = [step.tool_name for step in plan.steps]
+    circle = next(step for step in plan.steps if step.tool_name == "fusion.add_circle")
+    extrude = next(step for step in plan.steps if step.tool_name == "fusion.extrude_profile")
+
+    assert "fusion.add_circle" in tools
+    assert "fusion.add_rectangle" not in tools
+    assert circle.input_json["diameter_mm"] == 30
+    assert extrude.input_json["distance_mm"] == 50
 
 
 def test_service_uses_llm_plan_when_gateway_returns_valid_payload() -> None:
@@ -367,3 +399,76 @@ def test_plan_records_llm_source_when_gateway_succeeds() -> None:
 
     assert plan.planner_source.value == "llm"
     assert plan.fallback_reason is None
+
+
+# ---------------------------------------------------------------------------
+# PR#27 review: dedup de hints acentuados/não-acentuados
+# ---------------------------------------------------------------------------
+# ``_normalize_prompt`` faz NFKD + strip de diacríticos antes do match.
+# Antes da fix, manter ambas as formas em FUSION_HINTS/BLENDER_HINTS inflava
+# o score: "paramétrico" e "parametrico" contavam 2 vezes para a mesma
+# palavra encontrada no prompt. Os testes abaixo travam essa correção.
+
+
+def test_choose_software_does_not_double_count_normalized_hints() -> None:
+    """PR#27 review: prompt com palavras acentuadas não deve inflar score.
+
+    Antes da fix, prompts contendo as palavras-chave matchavam tanto
+    a versão com acento quanto a sem acento dos hints (ambos no set,
+    ambos normalizados para o mesmo valor). Agora cada palavra do prompt
+    conta apenas uma vez.
+    """
+
+    from app.modeling.planner import FUSION_HINTS, _normalize_prompt, choose_software
+
+    # Prompt com 3 palavras-chave (acentuadas) que batem com hints canônicos.
+    prompt = "peça com tolerância apertada e furo de encaixe"
+    software, _confidence, _rationale = choose_software(prompt, None)
+    assert software == ModelingSoftware.fusion
+
+    # Verificação direta do score (não inflado).
+    normalized = _normalize_prompt(prompt)
+    fusion_score = sum(1 for hint in FUSION_HINTS if _normalize_prompt(hint) in normalized)
+    # Esperado: peça(1) + tolerância(1) + furo(1) + encaixe(1) = 4. Antes
+    # da fix daria 6 porque peça/peca e tolerância/tolerancia contavam
+    # duas vezes cada.
+    assert fusion_score == 4
+
+
+def test_hint_sets_have_no_normalized_collisions() -> None:
+    """A asserção defensiva no import deve impedir duplicatas — este
+    teste documenta o invariante para revisores futuros.
+    """
+
+    from app.modeling.planner import (
+        BLENDER_HINTS,
+        FUSION_CIRCULAR_HINTS,
+        FUSION_FLAT_HINTS,
+        FUSION_HINTS,
+        _normalize_prompt,
+    )
+
+    for name, hints in [
+        ("FUSION_HINTS", FUSION_HINTS),
+        ("BLENDER_HINTS", BLENDER_HINTS),
+        ("FUSION_CIRCULAR_HINTS", FUSION_CIRCULAR_HINTS),
+        ("FUSION_FLAT_HINTS", FUSION_FLAT_HINTS),
+    ]:
+        normalized = [_normalize_prompt(h) for h in hints]
+        assert len(normalized) == len(set(normalized)), (
+            f"{name} tem duplicatas após normalização — mantenha só a "
+            f"forma canônica (com acento se houver)."
+        )
+
+
+def test_blender_score_with_organic_prompt_is_correct() -> None:
+    """Mesmo padrão para BLENDER_HINTS — "orgânico" não deve contar 2."""
+
+    from app.modeling.planner import BLENDER_HINTS, _normalize_prompt
+
+    prompt = "personagem orgânico para render de cena"
+    normalized = _normalize_prompt(prompt)
+    score = sum(1 for hint in BLENDER_HINTS if _normalize_prompt(hint) in normalized)
+    # personagem(1) + orgânico(1) + render(1) + cena(1) = 4. Antes da fix
+    # daria 5 porque organico estava duplicado.
+    assert score == 4

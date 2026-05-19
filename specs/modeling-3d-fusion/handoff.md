@@ -21,7 +21,7 @@ PR/merge.
 | 3 — Frontend feature module 3D                       | mergeado             | #21 + fixes #22, #24 | `a94a273`                             |
 | 4 — Frontend cards + aprovação inline + auto-analyze | mergeado             | #25                  | `cf42144` → `424be99`                 |
 | 5 — Título obrigatório do chat (frontend)            | concluída localmente | —                    | branch `codex/3d-chat-title-required` |
-| 6 — QA / docs finais + wire orchestrator no stream   | não iniciada         | —                    | —                                     |
+| 6 — QA / docs finais + wire orchestrator no stream   | iniciada (hotfix QA) | —                    | —                                     |
 
 Verificação ao fim da Onda 4 (local, Windows):
 
@@ -48,6 +48,55 @@ falha por 38 arquivos preexistentes fora do escopo. A suíte backend completa
 sem ignores parou na coleta porque o venv atual não tem `alembic`.
 
 ---
+
+## Hotfix QA Fusion após Onda 5
+
+Sintoma reportado no Fusion real: com MCP Fusion configurado, qualquer prompt
+caía no mesmo fallback retangular (`add_rectangle 40x20` + extrusão 12) e o
+plano visual não variava. Causa confirmada em `backend/app/modeling/planner.py`:
+`create_heuristic_plan` usava `_default_steps()` fixo para Fusion quando o planner
+LLM estava indisponível ou falhava.
+
+Correção aplicada na branch `codex/3d-chat-title-required` (e isolada no
+PR companheiro `feat/planner-llm-wip`, PR #27):
+
+- fallback Fusion agora deriva um perfil simples do prompt dentro da allowlist;
+- pedidos retangulares/base/chapa/placa usam `fusion.add_rectangle` com dimensões
+  extraídas de sequências tipo `80x40x12 mm`;
+- pedidos circulares/cilíndricos/disco/pino/eixo/tubo usam `fusion.add_circle`
+  e extrusão com `diâmetro`/`altura` quando informados;
+- o sketch do fallback passou a enviar `plane_ref="xy"`, alinhado ao executor
+  determinístico do Fusion MCP;
+- `_normalize_prompt` faz NFKD + strip de diacríticos para unificar matching
+  de "paramétrico"/"parametrico", "tolerância"/"tolerancia" etc.
+
+### PR #27 review — dedup de hints após normalização
+
+Reviewer apontou inflate de score em `choose_software`: como
+`_normalize_prompt` colapsa acentos, manter ambas as formas ("paramétrico"
+e "parametrico") em `FUSION_HINTS` fazia a mesma palavra do prompt contar
+duas vezes. Correção aplicada (commit do PR #27):
+
+- Removidas as variantes não-acentuadas redundantes de `FUSION_HINTS`
+  (`parametrico`, `tolerancia`, `extrusao`, `peca`) e `BLENDER_HINTS`
+  (`organico`). Mantida só a forma canônica com acento; o
+  `_normalize_prompt(hint)` no scoring continua fazendo o trabalho.
+- Adicionada asserção defensiva `_assert_hints_dedup_after_normalize`
+  que roda no import e impede regressão futura silenciosa.
+- Testes novos em `test_planner_llm.py`:
+  - `test_choose_software_does_not_double_count_normalized_hints`
+  - `test_hint_sets_have_no_normalized_collisions`
+  - `test_blender_score_with_organic_prompt_is_correct`
+
+Validação local:
+
+- `backend\.venv\Scripts\python.exe -m ruff format --check backend\app\modeling\planner.py backend\tests\test_planner_llm.py` → limpo.
+- `backend\.venv\Scripts\python.exe -m ruff check backend\app\modeling\planner.py backend\tests\test_planner_llm.py` → limpo.
+- `backend\.venv\Scripts\python.exe -m pytest backend\tests\test_planner_llm.py backend\tests\test_modeling_routes.py backend\tests\test_tool_registry.py -q` → **51 verdes** antes do fix do PR #27, **18 verdes** isolando só test_planner_llm.py após o fix (inclui 3 novos casos do dedup).
+
+Limitação: `pnpm --filter @truths-forge/docs build` foi tentado após a atualização
+da doc, mas falhou neste ambiente com `fetch failed`; validação completa da doc
+build e smoke manual com Fusion conectado seguem pendentes na Onda 6.
 
 ## Onda 7 — Observabilidade do módulo 3D + caça aos schema drifts do adapter Fusion
 

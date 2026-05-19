@@ -263,7 +263,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         sketch.sketchCurves.sketchLines.addTwoPointRectangle(p1, p2)
                         count += 1
                 return {{
-                    "message": "Grade {{}}x{{}} ({{}} retangulos {{}}x{{}}mm) adicionada a '{{}}'.".format(
+                    "message": (
+                        "Grade {{}}x{{}} ({{}} retangulos {{}}x{{}}mm) "
+                        "adicionada a '{{}}'."
+                    ).format(
                         cols, rows, count, cell_w_mm, cell_h_mm, sketch.name
                     ),
                     "sketch_name": sketch.name,
@@ -291,7 +294,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if width_mm <= 0 or height_mm <= 0:
                 raise ToolError(
                     "fusion.invalid_dimensions",
-                    "width_mm/height_mm (ou corner1_mm+corner2_mm, ou size_mm) precisam ser positivos.",
+                    "width_mm/height_mm (ou corner1_mm+corner2_mm, "
+                    "ou size_mm) precisam ser positivos.",
                 )
             sketch = _find_sketch(design, args.get("sketch"))
             width_cm = width_mm / 10.0
@@ -451,7 +455,14 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             singular_name = str(args.get("name") or "").strip()
             singular_expr = str(args.get("expression") or "").strip()
             if not singular_name and not singular_expr:
-                _RESERVED_KEYS = {{"notes", "unit", "comment", "parameters", "parameters_mm", "params"}}
+                _RESERVED_KEYS = {{
+                    "notes",
+                    "unit",
+                    "comment",
+                    "parameters",
+                    "parameters_mm",
+                    "params",
+                }}
                 implicit_bulk = {{
                     k: v
                     for k, v in args.items()

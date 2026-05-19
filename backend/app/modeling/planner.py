@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import unicodedata
 from typing import Any
 
 from app.core.contracts import (
@@ -22,15 +24,19 @@ from app.modeling.tool_registry import PLANNER_TOOLSET
 
 logger = logging.getLogger(__name__)
 
+# PR#27 review: ``_normalize_prompt`` faz NFKD + strip de diacríticos
+# antes do match. Manter ambas as formas (com e sem acento) inflava o
+# score: "paramétrico" e "parametrico" normalizavam para a mesma string
+# e contavam 2 vezes para a mesma palavra. Mantemos só a forma canônica
+# (com acento quando o português a usa); a normalização faz o resto.
+# Asserção defensiva no fim do módulo garante que ninguém volte a
+# duplicar acidentalmente.
 FUSION_HINTS = {
     "paramétrico",
-    "parametrico",
     "tolerância",
-    "tolerancia",
     "encaixe",
     "furo",
     "extrusão",
-    "extrusao",
     "chamfer",
     "chanfro",
     "fillet",
@@ -40,13 +46,17 @@ FUSION_HINTS = {
     "stl",
     "3mf",
     "peça",
-    "peca",
     "suporte",
     "molde",
+    "cilindro",
+    "circular",
+    "disco",
+    "eixo",
+    "pino",
+    "tubo",
 }
 BLENDER_HINTS = {
     "orgânico",
-    "organico",
     "escultura",
     "mesh",
     "render",
@@ -57,11 +67,211 @@ BLENDER_HINTS = {
     "bevel",
     "cubo",
 }
+FUSION_CIRCULAR_HINTS = {
+    "anel",
+    "arruela",
+    "bucha",
+    "cano",
+    "cilindrico",
+    "cilindro",
+    "circular",
+    "copo",
+    "disco",
+    "eixo",
+    "moeda",
+    "pino",
+    "roda",
+    "rodela",
+    "tubo",
+}
+FUSION_FLAT_HINTS = {
+    "base",
+    "chapa",
+    "placa",
+    "prato",
+    "tampa",
+}
+
+_NUMBER_RE = r"(?P<value>\d+(?:[,.]\d+)?)"
+_UNIT_RE = r"(?P<unit>mm|milimetros?|cm|centimetros?)?"
+_SIZE_SEQUENCE_RE = re.compile(
+    r"(?P<a>\d+(?:[,.]\d+)?)\s*[x×]\s*"
+    r"(?P<b>\d+(?:[,.]\d+)?)"
+    r"(?:\s*[x×]\s*(?P<c>\d+(?:[,.]\d+)?))?"
+    r"\s*(?P<unit>mm|milimetros?|cm|centimetros?)?",
+    re.IGNORECASE,
+)
+_MEASURE_RE = re.compile(
+    rf"{_NUMBER_RE}\s*{_UNIT_RE}(?![a-z])",
+    re.IGNORECASE,
+)
 
 # ``PLANNER_TOOLSET`` is re-exported from :mod:`app.modeling.tool_registry`, the
 # single source of truth for the modeling allowlist (ADR-013). Keep the import
 # above; downstream callers that still ``from .planner import PLANNER_TOOLSET``
 # continue to work unchanged.
+
+
+def _normalize_prompt(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value.lower())
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    return ascii_text.replace("×", "x")
+
+
+def _assert_hints_dedup_after_normalize(name: str, hints: set[str]) -> None:
+    """Garante que dois hints não colapsam para a mesma forma normalizada.
+
+    Bug pego em PR#27: hints como ``"paramétrico"`` e ``"parametrico"``
+    eram strings distintas no set, mas ``_normalize_prompt`` colapsava
+    ambos para ``"parametrico"``, fazendo o score em ``choose_software``
+    contar 2 pra cada match. Esta asserção roda no import e previne
+    regressão futura silenciosa.
+    """
+
+    normalized_pairs: dict[str, str] = {}
+    for hint in hints:
+        normalized = _normalize_prompt(hint)
+        if normalized in normalized_pairs:
+            raise ValueError(
+                f"{name}: hints '{normalized_pairs[normalized]}' e '{hint}' "
+                f"colapsam para o mesmo valor normalizado '{normalized}'. "
+                "Mantenha apenas a forma canônica (com acento)."
+            )
+        normalized_pairs[normalized] = hint
+
+
+_assert_hints_dedup_after_normalize("FUSION_HINTS", FUSION_HINTS)
+_assert_hints_dedup_after_normalize("BLENDER_HINTS", BLENDER_HINTS)
+_assert_hints_dedup_after_normalize("FUSION_CIRCULAR_HINTS", FUSION_CIRCULAR_HINTS)
+_assert_hints_dedup_after_normalize("FUSION_FLAT_HINTS", FUSION_FLAT_HINTS)
+
+
+def _has_any_hint(prompt: str, hints: set[str]) -> bool:
+    return any(_normalize_prompt(hint) in prompt for hint in hints)
+
+
+def _to_mm(value: str, unit: str | None) -> float:
+    number = float(value.replace(",", "."))
+    normalized_unit = _normalize_prompt(unit or "mm")
+    if normalized_unit.startswith("cm") or normalized_unit.startswith("centimetro"):
+        return number * 10
+    return number
+
+
+def _bounded_mm(value: float, *, minimum: float = 1.0, maximum: float = 500.0) -> float:
+    bounded = max(minimum, min(maximum, value))
+    return round(bounded, 2)
+
+
+def _all_prompt_dimensions_mm(prompt: str) -> list[float]:
+    dimensions: list[float] = []
+    for match in _MEASURE_RE.finditer(prompt):
+        unit = match.group("unit")
+        value = _to_mm(match.group("value"), unit)
+        if value > 0:
+            dimensions.append(_bounded_mm(value))
+    return dimensions
+
+
+def _size_sequence_mm(prompt: str) -> tuple[float, float, float | None] | None:
+    match = _SIZE_SEQUENCE_RE.search(prompt)
+    if not match:
+        return None
+    unit = match.group("unit")
+    width = _bounded_mm(_to_mm(match.group("a"), unit))
+    height = _bounded_mm(_to_mm(match.group("b"), unit))
+    depth = _bounded_mm(_to_mm(match.group("c"), unit)) if match.group("c") else None
+    return width, height, depth
+
+
+def _dimension_near(prompt: str, keywords: tuple[str, ...]) -> float | None:
+    for keyword in keywords:
+        normalized_keyword = _normalize_prompt(keyword)
+        after = re.search(
+            rf"{re.escape(normalized_keyword)}\w*\D{{0,24}}{_NUMBER_RE}\s*{_UNIT_RE}",
+            prompt,
+            re.IGNORECASE,
+        )
+        if after:
+            return _bounded_mm(_to_mm(after.group("value"), after.group("unit")))
+        before = re.search(
+            rf"{_NUMBER_RE}\s*{_UNIT_RE}\D{{0,24}}{re.escape(normalized_keyword)}\w*",
+            prompt,
+            re.IGNORECASE,
+        )
+        if before:
+            return _bounded_mm(_to_mm(before.group("value"), before.group("unit")))
+    return None
+
+
+def _fusion_profile_from_prompt(prompt: str) -> dict[str, Any]:
+    normalized = _normalize_prompt(prompt)
+    sequence = _size_sequence_mm(normalized)
+    dimensions = _all_prompt_dimensions_mm(normalized)
+    is_circular = _has_any_hint(normalized, FUSION_CIRCULAR_HINTS)
+    is_flat = _has_any_hint(normalized, FUSION_FLAT_HINTS)
+
+    if is_circular:
+        radius = _dimension_near(normalized, ("raio", "radius"))
+        diameter = _dimension_near(
+            normalized,
+            ("diametro", "diameter", "diam", "externo", "largura"),
+        )
+        if diameter is None and radius is not None:
+            diameter = _bounded_mm(radius * 2)
+        if diameter is None and sequence:
+            diameter = max(sequence[0], sequence[1])
+        if diameter is None and dimensions:
+            diameter = dimensions[0]
+        if diameter is None:
+            diameter = 30.0
+
+        height = _dimension_near(
+            normalized,
+            ("altura", "height", "comprimento", "profundidade", "espessura"),
+        )
+        if height is None and sequence and sequence[2] is not None:
+            height = sequence[2]
+        if height is None and len(dimensions) >= 2:
+            height = dimensions[1]
+        if height is None:
+            height = 6.0 if is_flat else 20.0
+        return {
+            "shape": "circle",
+            "diameter_mm": _bounded_mm(diameter),
+            "distance_mm": _bounded_mm(height),
+            "sketch_name": "TF cilindro base",
+            "title": "Criar cilindro circular dimensionado",
+            "export_target": "tf-fusion-cilindro.stl",
+        }
+
+    if sequence:
+        width, height, depth = sequence
+    else:
+        width = _dimension_near(normalized, ("largura", "width", "base")) or (
+            dimensions[0] if dimensions else 40.0
+        )
+        height = _dimension_near(
+            normalized,
+            ("altura", "height", "profundidade", "depth"),
+        ) or (dimensions[1] if len(dimensions) >= 2 else width / 2)
+        depth = _dimension_near(normalized, ("espessura", "thickness", "extrusao", "depth")) or (
+            dimensions[2] if len(dimensions) >= 3 else None
+        )
+
+    if depth is None:
+        depth = 4.0 if is_flat else max(6.0, min(width, height) * 0.4)
+
+    return {
+        "shape": "rectangle",
+        "width_mm": _bounded_mm(width),
+        "height_mm": _bounded_mm(height),
+        "distance_mm": _bounded_mm(depth),
+        "sketch_name": "TF perfil retangular",
+        "title": "Criar perfil retangular dimensionado",
+        "export_target": "tf-fusion-retangular.stl",
+    }
+
 
 EXECUTION_PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -118,9 +328,9 @@ def choose_software(
     if override in {ModelingSoftware.blender, ModelingSoftware.fusion}:
         return override, 0.95, f"Software escolhido manualmente: {override.value}."
 
-    normalized = prompt.lower()
-    fusion_score = sum(1 for hint in FUSION_HINTS if hint in normalized)
-    blender_score = sum(1 for hint in BLENDER_HINTS if hint in normalized)
+    normalized = _normalize_prompt(prompt)
+    fusion_score = sum(1 for hint in FUSION_HINTS if _normalize_prompt(hint) in normalized)
+    blender_score = sum(1 for hint in BLENDER_HINTS if _normalize_prompt(hint) in normalized)
     if fusion_score >= blender_score and fusion_score > 0:
         return (
             ModelingSoftware.fusion,
@@ -143,7 +353,7 @@ def choose_software(
 def create_heuristic_plan(payload: ModelingPlanCreate) -> ModelingPlan:
     """Deterministic boilerplate plan used as fallback and for tests."""
     software, confidence, rationale = choose_software(payload.prompt, payload.software_override)
-    steps = _default_steps(software, payload.mode)
+    steps = _default_steps(software, payload)
     approval_required = any(step.approval_required for step in steps)
     status = (
         ModelingPlanStatus.draft
@@ -398,7 +608,7 @@ def _step_software(tool_name: str, fallback: ModelingSoftware) -> ModelingSoftwa
 
 
 def _default_steps(
-    software: ModelingSoftware, mode: ModelingExecutionMode
+    software: ModelingSoftware, payload: ModelingPlanCreate
 ) -> list[ModelingPlanStep]:
     status = ModelingStepStatus.pending
     if software == ModelingSoftware.blender:
@@ -434,6 +644,45 @@ def _default_steps(
                 input_json={"target": "preview.stl"},
             ),
         ]
+    return _default_fusion_steps(software, payload.prompt, status)
+
+
+def _default_fusion_steps(
+    software: ModelingSoftware, prompt: str, status: ModelingStepStatus
+) -> list[ModelingPlanStep]:
+    profile = _fusion_profile_from_prompt(prompt)
+    sketch_name = str(profile["sketch_name"])
+    shape = str(profile["shape"])
+    add_profile_step = (
+        ModelingPlanStep(
+            seq=3,
+            title="Adicionar perfil circular dimensionado",
+            software=software,
+            tool_name="fusion.add_circle",
+            risk_level=ModelingRiskLevel.medium,
+            approval_required=False,
+            status=status,
+            input_json={
+                "sketch": sketch_name,
+                "diameter_mm": profile["diameter_mm"],
+            },
+        )
+        if shape == "circle"
+        else ModelingPlanStep(
+            seq=3,
+            title=str(profile["title"]),
+            software=software,
+            tool_name="fusion.add_rectangle",
+            risk_level=ModelingRiskLevel.medium,
+            approval_required=False,
+            status=status,
+            input_json={
+                "sketch": sketch_name,
+                "width_mm": profile["width_mm"],
+                "height_mm": profile["height_mm"],
+            },
+        )
+    )
     return [
         ModelingPlanStep(
             seq=1,
@@ -447,24 +696,15 @@ def _default_steps(
         ),
         ModelingPlanStep(
             seq=2,
-            title="Criar sketch paramétrico",
+            title="Criar sketch paramétrico do perfil",
             software=software,
             tool_name="fusion.create_sketch",
             risk_level=ModelingRiskLevel.medium,
             approval_required=False,
             status=status,
-            input_json={"name": "Judite base sketch", "plane": "xy", "units": "mm"},
+            input_json={"name": sketch_name, "plane_ref": "xy", "units": "mm"},
         ),
-        ModelingPlanStep(
-            seq=3,
-            title="Adicionar perfil retangular dimensionado",
-            software=software,
-            tool_name="fusion.add_rectangle",
-            risk_level=ModelingRiskLevel.medium,
-            approval_required=False,
-            status=status,
-            input_json={"sketch": "Judite base sketch", "width_mm": 40, "height_mm": 20},
-        ),
+        add_profile_step,
         ModelingPlanStep(
             seq=4,
             title="Extrudar corpo principal",
@@ -473,7 +713,11 @@ def _default_steps(
             risk_level=ModelingRiskLevel.medium,
             approval_required=False,
             status=status,
-            input_json={"sketch": "Judite base sketch", "distance_mm": 12, "operation": "new_body"},
+            input_json={
+                "sketch": sketch_name,
+                "distance_mm": profile["distance_mm"],
+                "operation": "new_body",
+            },
         ),
         ModelingPlanStep(
             seq=5,
@@ -493,6 +737,6 @@ def _default_steps(
             risk_level=ModelingRiskLevel.low,
             approval_required=False,
             status=status,
-            input_json={"target": "judite-fusion-preview.stl"},
+            input_json={"target": profile["export_target"]},
         ),
     ]
