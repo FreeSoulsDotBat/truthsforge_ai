@@ -32,8 +32,10 @@ pwsh scripts/smoke-modeling-trace.ps1
 
 - `GET /api/3d/plans/{plan_id}/trace?level=warn,error&source=backend,fusion` — eventos de trace de um plano.
 - `GET /api/3d/traces/{trace_id}` — eventos por trace_id (vindo do SSE `modeling_plan` ou de logs).
-- `POST /api/3d/traces/events` — registra evento UI (rate-limit 60/min por IP).
+- `POST /api/3d/traces/events` — registra evento UI, força `source="ui"` no backend, trunca payloads grandes, atribui `sequence` server-side e aplica rate-limit 60/min por IP + `trace_id`.
 - `GET /api/3d/plans/{plan_id}/diagnostics` — bundle consolidado (plano + tool calls + trace + printability).
+
+O endpoint de evento UI usa `get_max_trace_sequence(trace_id)` na store para calcular o próximo `sequence` sem carregar a timeline inteira. `PostgresStore` faz `MAX((payload->>'sequence')::int)` e `DevStore` calcula o máximo sobre o ring buffer JSON. Os buckets do rate-limit são limpos quando ficam obsoletos para evitar crescimento ilimitado por `trace_id` único.
 
 ## Preflight
 

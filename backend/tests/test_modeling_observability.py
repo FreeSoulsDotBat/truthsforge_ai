@@ -184,6 +184,26 @@ def test_record_span_emits_completed_with_duration() -> None:
     assert completed.payload["tokens"] == 42
 
 
+def test_record_span_start_payload_is_not_mutated_by_attach() -> None:
+    """PR#28 follow-up: ``span.attach`` nao reescreve retroativamente o start."""
+
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=100)
+    tracer.start_trace(session_id="sess")
+
+    with tracer.record_span(
+        "planner.llm_request",
+        payload={"phase": "start"},
+    ) as span:
+        span.attach({"tokens": 42})
+
+    tracer.flush()
+    started = next(e for e in store.events if e.event_type == "planner.llm_request")
+    completed = next(e for e in store.events if e.event_type == "planner.llm_request.completed")
+    assert started.payload == {"phase": "start"}
+    assert completed.payload["tokens"] == 42
+
+
 def test_record_span_emits_failed_and_reraises() -> None:
     store = _FakeStore()
     tracer = ModelingTracer(store=store, batch_size=100)
@@ -471,13 +491,37 @@ def test_buffers_evict_fifo_when_capacity_exceeded() -> None:
     # 3 traces ocupam o cap, o 4o evicta o primeiro (FIFO).
     for i in range(4):
         tracer.start_trace(session_id=f"sess-{i}")
-        tracer.record(
-            f"event-{i}", source=ModelingTraceSource.backend, payload={"i": i}
-        )
+        tracer.record(f"event-{i}", source=ModelingTraceSource.backend, payload={"i": i})
     assert len(tracer._buffers) == 3
     # O primeiro trace foi flushado durante a eviccão — store tem seus eventos.
     types_in_store = [e.event_type for e in store.events]
     assert "event-0" in types_in_store
+
+
+def test_buffer_eviction_flushes_outside_global_lock() -> None:
+    """PR#28 follow-up: flush de eviction nao segura ``_buffers_lock``."""
+
+    class _LockAwareStore(_FakeStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.tracer: ModelingTracer | None = None
+            self.flush_lock_states: list[bool] = []
+
+        def record_trace_events_bulk(self, events: list[ModelingTraceEvent]) -> None:
+            assert self.tracer is not None
+            self.flush_lock_states.append(self.tracer._buffers_lock.locked())
+            super().record_trace_events_bulk(events)
+
+    store = _LockAwareStore()
+    tracer = ModelingTracer(store=store, batch_size=100, max_buffers=1)
+    store.tracer = tracer
+
+    tracer.start_trace(session_id="sess-1")
+    tracer.record("event-1", source=ModelingTraceSource.backend)
+    tracer.start_trace(session_id="sess-2")
+
+    assert store.flush_lock_states
+    assert all(locked is False for locked in store.flush_lock_states)
 
 
 def test_record_span_handles_cancellation_with_warn_event() -> None:
@@ -553,7 +597,7 @@ def test_fusion_script_template_compiles_for_every_tool() -> None:
             raise AssertionError(
                 f"Script para {tool_name} não é Python válido: {exc}\n\n"
                 f"Trecho problemático:\n"
-                f"{script[max(0, (exc.offset or 0) - 100):(exc.offset or 0) + 100]}"
+                f"{script[max(0, (exc.offset or 0) - 100) : (exc.offset or 0) + 100]}"
             ) from exc
 
 

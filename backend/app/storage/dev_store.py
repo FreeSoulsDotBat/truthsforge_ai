@@ -306,9 +306,7 @@ class DevStore:
     def _ensure_seed_models(self) -> None:
         seed_models = default_seed_data().get("models", [])
         existing_models = self._data.setdefault("models", [])
-        existing_by_id = {
-            str(m.get("id")): m for m in existing_models if isinstance(m, dict)
-        }
+        existing_by_id = {str(m.get("id")): m for m in existing_models if isinstance(m, dict)}
         changed = False
         for model in seed_models:
             if not isinstance(model, dict):
@@ -1516,6 +1514,20 @@ class DevStore:
         # Ordena por (sequence, created_at) ASC, consistente com Postgres.
         events.sort(key=lambda e: (e.sequence, e.created_at))
         return events[:limit]
+
+    def get_max_trace_sequence(self, *, trace_id: str) -> int | None:
+        self._ensure_key("modeling_trace_events", [])
+        max_sequence: int | None = None
+        for item in self._data["modeling_trace_events"]:
+            if item.get("trace_id") != trace_id:
+                continue
+            raw_sequence = item.get("sequence", 0)
+            try:
+                sequence = int(raw_sequence)
+            except (TypeError, ValueError):
+                sequence = 0
+            max_sequence = sequence if max_sequence is None else max(max_sequence, sequence)
+        return max_sequence
 
     def list_modeling_printability_reports(
         self, *, plan_id: str | None = None, file_id: str | None = None

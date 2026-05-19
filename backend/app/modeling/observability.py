@@ -277,7 +277,11 @@ class ModelingTracer:
         logados mas não propagados.
         """
 
-        targets = [trace_id] if trace_id else list(self._buffers.keys())
+        if trace_id:
+            targets = [trace_id]
+        else:
+            with self._buffers_lock:
+                targets = list(self._buffers.keys())
         for tid in targets:
             with self._buffers_lock:
                 buffer = self._buffers.get(tid)
@@ -423,7 +427,7 @@ class ModelingTracer:
             event_type,
             source=source,
             level=ModelingTraceLevel.debug,
-            payload=span_payload,
+            payload=dict(span_payload),
             message=message,
         )
         ctx = _SpanContext(payload=span_payload)
@@ -489,29 +493,40 @@ class ModelingTracer:
     # ------------------------------------------------------------------ helpers
 
     def _get_buffer(self, trace_id: str) -> _TraceBuffer:
+        evicted: tuple[str, list[ModelingTraceEvent]] | None = None
         with self._buffers_lock:
             buffer = self._buffers.get(trace_id)
             if buffer is None:
                 # PR#28 review (issue 2): evict FIFO se atingimos o cap.
                 # Caller deveria chamar close_trace() ao fim de cada request,
-                # mas se esquecer, isto evita leak ilimitado. Flush antes de
-                # remover preserva os eventos no DB.
+                # mas se esquecer, isto evita leak ilimitado. O buffer e
+                # removido sob lock, mas o flush acontece fora dele para nao
+                # serializar todos os record() em I/O lento.
                 if len(self._buffers) >= self._max_buffers:
                     oldest_tid = next(iter(self._buffers))
-                    self._evict_locked(oldest_tid)
+                    evicted = self._pop_buffer_events_locked(oldest_tid)
                 buffer = _TraceBuffer()
                 self._buffers[trace_id] = buffer
-            return buffer
+        if evicted is not None:
+            self._flush_evicted_events(*evicted)
+        return buffer
 
-    def _evict_locked(self, trace_id: str) -> None:
-        """Remove um buffer flushando antes. Caller MUST hold ``_buffers_lock``."""
+    def _pop_buffer_events_locked(
+        self, trace_id: str
+    ) -> tuple[str, list[ModelingTraceEvent]] | None:
+        """Remove o buffer e extrai eventos. Caller MUST hold ``_buffers_lock``."""
 
         buffer = self._buffers.pop(trace_id, None)
         if buffer is None:
-            return
+            return None
         with buffer.lock:
             pending = buffer.events
             buffer.events = []
+        return trace_id, pending
+
+    def _flush_evicted_events(self, trace_id: str, pending: list[ModelingTraceEvent]) -> None:
+        """Persiste eventos evictados sem segurar ``_buffers_lock``."""
+
         if pending and self._store is not None:
             try:
                 self._store.record_trace_events_bulk(pending)

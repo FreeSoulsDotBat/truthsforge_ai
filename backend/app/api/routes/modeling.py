@@ -209,7 +209,11 @@ def _require_trace_store(store: Any) -> Any:
     para o frontend mostrar erro amigável em vez de 500.
     """
 
-    if not hasattr(store, "list_trace_events") or not hasattr(store, "record_trace_events_bulk"):
+    if (
+        not hasattr(store, "list_trace_events")
+        or not hasattr(store, "record_trace_events_bulk")
+        or not hasattr(store, "get_max_trace_sequence")
+    ):
         raise HTTPException(
             status_code=501,
             detail="Observabilidade 3D não suportada neste backend.",
@@ -329,11 +333,13 @@ def record_client_trace_event(
     # baseado no maior sequence ja existente para este trace_id. Sem isso,
     # todos os eventos do cliente ficavam com sequence=0 e desorganizavam
     # a timeline do modal. Best-effort: se o lookup falhar, mantem 0.
+    # PR#28 follow-up: usar query dedicada de MAX(sequence), sem carregar
+    # todos os eventos do trace no endpoint.
     next_seq = 0
     try:
-        existing = store.list_trace_events(trace_id=payload.trace_id, limit=5000)
-        if existing:
-            next_seq = max(e.sequence for e in existing) + 1
+        max_sequence = store.get_max_trace_sequence(trace_id=payload.trace_id)
+        if max_sequence is not None:
+            next_seq = max_sequence + 1
     except Exception:  # noqa: BLE001 - sequence é nice-to-have, não bloqueia
         pass
 

@@ -134,6 +134,7 @@ para rascunhos `Novo chat` já criados antes do primeiro envio.
 
 ### Onda 6 — QA, docs finais e handoff
 
+- [x] [P1] [codex] Hardening PR #28 da observabilidade 3D: snapshots de payload em `record_span`, eviction de buffers sem I/O sob `_buffers_lock`, cleanup do rate-limit de eventos UI e `get_max_trace_sequence` em `DevStore`/`PostgresStore` para evitar listagem completa de traces.
 - [ ] [P1] [any] Rodar `scripts/quality.ps1` para backend e frontend tocados.
 - [ ] [P1] [any] E2E manual com Blender real: descoberta → plano → aprovação → execução → edição.
 - [ ] [P1] [any] E2E manual com Fusion conectado: mesmo fluxo com `software_preference="fusion"`.
