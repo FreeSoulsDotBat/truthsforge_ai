@@ -397,6 +397,37 @@ def test_unwrap_inner_fusion_result_ignores_non_json_message() -> None:
     assert result["ok"] is True
 
 
+def test_tracer_explicit_flush_drains_partial_buffer() -> None:
+    """Bug observado em trace 'modele um prisma' (19/05): planos pequenos
+    com menos eventos que ``batch_size`` ficavam no buffer indefinidamente
+    porque ninguem chamava flush() externamente apos a execucao. O modal
+    de diagnostico ficava vazio mesmo com execucao bem sucedida.
+
+    Regressao test: tracer com batch_size=100 (muito maior que volume real)
+    + 5 events emitidos + flush explicito = 5 events na store. Sem o flush,
+    o buffer ficaria preso.
+    """
+
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=100)
+    tracer.start_trace(session_id="sess", plan_id="plan-123")
+    for i in range(5):
+        tracer.record(
+            f"executor.step_{i}",
+            source=ModelingTraceSource.backend,
+            payload={"seq": i},
+        )
+    # Antes do flush: nada no store (buffer < batch_size).
+    assert len(store.events) == 0
+    tracer.flush()
+    # Apos flush: tudo persistido.
+    # 1 (trace.started) + 5 (record loops) = 6
+    assert len(store.events) == 6
+    types = [e.event_type for e in store.events]
+    assert types.count("executor.step_0") == 1
+    assert types.count("executor.step_4") == 1
+
+
 def test_fusion_script_template_compiles_for_every_tool() -> None:
     """O template f-string de fusion_mcp_scripts é fonte de bugs sutis.
 

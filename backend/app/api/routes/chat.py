@@ -1475,7 +1475,12 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                     )
                     execution = await asyncio.to_thread(modeling_service.execute_plan, plan.id)
                     plan = execution.plan
+                    # Fix #7: garante que trace events do executor saiam
+                    # do buffer mesmo se executor.execute_plan tiver feito
+                    # o flush — defesa em profundidade contra regressao.
+                    _modeling_tracer.flush()
                 except Exception as exc:  # noqa: BLE001 - keep plan linked on execution failure
+                    _modeling_tracer.flush()  # flush antes de propagar erro
                     plan_metadata = _modeling_plan_metadata(plan)
                     session = _sync_modeling_plan_session(store, session, plan)
                     error_message = f"Plano 3D criado, mas a execução MCP falhou: {exc}"

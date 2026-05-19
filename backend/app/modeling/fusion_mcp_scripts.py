@@ -294,9 +294,18 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         comment,
                     )
 
-            bulk = args.get("parameters")
+            # Aliases observados em traces reais: ``parameters``,
+            # ``parameters_mm``, ``params``. O LLM varia a chave conforme
+            # o contexto da unidade. Sempre que vier dict bulk, processa.
+            bulk = (
+                args.get("parameters")
+                or args.get("parameters_mm")
+                or args.get("params")
+            )
             if isinstance(bulk, dict) and bulk:
-                default_unit = str(args.get("unit") or "mm")
+                default_unit = (
+                    "mm" if args.get("parameters_mm") else str(args.get("unit") or "mm")
+                )
                 applied = []
                 for raw_name, raw_value in bulk.items():
                     param_name = str(raw_name).strip()

@@ -309,6 +309,15 @@ class ModelingExecutorService:
                 trace_id=current_trace_id(),
             ),
         )
+        # Fix #7: flush imediato dos trace events do executor.
+        # Bug observado via SQL: planos com <= 12 steps (< batch_size=25)
+        # geravam events no buffer mas nunca chegavam ao DB porque o
+        # auto-flush so dispara em multiplos de batch_size, e ninguem
+        # chamava flush() externamente apos execute_plan. Resultado:
+        # modal de diagnostico ficava vazio mesmo apos execucao OK.
+        # O caso de 01:12 (porta-figurinhas, 16 steps + fallback)
+        # funcionava por sorte — passava de 25 events e batia auto-flush.
+        self._tracer.flush()
         return ModelingExecutionResult(
             plan=updated,
             executed_step_ids=executed_step_ids,
