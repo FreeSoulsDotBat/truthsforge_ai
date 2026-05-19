@@ -514,7 +514,27 @@ painel 3D no dashboard**.
 
 - **`ModelingDiagnosticsModal`** — read-only, acessível pelo ícone de
   diagnóstico no cabeçalho do chat 3D. Abas: Adapters, Snapshots, Tool calls,
-  Model versions, Printability reports.
+  Model versions, Printability reports e Trace.
+
+### Trace e observabilidade
+
+O diagnóstico 3D consome a trilha estruturada de `ModelingTraceEvent`:
+
+- `GET /api/3d/plans/{plan_id}/trace` lista eventos de um plano, com filtros
+  por `level` e `source`.
+- `GET /api/3d/traces/{trace_id}` reconstrói a timeline pelo `trace_id` vindo
+  do SSE `modeling_plan` ou dos logs.
+- `POST /api/3d/traces/events` aceita eventos da UI, mas o backend força
+  `source="ui"`, trunca payloads grandes e calcula `sequence` de forma
+  server-side.
+
+O `sequence` de eventos de cliente usa consulta dedicada de máximo por trace
+na store (`get_max_trace_sequence`) em vez de listar todos os eventos. O
+rate-limit desse POST é por IP + `trace_id`, e buckets obsoletos são limpos
+periodicamente para não acumular chaves por traces já encerrados. No backend,
+`ModelingTracer.close_trace()` remove buffers ao final do request; como defesa
+em profundidade, buffers têm limite máximo e a eviction persiste eventos fora
+do lock global para não bloquear gravações concorrentes de trace.
 
 ### Configurações gerais (sem painel dedicado)
 

@@ -1,32 +1,80 @@
-import { useCallback, useEffect, useId, useRef } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { X } from "lucide-react";
 
 import { formatDurationMs, formatRiskPercentage, formatTimestamp, riskSeverityClass } from "../format";
-import { useModeling3dDiagnostics } from "../hooks";
+import { useModeling3dDiagnostics, useModeling3dTrace, useRecordClientTrace } from "../hooks";
+import type { ModelingTraceEvent } from "../../../types/api";
 
 type ModelingDiagnosticsModalProps = {
   open: boolean;
   planId?: string | null;
   projectId?: string | null;
+  traceId?: string | null;
   onClose: () => void;
 };
 
-export function ModelingDiagnosticsModal({ open, planId, projectId, onClose }: ModelingDiagnosticsModalProps) {
+function traceLevelClass(level: ModelingTraceEvent["level"]): string {
+  switch (level) {
+    case "error":
+      return "text-forge-red";
+    case "warn":
+      return "text-forge-amber";
+    case "debug":
+      return "text-forge-muted";
+    default:
+      return "text-forge-text";
+  }
+}
+
+function traceSourceLabel(source: ModelingTraceEvent["source"]): string {
+  switch (source) {
+    case "ui":
+      return "UI";
+    case "backend":
+      return "Backend";
+    case "mcp":
+      return "MCP";
+    case "fusion":
+      return "Fusion";
+    case "blender":
+      return "Blender";
+  }
+}
+
+export function ModelingDiagnosticsModal({
+  open,
+  planId,
+  projectId,
+  traceId,
+  onClose
+}: ModelingDiagnosticsModalProps) {
   const diagnosticsQuery = useModeling3dDiagnostics(planId, projectId);
+  const traceQuery = useModeling3dTrace(planId, traceId, { enabled: open });
+  const recordEvent = useRecordClientTrace(traceId, planId);
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+
+  // Estado local: filtros visuais aplicados aos trace events (no client).
+  // Decisão: filtrar no cliente em vez de re-requisitar com querystring —
+  // evita roundtrip e mantém estado UX quando alterna filtros rapidamente.
+  const [traceLevelFilter, setTraceLevelFilter] = useState<Set<ModelingTraceEvent["level"]>>(
+    new Set(["info", "warn", "error"])
+  );
 
   useEffect(() => {
     if (!open) return undefined;
     previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
     document.body.classList.add("overflow-hidden");
+    // Registra evento UI no trace — abre confirma que o usuário viu o
+    // diagnóstico (útil para correlacionar com tickets de bug).
+    recordEvent("ui.diagnostics_modal_opened", { planId, traceId });
     return () => {
       document.body.classList.remove("overflow-hidden");
       previouslyFocusedRef.current?.focus?.();
     };
-  }, [open]);
+  }, [open, planId, traceId, recordEvent]);
 
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -73,6 +121,98 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, onClose }: M
           </button>
         </div>
         <div className="scrollbar-slim space-y-4 overflow-y-auto p-4">
+          {/* Trace section first — é a mais útil pra debug de falhas */}
+          {(traceId || planId) && (
+            <section className="grid gap-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h4 className="text-sm font-semibold">Trace</h4>
+                <div className="flex items-center gap-2 text-[10px] text-forge-muted">
+                  {(["debug", "info", "warn", "error"] as const).map((lvl) => {
+                    const active = traceLevelFilter.has(lvl);
+                    return (
+                      <button
+                        key={lvl}
+                        type="button"
+                        onClick={() =>
+                          setTraceLevelFilter((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(lvl)) next.delete(lvl);
+                            else next.add(lvl);
+                            return next;
+                          })
+                        }
+                        className={
+                          active
+                            ? "rounded-full border border-forge-line bg-[#171716] px-2 py-0.5 uppercase tracking-wide text-forge-text"
+                            : "rounded-full border border-forge-line/30 px-2 py-0.5 uppercase tracking-wide text-forge-muted/60"
+                        }
+                      >
+                        {lvl}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              {traceId && (
+                <p className="text-[10px] text-forge-muted">
+                  <span className="font-mono">trace_id:</span>{" "}
+                  <code
+                    className="cursor-pointer rounded bg-[#171716] px-1 py-0.5 hover:text-forge-text"
+                    onClick={() => navigator.clipboard?.writeText(traceId).catch(() => undefined)}
+                    title="Copiar trace_id (correlaciona com docker logs do backend)"
+                  >
+                    {traceId}
+                  </code>
+                </p>
+              )}
+              {traceQuery.isLoading && (
+                <p className="text-xs text-forge-muted">Carregando trace...</p>
+              )}
+              {traceQuery.isError && (
+                <p className="text-xs text-forge-red">Falha ao carregar trace.</p>
+              )}
+              {traceQuery.data && traceQuery.data.length === 0 && (
+                <p className="text-xs text-forge-muted">
+                  Sem eventos de trace para este plano. (Observabilidade pode estar desativada — veja
+                  TRUTHS_FORGE_MODELING_OBSERVABILITY_ENABLED.)
+                </p>
+              )}
+              {traceQuery.data &&
+                traceQuery.data
+                  .filter((evt) => traceLevelFilter.has(evt.level))
+                  .map((evt) => (
+                    <details
+                      key={evt.id}
+                      className="rounded-md border border-forge-line bg-[#171716] p-2 text-xs"
+                    >
+                      <summary className="flex flex-wrap items-center justify-between gap-2 cursor-pointer">
+                        <span className="flex items-center gap-2">
+                          <span className="rounded bg-[#0e0f0e] px-1.5 py-0.5 text-[10px] uppercase text-forge-muted">
+                            {traceSourceLabel(evt.source)}
+                          </span>
+                          <span className={`font-medium ${traceLevelClass(evt.level)}`}>
+                            {evt.event_type}
+                          </span>
+                          {evt.duration_ms != null && (
+                            <span className="text-forge-muted">
+                              · {formatDurationMs(evt.duration_ms)}
+                            </span>
+                          )}
+                        </span>
+                        <span className="text-forge-muted">{formatTimestamp(evt.created_at)}</span>
+                      </summary>
+                      {evt.message && (
+                        <p className="mt-2 text-forge-muted">{evt.message}</p>
+                      )}
+                      {evt.payload && Object.keys(evt.payload).length > 0 && (
+                        <pre className="mt-2 max-h-48 overflow-auto rounded bg-[#0e0f0e] p-2 text-[10px] text-forge-muted">
+                          {JSON.stringify(evt.payload, null, 2)}
+                        </pre>
+                      )}
+                    </details>
+                  ))}
+            </section>
+          )}
           {diagnosticsQuery.isLoading && <p className="text-sm text-forge-muted">Carregando diagnóstico...</p>}
           {diagnosticsQuery.isError && <p className="text-sm text-forge-red">Falha ao carregar diagnóstico MCP 3D.</p>}
           {diagnostics && (

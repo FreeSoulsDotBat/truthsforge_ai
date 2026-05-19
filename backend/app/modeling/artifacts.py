@@ -28,7 +28,6 @@ from app.core.contracts import (
 from app.files.library import content_type_for_name, safe_filename
 from app.modeling.workspace import sha256_file
 
-
 ARTIFACT_CONTENT_TYPES: dict[str, str] = {
     ".3mf": "model/3mf",
     ".blend": "application/x-blender",

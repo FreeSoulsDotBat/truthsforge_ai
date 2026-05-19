@@ -28,8 +28,14 @@ from app.modeling.tool_registry import (
     BLOCKED_TOOL_PREFIXES,
     HIGH_RISK_TOOL_NAMES,
     READ_ONLY_TOOL_NAMES,
+)
+from app.modeling.tool_registry import (
     is_blocked as _is_blocked,
+)
+from app.modeling.tool_registry import (
     is_high_risk as _is_high_risk,
+)
+from app.modeling.tool_registry import (
     is_read_only as _is_read_only,
 )
 
