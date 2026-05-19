@@ -10,12 +10,11 @@ import pytest
 
 from app.core.contracts import PlatformFile
 from app.modeling.attachment_analyzer import (
-    AttachmentAnalysis,
     DEFAULT_MAX_BYTES,
+    AttachmentAnalysis,
     ModelingAttachmentAnalyzer,
     classify_attachment,
 )
-
 
 # ---------------------------------------------------------------------------
 # Test doubles

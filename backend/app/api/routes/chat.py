@@ -66,6 +66,7 @@ from app.llm_gateway.providers import (
     token_event,
 )
 from app.modeling.attachment_analyzer import ModelingAttachmentAnalyzer
+from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.service import get_modeling_service
 from app.rag.embeddings import embed_text
 from app.rag.indexing import ensure_document_for_platform_file
@@ -1208,6 +1209,11 @@ def _runtime_status(stage: str, label: str, detail: str | None = None) -> str:
 
 
 def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
+    # Importação local para evitar ciclo (chat.py é importado cedo no app
+    # startup). ``current_trace_id`` lê o contextvar bindado pelo
+    # ModelingChatOrchestrator.propose_plan.
+    from app.modeling.observability import current_trace_id
+
     return {
         "id": plan.id,
         "project_id": plan.project_id,
@@ -1224,6 +1230,12 @@ def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
         "knowledge_base_ids": plan.knowledge_base_ids,
         "planner_source": plan.planner_source.value if plan.planner_source else None,
         "fallback_reason": plan.fallback_reason,
+        # ``trace_id`` permite que o frontend chame
+        # ``GET /api/modeling/plans/{id}/trace`` ou
+        # ``GET /api/modeling/traces/{trace_id}`` ao abrir o modal de
+        # diagnóstico. Lido do contextvar — None se observability
+        # estiver desligada ou se o handler não passou pelo orchestrator.
+        "trace_id": current_trace_id(),
         "created_at": plan.created_at.isoformat(),
         "updated_at": plan.updated_at.isoformat(),
         "steps": [
@@ -1414,6 +1426,24 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 "Enviando o prompt ao planner MCP 3D com contexto do chat.",
             )
             modeling_service = get_modeling_service(store)
+
+            # Inicia trace de observabilidade ANTES da chamada do planner.
+            # Esta rota não passa pelo ModelingChatOrchestrator (chama o
+            # service direto), então o start_trace tem que vir aqui senão
+            # planner_service.record(...) cai em no-op por falta de
+            # contextvar. Ver app/modeling/observability.py.
+            _modeling_tracer = get_tracer(
+                store if hasattr(store, "record_trace_events_bulk") else None
+            )
+            _modeling_tracer.start_trace(
+                session_id=session.id,
+                project_id=effective_project_id,
+            )
+
+            # PR#28 review (issue 2): close_trace() é chamado em TODOS os
+            # exit points abaixo (early-return error paths + happy path)
+            # para garantir cleanup do buffer. Sem isso o trace ficaria
+            # preso indefinidamente (apenas eviccionado pelo cap FIFO).
             try:
                 plan = await modeling_service.create_plan_async(
                     ModelingPlanCreate(
@@ -1425,7 +1455,13 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                         knowledge_base_ids=effective_knowledge_base_ids,
                     )
                 )
+                # Flush imediato — frontend que ler /api/3d/plans/{id}/trace
+                # logo após receber o SSE ``modeling_plan`` precisa ver tudo
+                # já persistido (não fica em buffer).
+                _modeling_tracer.flush(current_trace_id())
             except Exception as exc:  # noqa: BLE001 - stream must surface domain failures
+                _modeling_tracer.flush(current_trace_id())  # garante que o trace de erro chegue ao DB
+                _modeling_tracer.close_trace()
                 error_message = f"Não consegui criar o plano 3D via MCP: {exc}"
                 assistant_message.content = error_message
                 assistant_message.metadata["provider_error"] = str(exc)
@@ -1444,7 +1480,13 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                     )
                     execution = await asyncio.to_thread(modeling_service.execute_plan, plan.id)
                     plan = execution.plan
+                    # Fix #7: garante que trace events do executor saiam
+                    # do buffer mesmo se executor.execute_plan tiver feito
+                    # o flush — defesa em profundidade contra regressao.
+                    _modeling_tracer.flush(current_trace_id())
                 except Exception as exc:  # noqa: BLE001 - keep plan linked on execution failure
+                    _modeling_tracer.flush(current_trace_id())  # flush antes de propagar erro
+                    _modeling_tracer.close_trace()
                     plan_metadata = _modeling_plan_metadata(plan)
                     session = _sync_modeling_plan_session(store, session, plan)
                     error_message = f"Plano 3D criado, mas a execução MCP falhou: {exc}"
@@ -1526,6 +1568,8 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 )
             )
             yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
+            # PR#28 review (issue 2): cleanup do buffer no happy path.
+            _modeling_tracer.close_trace()
 
         return StreamingResponse(modeling_events(), media_type="text/event-stream")
 

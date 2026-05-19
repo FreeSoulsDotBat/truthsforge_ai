@@ -49,6 +49,8 @@ from app.core.contracts import (
     ModelingPlanKind,
     ModelingPlanStatus,
     ModelingRiskLevel,
+    ModelingTraceLevel,
+    ModelingTraceSource,
     now_utc,
 )
 from app.modeling.chat_state import (
@@ -56,6 +58,7 @@ from app.modeling.chat_state import (
     transition,
 )
 from app.modeling.executor import ModelingExecutorService
+from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner_service import ModelingPlannerService
 from app.modeling.tool_registry import is_high_risk
 
@@ -90,6 +93,10 @@ class ModelingChatOrchestrator:
         self.store = store
         self.planner = planner
         self.executor = executor
+        # Tracer compartilhado — store é a sink dos eventos. Em testes a
+        # store pode não ter ``record_trace_events_bulk``; o tracer aceita
+        # ``None`` e vira no-op nesse caso.
+        self._tracer = get_tracer(store if hasattr(store, "record_trace_events_bulk") else None)
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -162,6 +169,15 @@ class ModelingChatOrchestrator:
         """
 
         self._require_modeling_chat(chat)
+
+        # Inicia trace para este request de proposta de plano. Identifica
+        # a sessão de chat e o projeto pais. O plan_id ainda não existe;
+        # o planner_service vai chamar ``bind_plan`` quando souber.
+        self._tracer.start_trace(
+            session_id=chat.id,
+            project_id=chat.project_id,
+        )
+
         primary_payload = payload.model_copy(
             update={
                 "kind": ModelingPlanKind.primary,
@@ -189,7 +205,14 @@ class ModelingChatOrchestrator:
             chat_id=updated.id,
             plan_id=plan.id,
             stage=next_stage.value,
+            planner_source=plan.planner_source.value if plan.planner_source else None,
+            fallback_reason=plan.fallback_reason,
         )
+        # Flush dos eventos buffered — garante que o frontend que ler o
+        # endpoint /trace logo após receber o ``modeling_plan`` SSE veja
+        # tudo já persistido. PR#28 review: close_trace para liberar buffer.
+        self._tracer.flush(current_trace_id())
+        self._tracer.close_trace()
         return updated, plan
 
     def approve_plan(
@@ -209,6 +232,22 @@ class ModelingChatOrchestrator:
         self._require_modeling_chat(chat)
         approval = payload or ModelingApprovalRequest(
             decision=ModelingApprovalDecision.approve, reason=""
+        )
+
+        # Inicia novo trace para a aprovação+execução. Diferente do trace
+        # de ``propose_plan``, este cobre a invocação do executor e seus
+        # tool calls. Vinculados pelo mesmo plan_id no banco.
+        self._tracer.start_trace(
+            session_id=chat.id,
+            project_id=chat.project_id,
+            plan_id=plan_id,
+        )
+        self._tracer.record(
+            "executor.plan_approved",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.info,
+            message="Plano aprovado pelo usuário; iniciando execução",
+            payload={"plan_id": plan_id, "reason": approval.reason},
         )
 
         chat = self._set_stage(
@@ -241,6 +280,28 @@ class ModelingChatOrchestrator:
                 "blocked_step_ids": execution.blocked_step_ids,
             },
         )
+
+        # Resumo da execução no trace + flush imediato para o frontend
+        # poder consultar /trace logo após o handler retornar.
+        self._tracer.record(
+            "executor.plan_finished",
+            source=ModelingTraceSource.backend,
+            level=(
+                ModelingTraceLevel.error
+                if execution.plan.status == ModelingPlanStatus.failed
+                else ModelingTraceLevel.info
+            ),
+            message=f"Execução finalizada com status {execution.plan.status.value}",
+            payload={
+                "plan_id": plan_id,
+                "status": execution.plan.status.value,
+                "executed_step_ids": execution.executed_step_ids,
+                "blocked_step_ids": execution.blocked_step_ids,
+                "tool_call_ids": execution.tool_call_ids,
+            },
+        )
+        self._tracer.flush(current_trace_id())
+        self._tracer.close_trace()
         return chat, execution.plan, execution
 
     def reject_plan(
@@ -515,8 +576,16 @@ class ModelingChatOrchestrator:
         return updated
 
     def _audit(self, event_type: str, **metadata: Any) -> None:
+        # Anexa trace_id do contexto ativo (se houver) para permitir
+        # navegação bidirecional audit ↔ trace. Eventos âncora como
+        # ``modeling.chat.plan_proposed`` ficam então cross-referenciáveis
+        # com a trilha completa de debug em modeling_trace_events.
         self.store.add_audit_event(
-            AuditEvent(event_type=event_type, metadata=metadata),
+            AuditEvent(
+                event_type=event_type,
+                metadata=metadata,
+                trace_id=current_trace_id(),
+            ),
         )
 
 

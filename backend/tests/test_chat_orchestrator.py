@@ -11,8 +11,6 @@ from app.core.contracts import (
     AuditEvent,
     ChatModelingStage,
     ChatSession,
-    ModelingApprovalDecision,
-    ModelingApprovalRequest,
     ModelingExecutionResult,
     ModelingPlan,
     ModelingPlanCreate,
@@ -28,8 +26,6 @@ from app.modeling.chat_orchestrator import (
     ModelingChatOrchestrator,
     NotAModelingChat,
 )
-from app.modeling.chat_state import ChatModelingEvent
-
 
 # ---------------------------------------------------------------------------
 # Test doubles

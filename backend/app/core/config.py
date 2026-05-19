@@ -99,6 +99,38 @@ class Settings(BaseModel):
         )
     )
 
+    # Observabilidade do módulo de modelagem 3D (ver plano em
+    # C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md).
+    # Quando ``true``, o ``ModelingTracer`` persiste eventos de trace em
+    # ``modeling_trace_events``, emite logs JSON estruturados em
+    # ``app.modeling.*`` e enriquece eventos SSE com ``trace_id``. Default
+    # ``true`` em dev para visibilidade imediata; desligar reduz custo de I/O
+    # em produção pesada.
+    modeling_observability_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_OBSERVABILITY_ENABLED", "true").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
+    # Quando ``true``, o payload dos eventos ``planner.llm_request`` /
+    # ``planner.llm_response`` inclui prompt completo e resposta bruta do
+    # LLM. Default ``false`` por privacidade — ativar só para debug.
+    modeling_debug_llm_trace: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
+    # Reservas para job de retention futuro (não implementado nesta iteração).
+    modeling_trace_retention_days_info: int = Field(
+        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MODELING_TRACE_RETENTION_INFO", "30"))
+    )
+    modeling_trace_retention_days_error: int = Field(
+        default_factory=lambda: int(
+            os.getenv("TRUTHS_FORGE_MODELING_TRACE_RETENTION_ERROR", "180")
+        )
+    )
+
     @property
     def allowed_origins(self) -> list[str]:
         return [origin.strip() for origin in self.allowed_origins_raw.split(",") if origin.strip()]

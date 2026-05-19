@@ -45,6 +45,9 @@ from app.core.contracts import (
     ModelingSession,
     ModelingSnapshot,
     ModelingToolCall,
+    ModelingTraceEvent,
+    ModelingTraceLevel,
+    ModelingTraceSource,
     ModelUpsert,
     PermissionPolicy,
     PlatformFile,
@@ -304,6 +307,31 @@ class PostgresStore:
             """
             CREATE INDEX IF NOT EXISTS idx_modeling_versions_project
             ON modeling_model_versions ((payload->>'project_id'))
+            """,
+            # Tabela de trace events do módulo de modelagem 3D — alta
+            # cardinalidade (≈50 eventos por trace, múltiplos traces por
+            # sessão). Particionada lógica por trace_id via índice
+            # composto. Ver app/modeling/observability.py.
+            """
+            CREATE TABLE IF NOT EXISTS modeling_trace_events (
+              id TEXT PRIMARY KEY,
+              trace_id TEXT NOT NULL,
+              plan_id TEXT,
+              payload JSONB NOT NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_modeling_trace_events_trace
+            ON modeling_trace_events (trace_id, created_at)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_modeling_trace_events_plan
+            ON modeling_trace_events (plan_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_modeling_trace_events_level
+            ON modeling_trace_events ((payload->>'level'))
             """,
             """
             CREATE TABLE IF NOT EXISTS cost_policy (
@@ -1499,6 +1527,85 @@ class PostgresStore:
             "modeling_tool_calls", _dump_model(record), timestamp_column="created_at"
         )
         return record
+
+    # ------------------------------------------------------------------
+    # Modeling trace events (observabilidade — ver app/modeling/observability.py)
+    # ------------------------------------------------------------------
+
+    def record_trace_events_bulk(self, events: list[ModelingTraceEvent]) -> None:
+        """Insere um lote de trace events. Idempotente por ``id`` (DO NOTHING).
+
+        Chamado pelo ``ModelingTracer`` em batches de até ``DEFAULT_BATCH_SIZE``
+        eventos. Usa execução em loop dentro de uma única conexão porque o
+        volume típico é pequeno (≤25) e a complexidade de COPY ou
+        executemany não compensa nesta iteração.
+        """
+
+        if not events:
+            return
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                for event in events:
+                    payload = _dump_model(event)
+                    cur.execute(
+                        """
+                        INSERT INTO modeling_trace_events
+                          (id, trace_id, plan_id, payload, created_at)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (id) DO NOTHING
+                        """,
+                        (
+                            event.id,
+                            event.trace_id,
+                            event.plan_id,
+                            Jsonb(payload),
+                            event.created_at,
+                        ),
+                    )
+
+    def list_trace_events(
+        self,
+        *,
+        trace_id: str | None = None,
+        plan_id: str | None = None,
+        levels: list[ModelingTraceLevel] | None = None,
+        sources: list[ModelingTraceSource] | None = None,
+        limit: int = 500,
+    ) -> list[ModelingTraceEvent]:
+        """Lê eventos por trace_id ou plan_id, ordenados por ``created_at`` ASC.
+
+        Filtros opcionais por ``level`` (lista) e ``source`` (lista). O
+        endpoint REST mapeia querystrings para essas listas.
+        """
+
+        clauses: list[str] = []
+        params: list[Any] = []
+        if trace_id:
+            clauses.append("trace_id = %s")
+            params.append(trace_id)
+        if plan_id:
+            clauses.append("plan_id = %s")
+            params.append(plan_id)
+        if levels:
+            clauses.append("payload->>'level' = ANY(%s)")
+            params.append([level.value for level in levels])
+        if sources:
+            clauses.append("payload->>'source' = ANY(%s)")
+            params.append([source.value for source in sources])
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT payload FROM modeling_trace_events
+                    {where}
+                    ORDER BY (payload->>'sequence')::int ASC, created_at ASC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                return [ModelingTraceEvent(**row["payload"]) for row in cur.fetchall()]
 
     def list_modeling_printability_reports(
         self, *, plan_id: str | None = None, file_id: str | None = None

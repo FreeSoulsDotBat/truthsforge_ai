@@ -11,6 +11,7 @@ method and delegates here.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -25,11 +26,84 @@ from app.core.contracts import (
     ModelingStepStatus,
     ModelingToolCall,
     ModelingToolCallStatus,
+    ModelingTraceLevel,
+    ModelingTraceSource,
     now_utc,
 )
 from app.modeling.artifacts import ModelingArtifactService
 from app.modeling.mcp_client import LocalMCPClient
+from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.snapshot_service import ModelingSnapshotService
+
+
+def _unwrap_inner_fusion_result(output: dict[str, Any]) -> dict[str, Any]:
+    """Detecta e propaga falhas do adapter Fusion que vinham mascaradas.
+
+    Bug observado via trace (porta-figurinhas WC2026, 11/05/2026): o
+    fusion_adapter HTTP retorna ``ok: true`` na camada de transporte mesmo
+    quando o tool falhou — o ``ok: false`` real fica num **JSON stringificado**
+    dentro de ``output["message"]`` (e duplicado em ``result.message``).
+    O executor antes checava só o ``output["ok"]`` externo e marcava todos os
+    steps como verdes. Resultado: o card do chat mostrava "concluído" para
+    16/16 steps mas o Fusion estava vazio porque 11/16 falharam silenciosamente.
+
+    Esta função detecta o padrão e, quando o inner result indica falha,
+    promove ``error_code``, ``message`` e ``ok: false`` ao nível externo para
+    que ``execute_plan`` consiga decidir corretamente. Idempotente: se o
+    output já está no formato direto (sem stringified inner), retorna sem
+    modificações.
+
+    Não toca em outros transportes (stdio, in_process, mock) — eles já
+    retornam o dict no formato direto.
+    """
+
+    if not isinstance(output, dict):
+        return output
+
+    # Já marcado como falha no nível externo — nada a fazer.
+    if output.get("ok") is False:
+        return output
+
+    message = output.get("message")
+    if not isinstance(message, str):
+        return output
+
+    stripped = message.strip()
+    if not (stripped.startswith("{") and stripped.endswith("}")):
+        return output
+
+    try:
+        inner = json.loads(stripped)
+    except json.JSONDecodeError:
+        return output
+
+    if not isinstance(inner, dict):
+        return output
+    if inner.get("ok") is not False:
+        return output
+
+    # Inner result é uma falha — promove campos ao topo. Preserva o output
+    # original em ``host_details`` para debug e auditoria.
+    promoted = dict(output)
+    promoted["ok"] = False
+    promoted["message"] = inner.get("message") or stripped
+    if inner.get("error_code"):
+        promoted["error_code"] = inner["error_code"]
+    if inner.get("retryable") is not None:
+        promoted["retryable"] = inner["retryable"]
+    if "safe_to_retry_after_snapshot_restore" in inner:
+        promoted["safe_to_retry_after_snapshot_restore"] = inner[
+            "safe_to_retry_after_snapshot_restore"
+        ]
+    if inner.get("traceback"):
+        existing_host_details = (
+            promoted.get("host_details") if isinstance(promoted.get("host_details"), dict) else {}
+        )
+        promoted["host_details"] = {
+            **existing_host_details,
+            "inner_traceback": inner["traceback"],
+        }
+    return promoted
 
 
 def envelope_into_output(
@@ -82,6 +156,8 @@ class ModelingExecutorService:
         self.mcp_client = mcp_client
         self.snapshots = snapshots
         self.artifacts = artifacts
+        # Tracer compartilhado (no-op se a store não tem record_trace_events_bulk).
+        self._tracer = get_tracer(store if hasattr(store, "record_trace_events_bulk") else None)
 
     def execute_plan(self, plan: ModelingPlan) -> ModelingExecutionResult:
         """Execute every runnable step of ``plan`` and persist the result."""
@@ -106,15 +182,52 @@ class ModelingExecutorService:
             if step.error:
                 blocked_step_ids.append(step.id)
                 next_steps.append(step)
+                self._tracer.record(
+                    "executor.step_skipped",
+                    source=ModelingTraceSource.backend,
+                    level=ModelingTraceLevel.warn,
+                    message=f"Step {step.seq} bloqueado por erro prévio",
+                    payload={"step_id": step.id, "tool_name": step.tool_name, "error": step.error},
+                    plan_id=plan.id,
+                )
                 continue
             if step.approval_required and step.status != ModelingStepStatus.approved:
                 blocked_step_ids.append(step.id)
                 next_steps.append(step)
+                self._tracer.record(
+                    "executor.step_blocked",
+                    source=ModelingTraceSource.backend,
+                    level=ModelingTraceLevel.info,
+                    message=f"Step {step.seq} aguardando aprovação humana",
+                    payload={
+                        "step_id": step.id,
+                        "tool_name": step.tool_name,
+                        "risk_level": step.risk_level.value,
+                    },
+                    plan_id=plan.id,
+                )
                 continue
+
+            self._tracer.record(
+                "executor.step_started",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.info,
+                message=f"Step {step.seq}: {step.tool_name}",
+                payload={
+                    "step_id": step.id,
+                    "seq": step.seq,
+                    "tool_name": step.tool_name,
+                    "input": step.input_json,
+                },
+                plan_id=plan.id,
+            )
 
             started_at = time.perf_counter()
             output = self._dispatch_step(step, plan=plan)
             duration_ms = int((time.perf_counter() - started_at) * 1000)
+            # Fix #0: desempacota inner ``ok: false`` do fusion_adapter HTTP
+            # antes da decisão de sucesso, senão falhas chegam como verdes.
+            output = _unwrap_inner_fusion_result(output)
             output = self.artifacts.register_outputs(output, plan=plan, step=step)
 
             tool_call = self._record_tool_call(
@@ -126,6 +239,29 @@ class ModelingExecutorService:
             executed_step_ids.append(step.id)
             event_verb = "executado" if output.get("transport") != "mock" else "preparado"
             events.append(f"{step.seq}. {step.tool_name} {event_verb} via {output['mcp_server']}")
+
+            step_ok = output.get("ok") is not False
+            self._tracer.record(
+                "executor.step_ok" if step_ok else "executor.step_error",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.info if step_ok else ModelingTraceLevel.error,
+                message=(
+                    f"Step {step.seq} OK"
+                    if step_ok
+                    else f"Step {step.seq} falhou: {output.get('message') or output.get('error')}"
+                ),
+                payload={
+                    "step_id": step.id,
+                    "tool_name": step.tool_name,
+                    "transport": output.get("transport"),
+                    "mcp_server": output.get("mcp_server"),
+                    "error_code": output.get("error_code"),
+                    "error_message": output.get("message") or output.get("error"),
+                    "retryable": output.get("retryable"),
+                },
+                duration_ms=duration_ms,
+                plan_id=plan.id,
+            )
 
             if output.get("ok") is False:
                 blocked_step_ids.append(step.id)
@@ -170,8 +306,20 @@ class ModelingExecutorService:
                     "blocked_step_ids": blocked_step_ids,
                     "tool_call_ids": tool_call_ids,
                 },
+                trace_id=current_trace_id(),
             ),
         )
+        # Fix #7: flush imediato dos trace events do executor.
+        # Bug observado via SQL: planos com <= 12 steps (< batch_size=25)
+        # geravam events no buffer mas nunca chegavam ao DB porque o
+        # auto-flush so dispara em multiplos de batch_size, e ninguem
+        # chamava flush() externamente apos execute_plan. Resultado:
+        # modal de diagnostico ficava vazio mesmo apos execucao OK.
+        # O caso de 01:12 (porta-figurinhas, 16 steps + fallback)
+        # funcionava por sorte — passava de 25 events e batia auto-flush.
+        # PR#28 review (issue 6): passa trace_id explicito para evitar
+        # iterar buffers de outros traces em execucao concorrente.
+        self._tracer.flush(current_trace_id())
         return ModelingExecutionResult(
             plan=updated,
             executed_step_ids=executed_step_ids,
