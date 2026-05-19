@@ -20,7 +20,7 @@ O pipeline de modelagem 3D falha silenciosamente em vários pontos. O caso recen
 - Propagado via **contextvars** no backend (Python `contextvars.ContextVar`) — todo `logger.info/error` no módulo modeling captura automaticamente.
 - SSE: incluído em metadata dos eventos `modeling_plan` e novo `modeling_trace_event`.
 - MCP → Fusion/Blender: campos reservados `_trace_id` e `_parent_event_id` no envelope JSON-RPC (fora do contract de tool args). Addin retorna `trace_events: []` array que o backend drena via `ModelingTracer.record()` ao receber resposta.
-- Frontend: envia `trace_id` em todos os POSTs para `/api/modeling/traces/events`.
+- Frontend: envia `trace_id` em todos os POSTs para `/api/3d/traces/events`.
 
 ### Novo contrato e armazenamento
 
@@ -55,7 +55,9 @@ CREATE INDEX idx_mte_trace_id ON modeling_trace_events(trace_id, created_at);
 CREATE INDEX idx_mte_plan_id ON modeling_trace_events(plan_id);
 ```
 
-**DevStore JSON:** ring buffer dos últimos N=50 traces (lista única em memória, capped). Filtros via Python (sem JSONB operators).
+**DevStore JSON:** ring buffer dos últimos `MODELING_TRACE_DEVSTORE_MAX_EVENTS` eventos (lista única em memória, capped). Filtros via Python (sem JSONB operators).
+
+**Sequência de eventos UI:** `PostgresStore` e `DevStore` expõem `get_max_trace_sequence(trace_id)`. O endpoint de eventos de cliente usa esse método para calcular `max(sequence) + 1` sem carregar nem desserializar todos os eventos do trace.
 
 **AuditEvent (contracts.py:194-203):** adicionar campo opcional `trace_id: str | None = None`. Eventos âncora (`modeling.plan_created`, `modeling.chat.plan_proposed`, `modeling.chat.execution_completed`) passam a setá-lo para navegação bidirecional trace↔audit. Sem mudança no schema da tabela `audit_events` (já é JSONB).
 
@@ -67,7 +69,10 @@ CREATE INDEX idx_mte_plan_id ON modeling_trace_events(plan_id);
   - `start_trace(session_id, project_id, plan_id=None) -> str` (retorna trace_id, seta contextvar)
   - `record(event_type, source, level, message=None, payload=None, duration_ms=None)` (síncrono + assíncrono)
   - `record_span(event_type, ...)` context manager para operações cronometradas
-  - Batch interno: buffer in-memory, flush ao final de cada span ou a cada 25 eventos.
+  - `flush(trace_id=None)` e `close_trace(trace_id=None)` para persistir e remover buffers ao final do request.
+  - Batch interno: buffer in-memory, flush ao final de cada span/request ou a cada 25 eventos.
+  - Cap defensivo de buffers (`DEFAULT_MAX_BUFFERS=1000`) com eviction FIFO; eventos pendentes são extraídos sob lock e persistidos fora de `_buffers_lock` para não bloquear `record()` concorrente em I/O de storage.
+- `record_span` emite o evento inicial com cópia do payload; metadados anexados via `span.attach()` aparecem apenas no evento final (`.completed`/`.failed`/`.cancelled`) e não reescrevem retroativamente o início do span.
 - `TraceContextFilter` para `logging`: injeta `trace_id` no `LogRecord` lendo da contextvar.
 - `JsonFormatter` aplicado SÓ aos loggers do namespace `app.modeling.*` (não polui logs do resto do app).
 - `_truncate_payload(payload, limit_bytes=50_000)` helper que marca `_truncated: True` em caso de corte.
@@ -103,9 +108,10 @@ Refatorar `except Exception` em `planner_service.py:122-124, 145-147` para disti
 
 ### Endpoints
 
-- **GET** `/api/modeling/plans/{plan_id}/trace` → `list[ModelingTraceEvent]` ordenado por `sequence`. Suporta `?level=warn,error` e `?source=backend,fusion`.
-- **POST** `/api/modeling/traces/events` → aceita lote de eventos UI. Rate-limit: 60 req/min por session_id. Rejeita eventos com `trace_id` desconhecido ou trace cujo TTL expirou. Força `source="ui"` server-side.
-- **GET** `/api/modeling/plans/{plan_id}/diagnostics` (consolidação opcional) — combina trace + tool_calls + plan metadata em um JSON exportável.
+- **GET** `/api/3d/plans/{plan_id}/trace` → `list[ModelingTraceEvent]` ordenado por `sequence`. Suporta `?level=warn,error` e `?source=backend,fusion`.
+- **GET** `/api/3d/traces/{trace_id}` → `list[ModelingTraceEvent]` por trace direto, usado quando o frontend só tem o `trace_id`.
+- **POST** `/api/3d/traces/events` → aceita evento UI individual. Rate-limit: 60 req/min por IP + `trace_id`, com buckets obsoletos removidos para evitar leak por trace único. Força `source="ui"` server-side, trunca payload e calcula `sequence` por `get_max_trace_sequence(trace_id)`.
+- **GET** `/api/3d/plans/{plan_id}/diagnostics` — combina trace + tool_calls + plan metadata em um JSON exportável.
 
 ### SSE (chat streaming)
 
@@ -140,8 +146,8 @@ Em `backend/app/core/config.py`:
 - `backend/app/modeling/chat_orchestrator.py` — `start_trace` em `propose_plan`, anexar `trace_id` em audit events âncora.
 - `backend/app/modeling/policy.py`, `attachment_analyzer.py`, `chat_state.py`, `snapshot_service.py` — pontos adicionais de instrumentação.
 - `backend/app/llm/exceptions.py` — **novo arquivo**, hierarquia de exceções LLM.
-- `backend/app/storage/postgres_store.py` — `_ensure_schema` cria tabela + CRUD `list_trace_events`, `record_trace_events_bulk`. Reusar padrão `_bulk_insert` em `postgres_store.py:569`.
-- `backend/app/storage/dev_store.py` — equivalente JSON com ring buffer.
+- `backend/app/storage/postgres_store.py` — `_ensure_schema` cria tabela + CRUD `list_trace_events`, `record_trace_events_bulk` e `get_max_trace_sequence`.
+- `backend/app/storage/dev_store.py` — equivalente JSON com ring buffer e `get_max_trace_sequence`.
 - `backend/app/api/routes/modeling.py` — endpoints GET/trace, POST/traces/events, GET/diagnostics.
 - `backend/app/api/routes/chat.py:1141, 1457` — enriquecer `modeling_plan` SSE + emitir `modeling_trace_event`.
 

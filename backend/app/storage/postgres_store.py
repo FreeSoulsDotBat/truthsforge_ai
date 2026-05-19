@@ -1607,6 +1607,24 @@ class PostgresStore:
                 )
                 return [ModelingTraceEvent(**row["payload"]) for row in cur.fetchall()]
 
+    def get_max_trace_sequence(self, *, trace_id: str) -> int | None:
+        """Retorna o maior sequence de um trace sem desserializar os eventos."""
+
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT MAX((payload->>'sequence')::int) AS max_sequence
+                    FROM modeling_trace_events
+                    WHERE trace_id = %s
+                    """,
+                    (trace_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return row["max_sequence"]
+
     def list_modeling_printability_reports(
         self, *, plan_id: str | None = None, file_id: str | None = None
     ) -> list[ModelingPrintabilityReport]:

@@ -26,6 +26,7 @@ def _create_plan_via_service(**kwargs: Any) -> dict[str, Any]:
     plan = get_modeling_service(get_store()).create_plan(payload)
     return json.loads(plan.model_dump_json())
 
+
 EXPECTED_BLENDER_TOOLS = {
     "blender.create_mesh_primitive",
     "blender.apply_bevel",
@@ -54,6 +55,49 @@ def test_modeling_capabilities_are_exposed() -> None:
     assert EXPECTED_BLENDER_TOOLS.issubset(set(adapter_tools["blender"]))
     assert "fusion.create_sketch" in adapter_tools["fusion"]
     assert "fusion.validate_printability" in adapter_tools["fusion"]
+
+
+def test_client_trace_event_uses_max_sequence_lookup(monkeypatch) -> None:
+    from app.api.routes import modeling as modeling_route
+
+    class TraceStore:
+        def __init__(self) -> None:
+            self.events: list[Any] = []
+            self.sequence_lookups: list[str] = []
+
+        def list_trace_events(self, **kwargs: Any) -> list[Any]:
+            raise AssertionError("record_client_trace_event should not list all events")
+
+        def get_max_trace_sequence(self, *, trace_id: str) -> int:
+            self.sequence_lookups.append(trace_id)
+            return 41
+
+        def record_trace_events_bulk(self, events: list[Any]) -> None:
+            self.events.extend(events)
+
+    store = TraceStore()
+    monkeypatch.setattr(modeling_route, "get_store", lambda: store)
+    with modeling_route._client_trace_lock:
+        modeling_route._client_trace_timestamps.clear()
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/3d/traces/events",
+        json={
+            "trace_id": "mt_test_trace",
+            "plan_id": "plan-1",
+            "event_type": "ui.modal_opened",
+            "level": "info",
+            "payload": {"panel": "diagnostics"},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "ui"
+    assert body["sequence"] == 42
+    assert store.sequence_lookups == ["mt_test_trace"]
+    assert store.events[0].sequence == 42
 
 
 def test_modeling_plan_executes_fluid_steps_without_plan_approval(monkeypatch) -> None:

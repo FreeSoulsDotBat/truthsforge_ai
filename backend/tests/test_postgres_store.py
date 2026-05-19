@@ -76,3 +76,46 @@ def test_postgres_connect_does_not_retry_authentication_failure(monkeypatch) -> 
 
     assert attempts == ["postgresql://forge:forge@postgres:5432/truths_forge_ai"]
     assert sleeps == []
+
+
+def test_get_max_trace_sequence_uses_aggregate_query(monkeypatch) -> None:
+    store = make_store()
+
+    class Cursor:
+        def __init__(self) -> None:
+            self.sql = ""
+            self.params: tuple[object, ...] | None = None
+
+        def __enter__(self) -> "Cursor":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: tuple[object, ...]) -> None:
+            self.sql = sql
+            self.params = params
+
+        def fetchone(self) -> dict[str, int]:
+            return {"max_sequence": 12}
+
+    class Connection:
+        def __init__(self, cursor: Cursor) -> None:
+            self._cursor = cursor
+
+        def __enter__(self) -> "Connection":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def cursor(self) -> Cursor:
+            return self._cursor
+
+    cursor = Cursor()
+    monkeypatch.setattr(store, "_connect", lambda: Connection(cursor))
+
+    assert store.get_max_trace_sequence(trace_id="mt_test_trace") == 12
+    assert "MAX((payload->>'sequence')::int)" in cursor.sql
+    assert "WHERE trace_id = %s" in cursor.sql
+    assert cursor.params == ("mt_test_trace",)
