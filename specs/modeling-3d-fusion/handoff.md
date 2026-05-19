@@ -49,6 +49,121 @@ sem ignores parou na coleta porque o venv atual não tem `alembic`.
 
 ---
 
+## Onda 7 — Observabilidade do módulo 3D + caça aos schema drifts do adapter Fusion
+
+**Sessão:** 18–19/05/2026, Claude Code. **Branch:** `feat/modeling-3d-observability` (mergeada na `codex/3d-chat-title-required` localmente, sem push). **Plano completo:** `C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md` (não versionado — copiar pro repo se outra sessão precisar).
+
+### Contexto que originou a Onda
+
+Bug recorrente "uma bola virou retângulo": qualquer prompt 3D produzia o mesmo paralelepípedo no Fusion. Causa real só descoberta após horas: modelo default no Postgres era `test/audit-cost-*` (lixo de testes não isolados); planner LLM falhava silenciosamente; executor mascarava falhas internas; o LLM gerava planos com schema drifts contra o adapter Fusion.
+
+### O que foi entregue
+
+**1. Módulo de observabilidade estruturada** (fundação)
+
+| Arquivo | Conteúdo |
+|---|---|
+| `backend/app/core/contracts.py` | `ModelingTraceEvent`, `ModelingTraceSource`, `ModelingTraceLevel`, `trace_id` opcional em `AuditEvent`, caps de payload/buffer |
+| `backend/app/core/config.py` | `TRUTHS_FORGE_MODELING_OBSERVABILITY_ENABLED` (default `true`), `TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE` (default `false` em main, `true` no compose de dev temporariamente), retention reservas |
+| `backend/app/llm_gateway/exceptions.py` | Hierarquia tipada: `LLMProviderError`, `LLMAuthError`, `LLMTimeoutError`, `LLMRateLimitError`, `LLMInvalidResponseError` + `classify_provider_exception` |
+| `backend/app/modeling/observability.py` | `ModelingTracer` (contextvars + JsonFormatter + span context manager + batch buffer + payload truncate + `ingest_external_events` para drenar trace_events do addin), helpers `current_trace_id`/`current_plan_id`/`generate_trace_id`, singleton `get_tracer` |
+| `backend/app/storage/postgres_store.py` | Tabela `modeling_trace_events` + 3 índices, `record_trace_events_bulk`, `list_trace_events` |
+| `backend/app/storage/dev_store.py` | Equivalente JSON com ring buffer cap `MODELING_TRACE_DEVSTORE_MAX_EVENTS` |
+
+**2. Instrumentação ponta-a-ponta**
+
+- `planner_service.py`: `planner.model_resolved`, `planner.model_unavailable` (com candidatos rejeitados), `planner.llm_request` span, classificação tipada de exceções, `planner.fallback_used` (level=error), `logger.warning` promovido a `logger.error(exc_info=True)`
+- `executor.py`: `_unwrap_inner_fusion_result` desempacota inner `ok:false` do adapter HTTP, `executor.step_started/ok/error/blocked/skipped` por step
+- `chat_orchestrator.py`: `start_trace` em propose/approve, audit events com `trace_id`, flush em pontos chave
+- `mcp_client.py`: propaga `_trace_id` no envelope JSON-RPC, drena `trace_events: []` da resposta via `ingest_external_events`
+- `apps/fusion-addin/TruthsForge.py`: aceita `_trace_id` no `_meta`, retorna `trace_events: []` com `fusion.tool_completed`/`error`
+- `chat.py`: `start_trace` no boundary da rota (porque a rota chama `modeling_service` direto, sem passar pelo orchestrator), flush após `to_thread`
+
+**3. Endpoints REST + SSE enrichment**
+
+- `GET /api/3d/plans/{id}/trace` — lista eventos do plano (filtros `?level=` `?source=`)
+- `GET /api/3d/traces/{trace_id}` — lista eventos por trace_id direto
+- `POST /api/3d/traces/events` — aceita eventos UI do frontend (rate-limit 60/min por IP, source forçado pra `ui`)
+- `GET /api/3d/plans/{id}/diagnostics` — bundle consolidado (plan + tool_calls + trace + printability)
+- SSE `modeling_plan` enriquecido com `trace_id`, `planner_source`, `fallback_reason` no payload
+
+**4. Frontend**
+
+- Hook `useModeling3dTrace(planId, traceId)` + `useRecordClientTrace` em `apps/web/src/features/modeling-3d/hooks/`
+- API client: `planTrace`, `trace`, `recordClientTraceEvent`
+- `ModelingDiagnosticsModal.tsx`: nova seção **Trace** com timeline cronológica, filtros por nível, payloads colapsáveis, trace_id copiável
+- `ModelingPlanCard.tsx`: badge vermelho **PLANNER: FALLBACK** com tooltip mostrando `fallback_reason`
+
+**5. Containerização (opt-in)**
+
+- `infra/docker-compose.dev.yml`: serviço `dozzle` no profile `observability` (UI de logs em http://127.0.0.1:8082), flags expostas como env vars
+- `scripts/smoke-modeling-trace.ps1`: smoke test ponta-a-ponta (POST evento UI → GET trace → query Postgres → check logs)
+- `docs/local-dev.md`: seção nova de observabilidade
+
+**6. 13 fixes-by-trace no adapter Fusion** (cada um descoberto via trace, não leitura de código)
+
+| # | Fix | Bug que pegou |
+|---|---|---|
+| 0 | Executor detecta inner `ok:false` do adapter HTTP | "Tudo verde, Fusion vazio" — 11/16 steps mascarados |
+| 1 / 1.1 / 1.2 | `set_parameter` aceita `parameters`/`parameters_mm`/`params`/bulk implícito | Schema drift do LLM |
+| 2 / 8 | `create_sketch` honra `sketch_name`/`plane`, fallback gracioso pra plano desconhecido | Cascata `sketch_not_found` |
+| 4 | ARGUMENTS via `json.loads` em runtime no script template | `NameError: name 'true'` |
+| 5 | Guard de geometria vazia em export_stl/3mf | `InternalValidationError` opaco da SDK |
+| 6 / 9 | `add_rectangle` aceita `corner1_mm`/`corner2_mm`, `size_mm`, modo grade `cols+rows+cell_size_mm` | Schema drift |
+| 7 | Flush do tracer no fim de `execute_plan` + chat.py após `to_thread` | Modal de diagnóstico vazio quando trace tinha < `batch_size=25` events |
+| 10 | `_eval_param` resolve string como `userParameter` lookup ou eval sandboxed | LLM passou expressões paramétricas (`sticker_width_mm + pocket_clearance_total_mm`) |
+| (regressão auto-introduzida) | Chaves `{}` literais em comentário do f-string template | Crash em runtime; pego pela própria observabilidade |
+
+**Teste regressão**: `backend/tests/test_modeling_observability.py` — 29 verdes. Inclui `test_fusion_script_template_compiles_for_every_tool` que `ast.parse` o script gerado para cada tool com sample args (previne classe de bug do `{}` literal).
+
+### Estado dos dados no Postgres (configuração inicial necessária)
+
+A sessão limpou via SQL o estado contaminado do Postgres local (foi causa raiz do bug original):
+
+```sql
+-- 27 modelos test/* deletados, openai/default-chat virou default
+DELETE FROM model_configs WHERE payload->>'id' LIKE 'test/%';
+UPDATE model_configs SET payload = jsonb_set(payload, '{default}', 'true'::jsonb)
+  WHERE payload->>'id' = 'openai/default-chat';
+UPDATE model_configs SET payload = jsonb_set(payload, '{max_output_tokens}', '8192'::jsonb)
+  WHERE payload->>'id' = 'openai/default-chat';
+```
+
+`provider_model_id` deve estar `gpt-5-mini` ou superior (`gpt-4o` aceito). Sem `provider_model_id` ou com modelo fake, planner cai em fallback heurístico silenciosamente.
+
+### Gaps conhecidos (NÃO TRABALHADOS, candidatos para próxima sessão)
+
+1. **`fusion.create_sketch` em face de body existente** — LLM tenta `plane: "InnerFace_Left"` etc. Hoje cai em XY com warning visível, mas semanticamente errado. Solução real exige face references via Fusion SDK.
+2. **Tracking de nomes de sketch entre steps** — LLM cria sketch sem `sketch_name`, depois extrude referencia `lid_outline_sketch` por nome que nunca foi setado. Adapter atualmente usa default `TF_Sketch (N)`. Causa `fusion.no_profile`.
+3. **2 testes pré-existentes falhando em `test_fusion_bridge.py`** — não relacionados a esta sessão, confirmados nos commits anteriores. `_extract_mcp_content_json` não propaga `error_code` do payload interno.
+4. **Testes escrevendo no Postgres de dev** — chip "Isolar testes do Postgres de dev" foi spawned como tarefa adjacente (não atacada). Causa raiz da contaminação inicial dos 27 modelos `test/*` que originaram tudo.
+5. **Frontend modal não recebe `traceId` via App.tsx** — hook funciona via fallback `planTrace(planId)`. Wire explícito do `trace_id` do SSE seria mais robusto.
+6. **`TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE` está hardcoded em `true`** no compose dev — temporário para debug. Reverter para `${...:-false}` quando observability não for mais necessária.
+7. **Frontend não rebuildado** — mudanças em `useModeling3dTrace.ts`, `api/index.ts`, `ModelingDiagnosticsModal.tsx`, `ModelingPlanCard.tsx`, `types/api.ts` foram aplicadas mas o serviço `web` está parado. Subir com `docker compose ... up -d web` antes de testar UI.
+
+### Validação ao fim da sessão
+
+- `pytest backend/tests/ -q` → **273 verdes + 2 pré-existentes falhando** (test_fusion_bridge, escopo separado)
+- 29 testes novos em `test_modeling_observability.py`
+- Smoke manual: `pwsh scripts/smoke-modeling-trace.ps1` → PASS em todos os passos
+- Caso "modele um prisma" (50×30×100 mm): primeira execução end-to-end bem-sucedida (8/9 steps OK, body real criado no Fusion, exports OK)
+- Caso "porta-figurinhas panini WC 2026": LLM aprendeu paramétrica, expôs schema drift de expressões (resolvido em Fix #10); execução posterior depende dos gaps 1 e 2 acima
+
+### Como continuar
+
+1. **Continuar a caça aos schema drifts do adapter Fusion** (gaps 1 e 2 acima) — mesma metodologia: rodar prompt complexo, ler trace, fixar adapter, repetir.
+2. **Consolidar PR** desta branch (16 commits, ~3.5K linhas) — eventualmente push e abrir PR contra `main`.
+3. **Spawn de tarefas adjacentes**: isolar testes do Postgres, fixar 2 testes de `test_fusion_bridge` pré-existentes.
+
+### Branch e commits
+
+- Branch: `feat/modeling-3d-observability` (worktree em `D:\projects\truths_forge_ai\.claude\worktrees\admiring-mendeleev-689279`)
+- 16 commits semânticos: `8134751` (foundation) até `9473d2b` (Fix #10)
+- Main repo (`D:\projects\truths_forge_ai\`) está com merge dessa branch + commit `60f5119` (WIP pré-existente do planner)
+- Nenhum push remoto feito ainda
+
+---
+
 ## O que a Onda 5 entregou
 
 **Arquivos novos:**
