@@ -328,3 +328,87 @@ def test_llm_timeout_error_is_retryable() -> None:
 def test_llm_invalid_response_error_is_not_retryable() -> None:
     err = LLMInvalidResponseError("malformed JSON")
     assert err.retryable is False
+
+
+# ---------------------------------------------------------------------------
+# Fix #0: executor unwrap inner Fusion result
+# ---------------------------------------------------------------------------
+# Bug observado via trace (porta-figurinhas WC2026): adapter Fusion HTTP
+# devolvia ok=true na camada de transporte mesmo com ok=false interno
+# stringificado em ``message``. Ver _unwrap_inner_fusion_result.
+
+
+def test_unwrap_inner_fusion_result_promotes_inner_failure() -> None:
+    from app.modeling.executor import _unwrap_inner_fusion_result
+
+    output = {
+        "ok": True,
+        "tool_name": "fusion.add_rectangle",
+        "transport": "http",
+        "message": (
+            '{"error_code": "fusion.sketch_not_found", '
+            '"message": "Sketch não encontrado.", '
+            '"ok": false, "retryable": true, "software": "fusion"}'
+        ),
+    }
+    result = _unwrap_inner_fusion_result(output)
+    assert result["ok"] is False
+    assert result["error_code"] == "fusion.sketch_not_found"
+    assert result["message"] == "Sketch não encontrado."
+    assert result["retryable"] is True
+
+
+def test_unwrap_inner_fusion_result_preserves_success() -> None:
+    """Quando o inner indica ok:true, mantém o output como veio."""
+
+    from app.modeling.executor import _unwrap_inner_fusion_result
+
+    output = {
+        "ok": True,
+        "message": '{"ok": true, "sketch_name": "TF_Sketch"}',
+    }
+    result = _unwrap_inner_fusion_result(output)
+    assert result["ok"] is True
+    # Não promove nada porque inner também está ok.
+    assert "error_code" not in result
+
+
+def test_unwrap_inner_fusion_result_idempotent_for_direct_failures() -> None:
+    """Outputs já no formato direto (ok=False externo) não são alterados."""
+
+    from app.modeling.executor import _unwrap_inner_fusion_result
+
+    output = {
+        "ok": False,
+        "error_code": "mcp.stdio_server_error",
+        "message": "stdio falhou",
+    }
+    result = _unwrap_inner_fusion_result(output)
+    assert result is output  # mesma instância — short-circuit
+
+
+def test_unwrap_inner_fusion_result_ignores_non_json_message() -> None:
+    """Mensagens em texto puro não viram parse acidentalmente."""
+
+    from app.modeling.executor import _unwrap_inner_fusion_result
+
+    output = {"ok": True, "message": "tool executou com sucesso"}
+    result = _unwrap_inner_fusion_result(output)
+    assert result["ok"] is True
+
+
+def test_unwrap_inner_fusion_result_captures_traceback() -> None:
+    """Traceback do inner result vai parar em host_details para debug."""
+
+    from app.modeling.executor import _unwrap_inner_fusion_result
+
+    output = {
+        "ok": True,
+        "message": (
+            '{"ok": false, "error_code": "fusion.script_failed", '
+            '"message": "boom", "traceback": "Traceback (most recent call last):..."}'
+        ),
+    }
+    result = _unwrap_inner_fusion_result(output)
+    assert result["ok"] is False
+    assert "inner_traceback" in result["host_details"]

@@ -11,6 +11,7 @@ method and delegates here.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -33,6 +34,76 @@ from app.modeling.artifacts import ModelingArtifactService
 from app.modeling.mcp_client import LocalMCPClient
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.snapshot_service import ModelingSnapshotService
+
+
+def _unwrap_inner_fusion_result(output: dict[str, Any]) -> dict[str, Any]:
+    """Detecta e propaga falhas do adapter Fusion que vinham mascaradas.
+
+    Bug observado via trace (porta-figurinhas WC2026, 11/05/2026): o
+    fusion_adapter HTTP retorna ``ok: true`` na camada de transporte mesmo
+    quando o tool falhou — o ``ok: false`` real fica num **JSON stringificado**
+    dentro de ``output["message"]`` (e duplicado em ``result.message``).
+    O executor antes checava só o ``output["ok"]`` externo e marcava todos os
+    steps como verdes. Resultado: o card do chat mostrava "concluído" para
+    16/16 steps mas o Fusion estava vazio porque 11/16 falharam silenciosamente.
+
+    Esta função detecta o padrão e, quando o inner result indica falha,
+    promove ``error_code``, ``message`` e ``ok: false`` ao nível externo para
+    que ``execute_plan`` consiga decidir corretamente. Idempotente: se o
+    output já está no formato direto (sem stringified inner), retorna sem
+    modificações.
+
+    Não toca em outros transportes (stdio, in_process, mock) — eles já
+    retornam o dict no formato direto.
+    """
+
+    if not isinstance(output, dict):
+        return output
+
+    # Já marcado como falha no nível externo — nada a fazer.
+    if output.get("ok") is False:
+        return output
+
+    message = output.get("message")
+    if not isinstance(message, str):
+        return output
+
+    stripped = message.strip()
+    if not (stripped.startswith("{") and stripped.endswith("}")):
+        return output
+
+    try:
+        inner = json.loads(stripped)
+    except json.JSONDecodeError:
+        return output
+
+    if not isinstance(inner, dict):
+        return output
+    if inner.get("ok") is not False:
+        return output
+
+    # Inner result é uma falha — promove campos ao topo. Preserva o output
+    # original em ``host_details`` para debug e auditoria.
+    promoted = dict(output)
+    promoted["ok"] = False
+    promoted["message"] = inner.get("message") or stripped
+    if inner.get("error_code"):
+        promoted["error_code"] = inner["error_code"]
+    if inner.get("retryable") is not None:
+        promoted["retryable"] = inner["retryable"]
+    if "safe_to_retry_after_snapshot_restore" in inner:
+        promoted["safe_to_retry_after_snapshot_restore"] = inner[
+            "safe_to_retry_after_snapshot_restore"
+        ]
+    if inner.get("traceback"):
+        existing_host_details = (
+            promoted.get("host_details") if isinstance(promoted.get("host_details"), dict) else {}
+        )
+        promoted["host_details"] = {
+            **existing_host_details,
+            "inner_traceback": inner["traceback"],
+        }
+    return promoted
 
 
 def envelope_into_output(
@@ -154,6 +225,9 @@ class ModelingExecutorService:
             started_at = time.perf_counter()
             output = self._dispatch_step(step, plan=plan)
             duration_ms = int((time.perf_counter() - started_at) * 1000)
+            # Fix #0: desempacota inner ``ok: false`` do fusion_adapter HTTP
+            # antes da decisão de sucesso, senão falhas chegam como verdes.
+            output = _unwrap_inner_fusion_result(output)
             output = self.artifacts.register_outputs(output, plan=plan, step=step)
 
             tool_call = self._record_tool_call(
