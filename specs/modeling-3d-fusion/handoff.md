@@ -51,7 +51,7 @@ sem ignores parou na coleta porque o venv atual não tem `alembic`.
 
 ## Onda 7 — Observabilidade do módulo 3D + caça aos schema drifts do adapter Fusion
 
-**Sessão:** 18–19/05/2026, Claude Code. **Branch:** `feat/modeling-3d-observability` (mergeada na `codex/3d-chat-title-required` localmente, sem push). **Plano completo:** `C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md` (não versionado — copiar pro repo se outra sessão precisar).
+**Sessão:** 18–19/05/2026, Claude Code. **Branch:** `feat/modeling-3d-observability` (mergeada na `codex/3d-chat-title-required` localmente, sem push). **Plano completo:** `specs/modeling-3d-fusion/observability-plan.md` (este repo) — descreve a arquitetura de observabilidade que foi implementada (contracts, tracer, endpoints, frontend, containerização, gaps fora de escopo). Cópia local original em `C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md`.
 
 ### Contexto que originou a Onda
 
