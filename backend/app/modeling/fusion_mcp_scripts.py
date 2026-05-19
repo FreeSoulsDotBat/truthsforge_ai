@@ -87,15 +87,27 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _plane_from_ref(design, plane_ref):
+            # Fix #8: LLM as vezes manda planos abstratos que nao sao
+            # construction planes (ex: "InnerFace_Left", "Top",
+            # "front_face_of_body_1"). Esses casos exigem face references
+            # reais, fora do escopo desta iteracao. Para evitar cascata,
+            # fazemos fallback para XY com aviso e emitimos o nome
+            # original no message do tool call (visivel via trace).
             root = _root(design)
             mapping = {{
                 "xy": root.xYConstructionPlane,
                 "yz": root.yZConstructionPlane,
                 "xz": root.xZConstructionPlane,
+                "top": root.xYConstructionPlane,
+                "front": root.xZConstructionPlane,
+                "right": root.yZConstructionPlane,
             }}
-            plane = mapping.get(str(plane_ref or "xy").lower())
+            normalized = str(plane_ref or "xy").lower()
+            plane = mapping.get(normalized)
             if plane is None:
-                raise ToolError("fusion.invalid_plane_ref", "plane_ref inválido. Use xy, yz ou xz.")
+                # Fallback para XY com warning no message — preferivel a
+                # cascade de sketch_not_found em add_rectangle/extrude.
+                return root.xYConstructionPlane
             return plane
 
 
@@ -125,32 +137,81 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # ``sketch_name``/``name`` porque o LLM (planner) emite o
             # primeiro de cada par mas a versão antiga deste script só
             # lia o segundo, descartando silenciosamente o nome do
-            # usuário. Resultado: todo sketch virava "TF_Sketch", e
-            # add_rectangle/extrude_profile subsequentes falhavam com
-            # "fusion.sketch_not_found" ao procurar pelo nome pedido.
-            # Pegado via trace do bug porta-figurinhas WC2026.
+            # usuário.
+            # Fix #8: planos desconhecidos (ex: 'InnerFace_Left') caiam
+            # em XY com warning visivel via trace ao inves de cascade.
             design = _design()
             plane_ref = str(args.get("plane_ref") or args.get("plane") or "xy")
             name = str(args.get("sketch_name") or args.get("name") or "TF_Sketch")
+            _KNOWN_PLANES = ("xy", "yz", "xz", "top", "front", "right")
+            fallback_applied = plane_ref.lower() not in _KNOWN_PLANES
             sketch = _root(design).sketches.add(_plane_from_ref(design, plane_ref))
             sketch.name = name
+            warn_suffix = (
+                " [WARN: plano '{{}}' nao suportado, usei XY como fallback]".format(plane_ref)
+                if fallback_applied
+                else ""
+            )
             return {{
-                "message": "Sketch '{{}}' criado em {{}}.".format(sketch.name, plane_ref),
+                "message": "Sketch '{{}}' criado em {{}}.{{}}".format(
+                    sketch.name, plane_ref, warn_suffix
+                ),
                 "sketch_name": sketch.name,
                 "sketch_token": sketch.entityToken,
+                "plane_fallback_applied": fallback_applied,
             }}
 
 
         def _add_rectangle(args):
-            # Fix #6: aceita tres formatos de entrada que o LLM emite:
+            # Fix #6: aceita formatos do LLM:
             # (a) width_mm + height_mm                (legado/canonico)
             # (b) corner1_mm=[x1,y1] + corner2_mm=[x2,y2]   (dois pontos)
             # (c) size_mm=[w, h]                       (lista shorthand)
-            # Pegado via trace do bug "modele um prisma": LLM mandou
-            # corner1_mm/corner2_mm e o adapter rejeitava com
-            # fusion.invalid_dimensions, cascateando em no_profile no
-            # extrude subsequente.
+            # Fix #9: modo grade quando vier cols + rows + cell_size_mm.
+            # LLM usa esse formato para criar grades de bolsos. Cada
+            # celula vira um retangulo separado no mesmo sketch, com
+            # offset incremental.
             design = _design()
+
+            cols = int(args.get("cols") or 0)
+            rows = int(args.get("rows") or 0)
+            cell_size = args.get("cell_size_mm")
+            if (
+                cols > 0
+                and rows > 0
+                and isinstance(cell_size, (list, tuple))
+                and len(cell_size) >= 2
+            ):
+                cell_w_mm = float(cell_size[0])
+                cell_h_mm = float(cell_size[1])
+                gap_mm = float(args.get("gap_mm") or 0.0)
+                grid_origin = args.get("grid_origin_mm") or [0, 0]
+                origin_x_mm = float(grid_origin[0])
+                origin_y_mm = float(grid_origin[1])
+                sketch = _find_sketch(design, args.get("sketch"))
+                count = 0
+                for row in range(rows):
+                    for col in range(cols):
+                        x0_mm = origin_x_mm + col * (cell_w_mm + gap_mm)
+                        y0_mm = origin_y_mm + row * (cell_h_mm + gap_mm)
+                        p1 = adsk.core.Point3D.create(
+                            x0_mm / 10.0, y0_mm / 10.0, 0
+                        )
+                        p2 = adsk.core.Point3D.create(
+                            (x0_mm + cell_w_mm) / 10.0,
+                            (y0_mm + cell_h_mm) / 10.0,
+                            0,
+                        )
+                        sketch.sketchCurves.sketchLines.addTwoPointRectangle(p1, p2)
+                        count += 1
+                return {{
+                    "message": "Grade {{}}x{{}} ({{}} retangulos {{}}x{{}}mm) adicionada a '{{}}'.".format(
+                        cols, rows, count, cell_w_mm, cell_h_mm, sketch.name
+                    ),
+                    "sketch_name": sketch.name,
+                    "rectangles_added": count,
+                }}
+
             width_mm = float(args.get("width_mm") or 0.0)
             height_mm = float(args.get("height_mm") or 0.0)
 
@@ -320,9 +381,44 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     "applied": applied,
                 }}
 
+            # Fix #1.2: bulk implicito — LLM as vezes manda os parametros
+            # DIRETO como kwargs no args raiz, sem wrapper ``parameters``.
+            # Exemplo de input observado: cols=4, rows=3, sticker_width_mm=46.
+            # Detectamos esse modo pela ausencia de ``name``/``expression``
+            # singulares + presenca de >=2 chaves que parecem nomes de
+            # parametro (valor numerico ou expressao string). Chaves
+            # reservadas (notes, unit, comment) sao ignoradas.
+            # NOTA: nao usar chaves literais em comentarios deste modulo;
+            # ele e um f-string template e isso gera SyntaxError.
+            singular_name = str(args.get("name") or "").strip()
+            singular_expr = str(args.get("expression") or "").strip()
+            if not singular_name and not singular_expr:
+                _RESERVED_KEYS = {{"notes", "unit", "comment", "parameters", "parameters_mm", "params"}}
+                implicit_bulk = {{
+                    k: v
+                    for k, v in args.items()
+                    if k not in _RESERVED_KEYS
+                    and (isinstance(v, (int, float)) or isinstance(v, str))
+                }}
+                if len(implicit_bulk) >= 2:
+                    default_unit = str(args.get("unit") or "mm")
+                    applied = []
+                    for raw_name, raw_value in implicit_bulk.items():
+                        param_name = str(raw_name).strip()
+                        expression = str(raw_value).strip()
+                        unit = _unit_for(param_name, default_unit)
+                        _ensure_param(param_name, expression, unit, "")
+                        applied.append(param_name)
+                    return {{
+                        "message": "{{}} parametro(s) aplicado(s) (bulk implicito): {{}}.".format(
+                            len(applied), ", ".join(applied)
+                        ),
+                        "applied": applied,
+                    }}
+
             # fallback: formato singular legado
-            name = str(args.get("name") or "").strip()
-            expression = str(args.get("expression") or "").strip()
+            name = singular_name
+            expression = singular_expr
             unit = str(args.get("unit") or _unit_for(name, "mm"))
             comment = str(args.get("comment") or "")
             _ensure_param(name, expression, unit, comment)
