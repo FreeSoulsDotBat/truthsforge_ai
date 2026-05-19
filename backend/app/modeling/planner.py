@@ -24,15 +24,19 @@ from app.modeling.tool_registry import PLANNER_TOOLSET
 
 logger = logging.getLogger(__name__)
 
+# PR#27 review: ``_normalize_prompt`` faz NFKD + strip de diacríticos
+# antes do match. Manter ambas as formas (com e sem acento) inflava o
+# score: "paramétrico" e "parametrico" normalizavam para a mesma string
+# e contavam 2 vezes para a mesma palavra. Mantemos só a forma canônica
+# (com acento quando o português a usa); a normalização faz o resto.
+# Asserção defensiva no fim do módulo garante que ninguém volte a
+# duplicar acidentalmente.
 FUSION_HINTS = {
     "paramétrico",
-    "parametrico",
     "tolerância",
-    "tolerancia",
     "encaixe",
     "furo",
     "extrusão",
-    "extrusao",
     "chamfer",
     "chanfro",
     "fillet",
@@ -42,7 +46,6 @@ FUSION_HINTS = {
     "stl",
     "3mf",
     "peça",
-    "peca",
     "suporte",
     "molde",
     "cilindro",
@@ -54,7 +57,6 @@ FUSION_HINTS = {
 }
 BLENDER_HINTS = {
     "orgânico",
-    "organico",
     "escultura",
     "mesh",
     "render",
@@ -114,6 +116,34 @@ def _normalize_prompt(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value.lower())
     ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
     return ascii_text.replace("×", "x")
+
+
+def _assert_hints_dedup_after_normalize(name: str, hints: set[str]) -> None:
+    """Garante que dois hints não colapsam para a mesma forma normalizada.
+
+    Bug pego em PR#27: hints como ``"paramétrico"`` e ``"parametrico"``
+    eram strings distintas no set, mas ``_normalize_prompt`` colapsava
+    ambos para ``"parametrico"``, fazendo o score em ``choose_software``
+    contar 2 pra cada match. Esta asserção roda no import e previne
+    regressão futura silenciosa.
+    """
+
+    normalized_pairs: dict[str, str] = {}
+    for hint in hints:
+        normalized = _normalize_prompt(hint)
+        if normalized in normalized_pairs:
+            raise ValueError(
+                f"{name}: hints '{normalized_pairs[normalized]}' e '{hint}' "
+                f"colapsam para o mesmo valor normalizado '{normalized}'. "
+                "Mantenha apenas a forma canônica (com acento)."
+            )
+        normalized_pairs[normalized] = hint
+
+
+_assert_hints_dedup_after_normalize("FUSION_HINTS", FUSION_HINTS)
+_assert_hints_dedup_after_normalize("BLENDER_HINTS", BLENDER_HINTS)
+_assert_hints_dedup_after_normalize("FUSION_CIRCULAR_HINTS", FUSION_CIRCULAR_HINTS)
+_assert_hints_dedup_after_normalize("FUSION_FLAT_HINTS", FUSION_FLAT_HINTS)
 
 
 def _has_any_hint(prompt: str, hints: set[str]) -> bool:

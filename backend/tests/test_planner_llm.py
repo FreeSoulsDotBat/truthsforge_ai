@@ -399,3 +399,76 @@ def test_plan_records_llm_source_when_gateway_succeeds() -> None:
 
     assert plan.planner_source.value == "llm"
     assert plan.fallback_reason is None
+
+
+# ---------------------------------------------------------------------------
+# PR#27 review: dedup de hints acentuados/não-acentuados
+# ---------------------------------------------------------------------------
+# ``_normalize_prompt`` faz NFKD + strip de diacríticos antes do match.
+# Antes da fix, manter ambas as formas em FUSION_HINTS/BLENDER_HINTS inflava
+# o score: "paramétrico" e "parametrico" contavam 2 vezes para a mesma
+# palavra encontrada no prompt. Os testes abaixo travam essa correção.
+
+
+def test_choose_software_does_not_double_count_normalized_hints() -> None:
+    """PR#27 review: prompt com palavras acentuadas não deve inflar score.
+
+    Antes da fix, prompts contendo as palavras-chave matchavam tanto
+    a versão com acento quanto a sem acento dos hints (ambos no set,
+    ambos normalizados para o mesmo valor). Agora cada palavra do prompt
+    conta apenas uma vez.
+    """
+
+    from app.modeling.planner import FUSION_HINTS, _normalize_prompt, choose_software
+
+    # Prompt com 3 palavras-chave (acentuadas) que batem com hints canônicos.
+    prompt = "peça com tolerância apertada e furo de encaixe"
+    software, _confidence, _rationale = choose_software(prompt, None)
+    assert software == ModelingSoftware.fusion
+
+    # Verificação direta do score (não inflado).
+    normalized = _normalize_prompt(prompt)
+    fusion_score = sum(1 for hint in FUSION_HINTS if _normalize_prompt(hint) in normalized)
+    # Esperado: peça(1) + tolerância(1) + furo(1) + encaixe(1) = 4. Antes
+    # da fix daria 6 porque peça/peca e tolerância/tolerancia contavam
+    # duas vezes cada.
+    assert fusion_score == 4
+
+
+def test_hint_sets_have_no_normalized_collisions() -> None:
+    """A asserção defensiva no import deve impedir duplicatas — este
+    teste documenta o invariante para revisores futuros.
+    """
+
+    from app.modeling.planner import (
+        BLENDER_HINTS,
+        FUSION_CIRCULAR_HINTS,
+        FUSION_FLAT_HINTS,
+        FUSION_HINTS,
+        _normalize_prompt,
+    )
+
+    for name, hints in [
+        ("FUSION_HINTS", FUSION_HINTS),
+        ("BLENDER_HINTS", BLENDER_HINTS),
+        ("FUSION_CIRCULAR_HINTS", FUSION_CIRCULAR_HINTS),
+        ("FUSION_FLAT_HINTS", FUSION_FLAT_HINTS),
+    ]:
+        normalized = [_normalize_prompt(h) for h in hints]
+        assert len(normalized) == len(set(normalized)), (
+            f"{name} tem duplicatas após normalização — mantenha só a "
+            f"forma canônica (com acento se houver)."
+        )
+
+
+def test_blender_score_with_organic_prompt_is_correct() -> None:
+    """Mesmo padrão para BLENDER_HINTS — "orgânico" não deve contar 2."""
+
+    from app.modeling.planner import BLENDER_HINTS, _normalize_prompt
+
+    prompt = "personagem orgânico para render de cena"
+    normalized = _normalize_prompt(prompt)
+    score = sum(1 for hint in BLENDER_HINTS if _normalize_prompt(hint) in normalized)
+    # personagem(1) + orgânico(1) + render(1) + cena(1) = 4. Antes da fix
+    # daria 5 porque organico estava duplicado.
+    assert score == 4

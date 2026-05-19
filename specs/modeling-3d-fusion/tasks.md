@@ -135,6 +135,7 @@ para rascunhos `Novo chat` já criados antes do primeiro envio.
 ### Onda 6 — QA, docs finais e handoff
 
 - [x] [P1] [any] Corrigir fallback heurístico Fusion para variar perfil e medidas pelo prompt (`add_rectangle` para bases/placas, `add_circle` para cilindros/discos) sem sair da allowlist.
+- [x] [P1] [any] PR #27 review: deduplicar `FUSION_HINTS`/`BLENDER_HINTS` após `_normalize_prompt` (NFKD + strip diacríticos). Manter só forma canônica + asserção defensiva no import + 3 testes de regressão em `test_planner_llm.py`.
 - [ ] [P1] [any] Rodar `scripts/quality.ps1` para backend e frontend tocados.
 - [ ] [P1] [any] E2E manual com Blender real: descoberta → plano → aprovação → execução → edição.
 - [ ] [P1] [any] E2E manual com Fusion conectado: mesmo fluxo com `software_preference="fusion"`.
