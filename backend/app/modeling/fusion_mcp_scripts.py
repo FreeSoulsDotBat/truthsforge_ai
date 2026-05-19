@@ -115,9 +115,17 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _create_sketch(args):
+            # Fix #2: aceita aliases ``plane``/``plane_ref`` e
+            # ``sketch_name``/``name`` porque o LLM (planner) emite o
+            # primeiro de cada par mas a versão antiga deste script só
+            # lia o segundo, descartando silenciosamente o nome do
+            # usuário. Resultado: todo sketch virava "TF_Sketch", e
+            # add_rectangle/extrude_profile subsequentes falhavam com
+            # "fusion.sketch_not_found" ao procurar pelo nome pedido.
+            # Pegado via trace do bug porta-figurinhas WC2026.
             design = _design()
-            plane_ref = str(args.get("plane_ref") or "xy")
-            name = str(args.get("name") or "TF_Sketch")
+            plane_ref = str(args.get("plane_ref") or args.get("plane") or "xy")
+            name = str(args.get("sketch_name") or args.get("name") or "TF_Sketch")
             sketch = _root(design).sketches.add(_plane_from_ref(design, plane_ref))
             sketch.name = name
             return {{
