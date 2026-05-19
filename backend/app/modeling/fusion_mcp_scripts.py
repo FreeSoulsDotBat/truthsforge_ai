@@ -111,6 +111,61 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return plane
 
 
+        def _eval_param(value, design, default=None):
+            # Fix #10: resolve valor para mm aceitando 4 formatos:
+            #   (a) int/float       -> assume mm, retorna direto
+            #   (b) "49" / "49.5"  -> parse direto como mm
+            #   (c) "param_name"   -> lookup em userParameters
+            #                         (com prefixo opcional "-" para negar)
+            #   (d) "a + b - c"    -> eval em namespace dos params (mm)
+            #
+            # Fusion API armazena userParameters em cm internamente; multiplicamos
+            # por 10 ao expor em mm. Para expressoes compostas usamos eval com
+            # __builtins__ vazio (sandboxed) e namespace so com nomes/valores
+            # dos parametros do design.
+            if value is None:
+                return default
+            if isinstance(value, (int, float)):
+                return float(value)
+            if not isinstance(value, str):
+                return default
+            s = value.strip()
+            if not s:
+                return default
+            try:
+                return float(s)
+            except ValueError:
+                pass
+            # Lookup simples de parametro (com sinal opcional)
+            simple_token = s.lstrip("-+").strip()
+            if simple_token and all(c.isalnum() or c == "_" for c in simple_token):
+                param = design.userParameters.itemByName(simple_token)
+                if param is not None:
+                    sign = -1.0 if s.startswith("-") else 1.0
+                    return sign * float(param.value) * 10.0
+            # Expressao composta: eval em namespace fechado (sem builtins).
+            namespace = {{}}
+            for i in range(design.userParameters.count):
+                p = design.userParameters.item(i)
+                namespace[p.name] = float(p.value) * 10.0
+            try:
+                return float(eval(s, {{"__builtins__": {{}}}}, namespace))
+            except Exception:
+                return default
+
+
+        def _eval_pair(value_list, design):
+            # Helper para listas tipo origin_mm=[x, y] ou cell_size_mm=[w, h]
+            # cujos elementos podem ser strings paramentricas.
+            if not isinstance(value_list, (list, tuple)) or len(value_list) < 2:
+                return None
+            a = _eval_param(value_list[0], design)
+            b = _eval_param(value_list[1], design)
+            if a is None or b is None:
+                return None
+            return (a, b)
+
+
         def _find_sketch(design, sketch_ref=None):
             sketches = _root(design).sketches
             if not sketch_ref:
@@ -173,21 +228,24 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # offset incremental.
             design = _design()
 
-            cols = int(args.get("cols") or 0)
-            rows = int(args.get("rows") or 0)
-            cell_size = args.get("cell_size_mm")
+            # Fix #10: cols/rows podem vir como nomes de parametro
+            # (ex: "num_rows"). Resolve via _eval_param antes do int().
+            cols_val = _eval_param(args.get("cols") or args.get("columns"), design, 0.0)
+            rows_val = _eval_param(args.get("rows"), design, 0.0)
+            cols = int(cols_val or 0)
+            rows = int(rows_val or 0)
+            cell_pair = _eval_pair(args.get("cell_size_mm"), design)
             if (
                 cols > 0
                 and rows > 0
-                and isinstance(cell_size, (list, tuple))
-                and len(cell_size) >= 2
+                and cell_pair is not None
             ):
-                cell_w_mm = float(cell_size[0])
-                cell_h_mm = float(cell_size[1])
-                gap_mm = float(args.get("gap_mm") or 0.0)
-                grid_origin = args.get("grid_origin_mm") or [0, 0]
-                origin_x_mm = float(grid_origin[0])
-                origin_y_mm = float(grid_origin[1])
+                cell_w_mm, cell_h_mm = cell_pair
+                gap_mm = _eval_param(args.get("gap_mm"), design, 0.0) or 0.0
+                grid_pair = _eval_pair(
+                    args.get("grid_origin_mm") or [0, 0], design
+                ) or (0.0, 0.0)
+                origin_x_mm, origin_y_mm = grid_pair
                 sketch = _find_sketch(design, args.get("sketch"))
                 count = 0
                 for row in range(rows):
@@ -212,31 +270,23 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     "rectangles_added": count,
                 }}
 
-            width_mm = float(args.get("width_mm") or 0.0)
-            height_mm = float(args.get("height_mm") or 0.0)
+            # Fix #10: width_mm/height_mm podem ser expressoes paramentricas.
+            width_mm = _eval_param(args.get("width_mm"), design, 0.0) or 0.0
+            height_mm = _eval_param(args.get("height_mm"), design, 0.0) or 0.0
 
-            corner1 = args.get("corner1_mm") or args.get("point1_mm")
-            corner2 = args.get("corner2_mm") or args.get("point2_mm")
-            if (
-                width_mm <= 0
-                and height_mm <= 0
-                and isinstance(corner1, (list, tuple))
-                and isinstance(corner2, (list, tuple))
-                and len(corner1) >= 2
-                and len(corner2) >= 2
-            ):
-                width_mm = abs(float(corner2[0]) - float(corner1[0]))
-                height_mm = abs(float(corner2[1]) - float(corner1[1]))
+            corner1 = _eval_pair(
+                args.get("corner1_mm") or args.get("point1_mm"), design
+            )
+            corner2 = _eval_pair(
+                args.get("corner2_mm") or args.get("point2_mm"), design
+            )
+            if width_mm <= 0 and height_mm <= 0 and corner1 and corner2:
+                width_mm = abs(corner2[0] - corner1[0])
+                height_mm = abs(corner2[1] - corner1[1])
 
-            size = args.get("size_mm")
-            if (
-                width_mm <= 0
-                and height_mm <= 0
-                and isinstance(size, (list, tuple))
-                and len(size) >= 2
-            ):
-                width_mm = float(size[0])
-                height_mm = float(size[1])
+            size_pair = _eval_pair(args.get("size_mm"), design)
+            if width_mm <= 0 and height_mm <= 0 and size_pair:
+                width_mm, height_mm = size_pair
 
             if width_mm <= 0 or height_mm <= 0:
                 raise ToolError(
@@ -258,15 +308,18 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _add_circle(args):
+            # Fix #10: diameter_mm/center_*_mm podem ser expressoes paramentricas.
             design = _design()
-            diameter_mm = float(args.get("diameter_mm") or 0.0)
+            diameter_mm = _eval_param(args.get("diameter_mm"), design, 0.0) or 0.0
             if diameter_mm <= 0:
                 raise ToolError("fusion.invalid_dimensions", "diameter_mm precisa ser positivo.")
             sketch = _find_sketch(design, args.get("sketch"))
             radius_cm = diameter_mm / 20.0
+            center_x_mm = _eval_param(args.get("center_x_mm"), design, 0.0) or 0.0
+            center_y_mm = _eval_param(args.get("center_y_mm"), design, 0.0) or 0.0
             center = adsk.core.Point3D.create(
-                float(args.get("center_x_mm") or 0.0) / 10.0,
-                float(args.get("center_y_mm") or 0.0) / 10.0,
+                center_x_mm / 10.0,
+                center_y_mm / 10.0,
                 0,
             )
             sketch.sketchCurves.sketchCircles.addByCenterRadius(center, radius_cm)
@@ -277,10 +330,15 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _extrude_profile(args):
+            # Fix #10: distance_mm pode ser expressao paramentrica.
+            # Aceita tambem distancia negativa (para cut em direcao oposta).
             design = _design()
-            distance_mm = float(args.get("distance_mm") or 0.0)
-            if distance_mm <= 0:
-                raise ToolError("fusion.invalid_dimensions", "distance_mm precisa ser positivo.")
+            distance_mm = _eval_param(args.get("distance_mm"), design, 0.0) or 0.0
+            if distance_mm == 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "distance_mm precisa ser diferente de zero.",
+                )
             operation = str(args.get("operation") or "new_body").lower()
             operation_map = {{
                 "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
