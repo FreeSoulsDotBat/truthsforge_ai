@@ -142,13 +142,45 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _add_rectangle(args):
+            # Fix #6: aceita tres formatos de entrada que o LLM emite:
+            # (a) width_mm + height_mm                (legado/canonico)
+            # (b) corner1_mm=[x1,y1] + corner2_mm=[x2,y2]   (dois pontos)
+            # (c) size_mm=[w, h]                       (lista shorthand)
+            # Pegado via trace do bug "modele um prisma": LLM mandou
+            # corner1_mm/corner2_mm e o adapter rejeitava com
+            # fusion.invalid_dimensions, cascateando em no_profile no
+            # extrude subsequente.
             design = _design()
             width_mm = float(args.get("width_mm") or 0.0)
             height_mm = float(args.get("height_mm") or 0.0)
+
+            corner1 = args.get("corner1_mm") or args.get("point1_mm")
+            corner2 = args.get("corner2_mm") or args.get("point2_mm")
+            if (
+                width_mm <= 0
+                and height_mm <= 0
+                and isinstance(corner1, (list, tuple))
+                and isinstance(corner2, (list, tuple))
+                and len(corner1) >= 2
+                and len(corner2) >= 2
+            ):
+                width_mm = abs(float(corner2[0]) - float(corner1[0]))
+                height_mm = abs(float(corner2[1]) - float(corner1[1]))
+
+            size = args.get("size_mm")
+            if (
+                width_mm <= 0
+                and height_mm <= 0
+                and isinstance(size, (list, tuple))
+                and len(size) >= 2
+            ):
+                width_mm = float(size[0])
+                height_mm = float(size[1])
+
             if width_mm <= 0 or height_mm <= 0:
                 raise ToolError(
                     "fusion.invalid_dimensions",
-                    "width_mm e height_mm precisam ser positivos.",
+                    "width_mm/height_mm (ou corner1_mm+corner2_mm, ou size_mm) precisam ser positivos.",
                 )
             sketch = _find_sketch(design, args.get("sketch"))
             width_cm = width_mm / 10.0
