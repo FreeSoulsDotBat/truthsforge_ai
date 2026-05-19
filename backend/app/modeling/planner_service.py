@@ -304,8 +304,16 @@ class ModelingPlannerService:
             "mode": payload.mode.value if payload.mode else None,
         }
         if settings.modeling_debug_llm_trace:
+            # Dump completo do payload do request. ``model_dump`` evita o
+            # erro anterior onde eu tentei acessar ``payload.assumptions``
+            # que existe em ``ModelingPlan`` (saída) mas não em
+            # ``ModelingPlanCreate`` (entrada). Pegado em produção pela
+            # própria observabilidade — fix-by-trace.
+            try:
+                out["payload_dump"] = payload.model_dump(mode="json")
+            except Exception as exc:  # noqa: BLE001 - never crash on debug dump
+                out["payload_dump_error"] = str(exc)
             out["prompt"] = payload.prompt
-            out["assumptions"] = list(payload.assumptions or [])
         else:
             out["prompt_length"] = len(payload.prompt or "")
         return out
