@@ -223,14 +223,14 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
         def _set_parameter(args):
             # Fix #1: aceita dois formatos:
-            # (a) singular legado: {"name": "X", "expression": "10mm", "unit": "mm"}
-            # (b) bulk emitido pelo LLM: {"parameters": {"album_width_mm": 210, ...}}
-            #     onde a unidade é inferida do sufixo do nome (_mm/_cm/_deg) e
-            #     o valor numérico vira ``expression`` como string.
-            # Pegado via trace do bug porta-figurinhas WC2026, onde o LLM
-            # mandava bulk e o adapter rejeitava com "name e expression
-            # obrigatórios", mas o step ficava marcado como ok por causa
-            # do bug do executor (corrigido no fix #0).
+            # (a) singular legado:  name='X', expression='10mm', unit='mm'
+            # (b) bulk emitido pelo LLM:  parameters dict mapping
+            #     param_name -> value (ex: album_width_mm -> 210).
+            #     A unidade e inferida do sufixo do nome (_mm/_cm/_deg) e o
+            #     valor numerico vira ``expression`` como string.
+            # Pegado via trace do bug porta-figurinhas WC2026. Comentarios
+            # sem chaves literais porque este modulo inteiro e um f-string
+            # template e qualquer ``X`` cru e interpretado como expressao.
             design = _design()
 
             def _unit_for(param_name, default_unit):

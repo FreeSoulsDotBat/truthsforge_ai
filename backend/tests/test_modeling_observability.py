@@ -397,6 +397,52 @@ def test_unwrap_inner_fusion_result_ignores_non_json_message() -> None:
     assert result["ok"] is True
 
 
+def test_fusion_script_template_compiles_for_every_tool() -> None:
+    """O template f-string de fusion_mcp_scripts é fonte de bugs sutis.
+
+    Cada literal ``{`` no template precisa ser ``{{`` ou Python interpreta
+    como interpolação. Bug real introduzido em comentário do _set_parameter
+    (Fix #1): `# (a) singular legado: {"name": "X", "expression": "10mm"}`
+    fazia o script renderizado falhar em runtime com::
+
+        Invalid format specifier ' "X", "expression": "10mm"' for object
+        of type 'str'
+
+    Este teste compila o script para todos os tools allowlistados e falha
+    se algum não é Python sintaticamente válido. Não exercita o adapter
+    real, só o gerador de scripts.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+
+    # Args que cobrem tipos primários: string, int, float, bool, dict aninhado.
+    sample_args = {
+        "name": "MyDesign",
+        "binary": True,
+        "thickness_mm": 2.5,
+        "parameters": {"album_width_mm": 210, "spine_width_mm": 30},
+        "sketch": "CoverSketch",
+        "plane": "XY",
+        "operation": "new_body",
+    }
+
+    for tool_name in FUSION_SCRIPT_TOOLS:
+        script = build_autodesk_fusion_script(tool_name=tool_name, arguments=sample_args)
+        try:
+            ast.parse(script)
+        except SyntaxError as exc:  # pragma: no cover - test failure path
+            raise AssertionError(
+                f"Script para {tool_name} não é Python válido: {exc}\n\n"
+                f"Trecho problemático:\n"
+                f"{script[max(0, (exc.offset or 0) - 100):(exc.offset or 0) + 100]}"
+            ) from exc
+
+
 def test_unwrap_inner_fusion_result_captures_traceback() -> None:
     """Traceback do inner result vai parar em host_details para debug."""
 
