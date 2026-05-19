@@ -134,6 +134,7 @@ para rascunhos `Novo chat` já criados antes do primeiro envio.
 
 ### Onda 6 — QA, docs finais e handoff
 
+- [x] [P1] [any] Corrigir fallback heurístico Fusion para variar perfil e medidas pelo prompt (`add_rectangle` para bases/placas, `add_circle` para cilindros/discos) sem sair da allowlist.
 - [ ] [P1] [any] Rodar `scripts/quality.ps1` para backend e frontend tocados.
 - [ ] [P1] [any] E2E manual com Blender real: descoberta → plano → aprovação → execução → edição.
 - [ ] [P1] [any] E2E manual com Fusion conectado: mesmo fluxo com `software_preference="fusion"`.

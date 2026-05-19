@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi.testclient import TestClient
-
 from app.core.contracts import (
     KnowledgeBase,
     ModelCapability,
@@ -16,7 +14,6 @@ from app.core.contracts import (
     ProviderName,
 )
 from app.llm_gateway.providers import ProviderExecutionError
-from app.main import app
 from app.modeling.planner import (
     EXECUTION_PLAN_SCHEMA,
     PLANNER_TOOLSET,
@@ -220,9 +217,41 @@ def test_service_falls_back_to_heuristic_when_gateway_raises() -> None:
     assert matching is not None
     assert len(plan_dict["steps"]) == 3
     assert plan_dict["steps"][0]["tool_name"] == "blender.create_mesh_primitive"
-    assert all(
-        step["tool_name"] != "project_store.create_snapshot" for step in plan_dict["steps"]
+    assert all(step["tool_name"] != "project_store.create_snapshot" for step in plan_dict["steps"])
+
+
+def test_heuristic_fusion_plan_uses_prompt_dimensions_for_rectangle() -> None:
+    payload = ModelingPlanCreate(
+        prompt="crie uma base retangular 80x40x12 mm para suporte",
+        software_override=ModelingSoftware.fusion,
     )
+
+    plan = create_heuristic_plan(payload)
+    rectangle = next(step for step in plan.steps if step.tool_name == "fusion.add_rectangle")
+    extrude = next(step for step in plan.steps if step.tool_name == "fusion.extrude_profile")
+    export = next(step for step in plan.steps if step.tool_name == "fusion.export_stl")
+
+    assert plan.software_choice == ModelingSoftware.fusion
+    assert rectangle.input_json["width_mm"] == 80
+    assert rectangle.input_json["height_mm"] == 40
+    assert extrude.input_json["distance_mm"] == 12
+    assert export.input_json["target"] == "tf-fusion-retangular.stl"
+
+
+def test_heuristic_fusion_plan_uses_circle_for_cylindrical_prompt() -> None:
+    payload = ModelingPlanCreate(
+        prompt="faça um cilindro com diâmetro 30 mm e altura 50 mm no Fusion",
+    )
+
+    plan = create_heuristic_plan(payload)
+    tools = [step.tool_name for step in plan.steps]
+    circle = next(step for step in plan.steps if step.tool_name == "fusion.add_circle")
+    extrude = next(step for step in plan.steps if step.tool_name == "fusion.extrude_profile")
+
+    assert "fusion.add_circle" in tools
+    assert "fusion.add_rectangle" not in tools
+    assert circle.input_json["diameter_mm"] == 30
+    assert extrude.input_json["distance_mm"] == 50
 
 
 def test_service_uses_llm_plan_when_gateway_returns_valid_payload() -> None:
