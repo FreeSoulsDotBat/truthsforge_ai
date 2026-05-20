@@ -177,3 +177,13 @@ priorizadas por valor/custo. Aguardando priorização do dono do produto.
 - [x] [P2] [any] **G1.2** — sketch dimensions paramétricas em add_rectangle (single) e add_circle, de forma SEGURA: geometria desenhada primeiro (bakeada), dimension amarrada ao param em try/except — se falhar/over-constrain, mantém bakeado (zero regressão no extrude). Branch `feat/fusion-g1.2-sketch-params`. Validar com Fusion real (sketchDimensions API). Grid de retângulos e primitivas ficam baked por ora.
 - [x] [P2] [any] **G3 (parcial)** — `add_ellipse`, `add_slot` (sketch), `split_body` (por plano) na branch `feat/fusion-gaps-onda9-rest`; `hole` v2 com `type=counterbore` na branch `feat/fusion-g1.2-sketch-params`. Restante do long-tail (hole countersink/tapped, draft, rib, thicken, fillet variável, chamfer 2-distâncias) sob demanda — exigem revolve/face-refs frágeis sem Fusion real.
 - [x] [P3] [any] **G4** (epic) — DECIDIDO 2026-05-20: **Opção A (manter single-body)**. Ver `g4-assemblies-decision.md`. Sem componentes/juntas/materiais; reavaliar só com demanda real de montagem. G4 sai do roadmap ativo.
+
+### Schema drift — sintaxe de expressão paramétrica (placa, 20/05)
+
+Trace `mt_019e46942241` (placa 80x60x5mm com furo central, parametrizada).
+Branch `fix/fusion-param-expression-syntax`. Detalhe no `handoff.md`.
+
+- [x] [P1] [any] `set_parameter` aceita `value_mm`/`value`/`value_cm`/`value_deg` como alias de `expression` (LLM emite `{name, value_mm}`).
+- [x] [P1] [any] `add_rectangle`/`add_circle`/`extrude_profile` aceitam chaves sem sufixo (`width`/`height`/`radius`/`diameter`/`distance`) mapeadas para as canônicas `_mm`.
+- [x] [P1] [any] `_eval_param`/`_param_value_input`/`_param_name_or_none` removem o `=` líder da sintaxe de expressão do Fusion (`=plate_width`, `=hole_diameter/2`) — nome puro vira vínculo paramétrico, expressão composta é bakeada.
+- [x] [P1] [any] Teste `test_schema_drift_param_expression_syntax` + suíte (63 passam). Falta validação manual com Fusion real.

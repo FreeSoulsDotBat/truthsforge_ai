@@ -28,6 +28,34 @@ PR/merge.
 | 8C — Features (fillet/chamfer/shell/hole)            | em PR                | —                    | branch `feat/fusion-features-onda-c`  |
 | 8D-F — Replicação/sweeps/modificação direta          | em PR                | —                    | branch `feat/fusion-onda-def`         |
 
+### Schema drift sintaxe de expressão (placa parametrizada, 20/05) — branch `fix/fusion-param-expression-syntax`
+
+Trace `mt_019e46942241` (prompt "placa 80x60mm espessura 5mm com furo
+central de 10mm, tudo parametrizado"). O LLM produziu plano paramétrico de
+13 steps mas a maioria falhou no parsing de args com 3 drifts novos — todos
+de **sintaxe de expressão paramétrica do Fusion**:
+
+- **set_parameter**: o LLM emite o valor em `value_mm` (ou `value`/`value_cm`/
+  `value_deg`) em vez de `expression` (ex: `{name:"plate_width", value_mm:80}`).
+  Steps davam `name e expression são obrigatórios`. **Fix:** no caminho
+  singular, aceitar `value_mm`/`value`/... como alias de `expression`, com a
+  unidade inferida do sufixo do alias.
+- **chaves dimensionais sem sufixo**: `add_rectangle` recebia `width`/`height`,
+  `add_circle` recebia `radius`/`diameter`, `extrude_profile` recebia
+  `distance` (sem `_mm`). **Fix:** normalização no topo de cada função mapeia
+  o alias sem sufixo para a chave canônica `_mm` (cobre valor + amarração G1.2).
+- **`=` líder (sintaxe da barra de parâmetros do Fusion)**: o LLM manda
+  `"=plate_width"`, `"=thickness"`, `"=hole_diameter/2"`. **Fix:** `_eval_param`,
+  `_param_value_input` e `_param_name_or_none` removem o `=` líder antes de
+  resolver — nome puro vira vínculo paramétrico (G1.1/G1.2), expressão composta
+  é bakeada.
+
+Observabilidade funcionou de novo: o 1º trace (`mt_019e469343b9`) caiu por
+erro de rede da OpenAI (`Server disconnected`) e fez fallback heurístico
+corretamente; o 2º obteve plano LLM e expôs exatamente estes drifts.
+
+Teste: `test_schema_drift_param_expression_syntax`.
+
 ### Schema drift G5 (teste real da bola, 20/05) — branch `fix/fusion-schema-drift-arc-line-sketch`
 
 Trace `mt_019e45f8c20e_0bbd73d75b34eacc` (bola via revolve manual) expôs

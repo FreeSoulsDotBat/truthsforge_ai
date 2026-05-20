@@ -157,6 +157,11 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if not isinstance(value, str):
                 return default
             s = value.strip()
+            # Sintaxe de expressao do Fusion: o LLM as vezes prefixa "=" como
+            # na barra de parametros ("=plate_width", "=hole_diameter/2").
+            # Removemos o "=" lider; o restante e nome de param ou expressao.
+            if s.startswith("="):
+                s = s[1:].strip()
             if not s:
                 return default
             try:
@@ -202,10 +207,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # (cm). Expressoes compostas sao bakeadas para evitar ambiguidade
             # de unidade do createByString. Retorna None se nao resolver.
             if isinstance(arg, str):
-                token = arg.strip().lstrip("-+").strip()
+                expr = arg.strip()
+                if expr.startswith("="):
+                    expr = expr[1:].strip()
+                token = expr.lstrip("-+").strip()
                 if token and all(c.isalnum() or c == "_" for c in token):
                     if design.userParameters.itemByName(token) is not None:
-                        return adsk.core.ValueInput.createByString(arg.strip())
+                        return adsk.core.ValueInput.createByString(expr)
             mm = _eval_param(arg, design)
             if mm is None:
                 return None
@@ -219,6 +227,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if not isinstance(arg, str):
                 return None
             token = arg.strip()
+            if token.startswith("="):
+                token = token[1:].strip()
             if token and all(c.isalnum() or c == "_" for c in token):
                 if design.userParameters.itemByName(token) is not None:
                     return token
@@ -541,6 +551,15 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # offset incremental.
             design = _design()
 
+            # Drift do trace placa-parametrizada: o LLM emite chaves sem
+            # sufixo (width/height) com sintaxe de expressao do Fusion
+            # ("=plate_width"). Mapeamos para as chaves canonicas _mm;
+            # _eval_param/_param_name_or_none ja lidam com o "=" lider.
+            args = dict(args)
+            for _canon, _alias in (("width_mm", "width"), ("height_mm", "height")):
+                if args.get(_canon) is None and args.get(_alias) is not None:
+                    args[_canon] = args[_alias]
+
             # Fix #10: cols/rows podem vir como nomes de parametro
             # (ex: "num_rows"). Resolve via _eval_param antes do int().
             cols_val = _eval_param(args.get("cols") or args.get("columns"), design, 0.0)
@@ -661,6 +680,14 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Onda A quick fix: aceita aliases circle_diameter_mm e radius_mm
             # (LLM varia o nome do campo). center_mm=[x,y] como lista tambem.
             design = _design()
+
+            # Drift do trace placa-parametrizada: chaves sem sufixo
+            # (radius/diameter) com sintaxe de expressao ("=hole_diameter/2").
+            args = dict(args)
+            for _canon, _alias in (("diameter_mm", "diameter"), ("radius_mm", "radius")):
+                if args.get(_canon) is None and args.get(_alias) is not None:
+                    args[_canon] = args[_alias]
+
             diameter_mm = _eval_param(
                 args.get("diameter_mm") or args.get("circle_diameter_mm"), design, 0.0
             ) or 0.0
@@ -724,6 +751,14 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Fix #10: distance_mm pode ser expressao paramentrica.
             # Aceita tambem distancia negativa (para cut em direcao oposta).
             design = _design()
+
+            # Drift do trace placa-parametrizada: chave sem sufixo (distance)
+            # com sintaxe de expressao do Fusion ("=thickness").
+            args = dict(args)
+            for _canon, _alias in (("distance_mm", "distance"),):
+                if args.get(_canon) is None and args.get(_alias) is not None:
+                    args[_canon] = args[_alias]
+
             distance_mm = _eval_param(args.get("distance_mm"), design, 0.0) or 0.0
             if distance_mm == 0:
                 raise ToolError(
@@ -1973,7 +2008,24 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # fallback: formato singular legado
             name = singular_name
             expression = singular_expr
-            unit = str(args.get("unit") or _unit_for(name, "mm"))
+            # Drift do trace placa-parametrizada: o LLM emite o valor em
+            # ``value_mm``/``value`` em vez de ``expression`` (ex:
+            # name='plate_width', value_mm=80). Aceitamos esses aliases e
+            # inferimos a unidade do sufixo do alias quando presente.
+            alias_unit = None
+            if not expression:
+                for alias_key, alias_unit_hint in (
+                    ("value_mm", "mm"),
+                    ("value_cm", "cm"),
+                    ("value_deg", "deg"),
+                    ("value_rad", "rad"),
+                    ("value", None),
+                ):
+                    if args.get(alias_key) is not None:
+                        expression = str(args.get(alias_key)).strip()
+                        alias_unit = alias_unit_hint
+                        break
+            unit = str(args.get("unit") or alias_unit or _unit_for(name, "mm"))
             comment = str(args.get("comment") or "")
             _ensure_param(name, expression, unit, comment)
             return {{"message": "Parâmetro '{{}}' = {{}}.".format(name, expression)}}

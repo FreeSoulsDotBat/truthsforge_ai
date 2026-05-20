@@ -933,6 +933,38 @@ def test_add_circle_accepts_aliases() -> None:
         ast.parse(script)
 
 
+def test_schema_drift_param_expression_syntax() -> None:
+    """Drift do trace placa-parametrizada (mt_019e46942241): o LLM emite
+    valores em ``value_mm`` no set_parameter, chaves dimensionais sem sufixo
+    (width/height/radius/distance) e sintaxe de expressao do Fusion com "="
+    lider (=plate_width, =thickness, =hole_diameter/2). Os scripts devem
+    compilar com cada um desses formatos.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        # set_parameter com value_mm em vez de expression
+        "fusion.set_parameter": {"name": "plate_width", "value_mm": 80},
+        # add_rectangle com chaves sem sufixo + =param
+        "fusion.add_rectangle": {
+            "width": "=plate_width",
+            "height": "=plate_height",
+            "centered": True,
+        },
+        # extrude_profile com distance sem sufixo + =param
+        "fusion.extrude_profile": {"sketch": "s", "distance": "=thickness"},
+        # add_circle com radius sem sufixo + =expressao composta
+        "fusion.add_circle": {"sketch": "s", "radius": "=hole_diameter/2"},
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
 def test_unwrap_inner_fusion_result_captures_traceback() -> None:
     """Traceback do inner result vai parar em host_details para debug."""
 
