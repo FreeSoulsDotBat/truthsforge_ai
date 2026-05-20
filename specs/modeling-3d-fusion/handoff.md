@@ -50,6 +50,30 @@ feito um semicírculo completo cruzando o eixo — sólido inválido).
 
 Teste: `test_schema_drift_arc_line_sketch_revolve_aliases`.
 
+### Onda 9 parcial (G1.1 + G2.1 + G5) — branch `feat/fusion-gaps-g1-g2-g5`
+
+Da spec `adapter-gaps-roadmap.md`, entregues as 3 fases de maior alavanca:
+
+- **G1.1 (parametrização real):** helper `_param_value_input(arg, design)`
+  — se `arg` é nome de parâmetro existente, usa `createByString` (cria
+  VÍNCULO; mudar o param depois atualiza a geometria); senão `createByReal`
+  (bakeado). Aplicado em extrude/fillet/chamfer/shell. Resolve a limitação
+  conceitual #1 (modelo era não-editável-por-parâmetro) nas distâncias de
+  feature. **Pendente G1.2**: amarrar dimensões de SKETCH (rectangle/circle)
+  aos params — mais complexo (precisa sketchDimensions).
+- **G2.1 (selectors finos):** arestas `longest`/`shortest`; faces
+  `planar`/`cylindrical`/`largest`/`+x`..`-z` (por normal). Soma aos
+  top/bottom/vertical/horizontal da Onda C. **Pendente**: `near=[x,y,z]`
+  (vai com G2.2 query_geometry).
+- **G5 (robustez por versão):** `chamferFeatures` e `moveFeatures` agora
+  tentam a API antiga (`createInput`) e caem para a nova (`createInput2`
+  + `chamferEdgeSets`/`defineAsFreeMove`) via try/except — cobre versões
+  diferentes do Fusion sem o usuário precisar reportar.
+
+Teste: `test_g1_g2_g5_scripts_compile`. **Pendente da Onda 9:** G1.2,
+G2.2 (`query_geometry` + `near`), G2.3 (feature refs estáveis), G3
+(long-tail de features), G4 (assemblies — **precisa decisão de escopo**).
+
 ### Schema drift 2 (2o teste da bola, 20/05) — branch `fix/fusion-pattern-shell-aliases`
 
 MARCO: `add_sphere` funcionou, esfera materializou pela 1a vez (8/9 steps

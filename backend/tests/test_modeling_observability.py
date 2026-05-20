@@ -826,6 +826,34 @@ def test_pattern_shell_accept_llm_aliases() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_g1_g2_g5_scripts_compile() -> None:
+    """G1.1 (parametrização), G2.1 (selectors finos), G5 (fallback de API):
+    os scripts precisam compilar com args que exercitam os novos caminhos —
+    distâncias como nome de parâmetro, selectors de orientação/tamanho.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        # G1.1: distancia como referencia a parametro (vinculo)
+        "fusion.extrude_profile": {"sketch": "s", "distance_mm": "height_mm"},
+        "fusion.fillet_edges": {"radius_mm": "edge_radius_mm", "edge_selector": "longest"},
+        "fusion.chamfer_edges": {"distance_mm": 2, "edge_selector": "top"},
+        "fusion.shell_body": {"thickness_mm": "wall_mm", "open_faces": "+z"},
+        # G2.1: selectors finos
+        "fusion.hole": {"diameter_mm": 5, "position_mm": [0, 0]},
+        # G5: move/scale com fallback de versao
+        "fusion.move_body": {"body_name": "Body1", "translation_mm": [10, 0, 5]},
+        "fusion.scale_body": {"body_name": "Body1", "factor": 2},
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
 def test_add_circle_accepts_aliases() -> None:
     """Quick fix: add_circle aceita circle_diameter_mm e radius_mm além de
     diameter_mm. Verifica que o script compila com cada alias.

@@ -168,9 +168,9 @@ para exigir geometria explícita antes de extrude/revolve (vai junto com A).
 Spec completa: `specs/modeling-3d-fusion/adapter-gaps-roadmap.md`. Fases
 priorizadas por valor/custo. Aguardando priorização do dono do produto.
 
-- [ ] [P0] [any] **G1.1** — parametrização de distâncias de feature: helper `_param_value_input` (createByString quando arg é referência a parâmetro/expressão) em extrude/revolve/fillet/chamfer/shell/hole/primitivas. Modelo passa a ser editável-por-parâmetro nas distâncias.
-- [ ] [P1] [any] **G5** (contínuo) — validação real das ondas C-F no Fusion + fallback `createInput2`/`createInput` por versão; bateria por tool no `smoke-modeling-trace.ps1`.
-- [ ] [P1] [any] **G2.1** — mais selectors semânticos (orientação ±x/±y/±z, tipo planar/cylindrical, tamanho, posição `near`).
+- [x] [P0] [any] **G1.1** — parametrização de distâncias de feature: helper `_param_value_input` (createByString quando arg é nome de parâmetro existente → vínculo; createByReal quando número). Aplicado em extrude/fillet/chamfer/shell. Branch `feat/fusion-gaps-g1-g2-g5`. (revolve angle e primitivas ficam para quando G1.2 amarrar sketch dims; hole depth bakeado por causa da negação.)
+- [x] [P1] [any] **G5** — fallback `createInput2`/`createInput` por versão em chamfer e move (APIs deprecadas). Branch `feat/fusion-gaps-g1-g2-g5`. Validação real contínua conforme testes do usuário.
+- [x] [P1] [any] **G2.1** — selectors finos: arestas `longest`/`shortest`; faces `planar`/`cylindrical`/`largest`/`+x..-z` (orientação da normal), além de top/bottom. Branch `feat/fusion-gaps-g1-g2-g5`. (posição `near=[x,y,z]` fica para G2.2 junto com query_geometry.)
 - [ ] [P1] [any] **G2.2** — tool read-only `fusion.query_geometry` (lista faces/arestas/bodies com id estável) + fluxo query→select no prompt.
 - [ ] [P2] [any] **G1.2** — dimensões de sketch amarradas a parâmetros (add_rectangle/add_circle primeiro).
 - [ ] [P2] [any] **G2.3** — referência estável a features (`result_name` + `feature_ref` em pattern/mirror). Resolve drift de identidade.

@@ -189,6 +189,25 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return (a, b)
 
 
+        def _param_value_input(arg, design):
+            # G1.1: retorna um ValueInput para uma distancia linear (mm).
+            # Se ``arg`` e um NOME de parametro existente (ex: "Diameter_mm",
+            # "-wall_thickness_mm"), usa createByString -> cria VINCULO
+            # parametrico (mudar o parametro depois atualiza a geometria).
+            # Senao, resolve para numero via _eval_param e usa createByReal
+            # (cm). Expressoes compostas sao bakeadas para evitar ambiguidade
+            # de unidade do createByString. Retorna None se nao resolver.
+            if isinstance(arg, str):
+                token = arg.strip().lstrip("-+").strip()
+                if token and all(c.isalnum() or c == "_" for c in token):
+                    if design.userParameters.itemByName(token) is not None:
+                        return adsk.core.ValueInput.createByString(arg.strip())
+            mm = _eval_param(arg, design)
+            if mm is None:
+                return None
+            return adsk.core.ValueInput.createByReal(mm / 10.0)
+
+
         def _find_sketch(design, sketch_ref=None):
             sketches = _root(design).sketches
             if not sketch_ref:
@@ -264,9 +283,89 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return coll
 
 
+        def _select_edges_extra(body, selector, coll):
+            # G2.1: selectors adicionais de aresta — tamanho e posicao.
+            # longest/shortest: a aresta de maior/menor comprimento.
+            # near=<implicito>: tratado fora (precisa de ponto).
+            sel = selector.lower()
+            edges = body.edges
+            if sel in ("longest", "shortest"):
+                best = None
+                best_len = None
+                for i in range(edges.count):
+                    e = edges.item(i)
+                    try:
+                        length = e.length
+                    except Exception:
+                        continue
+                    if best_len is None or (
+                        length > best_len if sel == "longest" else length < best_len
+                    ):
+                        best_len = length
+                        best = e
+                if best is not None:
+                    coll.add(best)
+                return True
+            return False
+
+
+        def _select_edges(body, selector):
+            # Onda C + G2.1: selectors SEMANTICOS (o LLM nao conhece edge
+            # tokens do Fusion). Suportados:
+            #   all / top / bottom / vertical / horizontal (Onda C)
+            #   longest / shortest (G2.1, por comprimento)
+            selector = str(selector or "all").lower()
+            coll = adsk.core.ObjectCollection.create()
+            if _select_edges_extra(body, selector, coll):
+                return coll
+            bbox = body.boundingBox
+            zmin = bbox.minPoint.z
+            zmax = bbox.maxPoint.z
+            tol = max(1e-4, (zmax - zmin) * 0.01)
+            for i in range(body.edges.count):
+                edge = body.edges.item(i)
+                if selector == "all":
+                    coll.add(edge)
+                    continue
+                ez_min, ez_max = _edge_z_range(edge)
+                if selector == "top" and abs(ez_min - zmax) <= tol and abs(ez_max - zmax) <= tol:
+                    coll.add(edge)
+                elif (
+                    selector == "bottom"
+                    and abs(ez_min - zmin) <= tol
+                    and abs(ez_max - zmin) <= tol
+                ):
+                    coll.add(edge)
+                elif selector == "vertical" and (ez_max - ez_min) > tol:
+                    coll.add(edge)
+                elif selector == "horizontal" and (ez_max - ez_min) <= tol:
+                    coll.add(edge)
+            return coll
+
+
+        def _face_normal_axis(face):
+            # G2.1: retorna o eixo dominante da normal da face planar
+            # (+x/-x/+y/-y/+z/-z) ou None se nao for avaliavel.
+            try:
+                evaluator = face.geometry
+                # Plano tem .normal; superficies curvas nao caem aqui.
+                normal = evaluator.normal
+            except Exception:
+                return None
+            comps = [("x", normal.x), ("y", normal.y), ("z", normal.z)]
+            axis, value = max(comps, key=lambda c: abs(c[1]))
+            if abs(value) < 0.7:
+                return None
+            return ("+" if value > 0 else "-") + axis
+
+
         def _select_faces(body, selector):
-            # Onda C: faces semanticas para shell. top/bottom = face planar no
-            # zmax/zmin; none = nenhuma (shell totalmente fechado).
+            # Onda C + G2.1: faces semanticas. Suportados:
+            #   top / bottom (planar no zmax/zmin) — Onda C
+            #   none (nenhuma) — Onda C
+            #   +x/-x/+y/-y/+z/-z (orientacao da normal) — G2.1
+            #   planar / cylindrical (tipo de superficie) — G2.1
+            #   largest (maior area) — G2.1
             selector = str(selector or "top").lower()
             coll = adsk.core.ObjectCollection.create()
             if selector == "none":
@@ -275,9 +374,29 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             zmin = bbox.minPoint.z
             zmax = bbox.maxPoint.z
             tol = max(1e-4, (zmax - zmin) * 0.01)
+
+            if selector == "largest":
+                best = None
+                best_area = None
+                for i in range(body.faces.count):
+                    f = body.faces.item(i)
+                    try:
+                        area = f.area
+                    except Exception:
+                        continue
+                    if best_area is None or area > best_area:
+                        best_area = area
+                        best = f
+                if best is not None:
+                    coll.add(best)
+                return coll
+
             for i in range(body.faces.count):
                 face = body.faces.item(i)
                 fbb = face.boundingBox
+                surface_type = face.geometry.surfaceType
+                is_planar = surface_type == adsk.core.SurfaceTypes.PlaneSurfaceType
+                is_cyl = surface_type == adsk.core.SurfaceTypes.CylinderSurfaceType
                 if (
                     selector == "top"
                     and abs(fbb.minPoint.z - zmax) <= tol
@@ -290,6 +409,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     and abs(fbb.maxPoint.z - zmin) <= tol
                 ):
                     coll.add(face)
+                elif selector == "planar" and is_planar:
+                    coll.add(face)
+                elif selector == "cylindrical" and is_cyl:
+                    coll.add(face)
+                elif selector in ("+x", "-x", "+y", "-y", "+z", "-z"):
+                    if _face_normal_axis(face) == selector:
+                        coll.add(face)
             return coll
 
 
@@ -514,7 +640,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             input_obj = extrudes.createInput(sketch.profiles.item(0), operation_map[operation])
             input_obj.setDistanceExtent(
                 False,
-                adsk.core.ValueInput.createByReal(distance_mm / 10.0),
+                _param_value_input(args.get("distance_mm"), design),
             )
             extrudes.add(input_obj)
             return {{
@@ -907,7 +1033,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             fillets = _root(design).features.filletFeatures
             inp = fillets.createInput()
             inp.addConstantRadiusEdgeSet(
-                edges, adsk.core.ValueInput.createByReal(radius_mm / 10.0), True
+                edges, _param_value_input(args.get("radius_mm"), design), True
             )
             fillets.add(inp)
             return {{
@@ -933,9 +1059,18 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     "Nenhuma aresta correspondeu ao selector '{{}}'.".format(selector),
                 )
             chamfers = _root(design).features.chamferFeatures
-            inp = chamfers.createInput(edges, True)
-            inp.setToEqualDistance(adsk.core.ValueInput.createByReal(distance_mm / 10.0))
-            chamfers.add(inp)
+            dist_vi = _param_value_input(args.get("distance_mm"), design)
+            # G5: a API de chamfer mudou entre versoes. Tenta a forma antiga
+            # (createInput + setToEqualDistance); se nao existir, usa a nova
+            # (createInput2 + chamferEdgeSets).
+            try:
+                inp = chamfers.createInput(edges, True)
+                inp.setToEqualDistance(dist_vi)
+                chamfers.add(inp)
+            except (AttributeError, RuntimeError):
+                inp = chamfers.createInput2()
+                inp.chamferEdgeSets.addEqualDistanceChamferEdgeSet(edges, dist_vi, True)
+                chamfers.add(inp)
             return {{
                 "message": "Chanfro d={{}}mm em {{}} aresta(s) ({{}}) de '{{}}'.".format(
                     distance_mm, edges.count, selector, body.name
@@ -970,7 +1105,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 coll.add(body)
             shells = _root(design).features.shellFeatures
             inp = shells.createInput(coll, False)
-            inp.insideThickness = adsk.core.ValueInput.createByReal(thickness_mm / 10.0)
+            inp.insideThickness = _param_value_input(args.get("thickness_mm"), design)
             shells.add(inp)
             return {{
                 "message": "Shell t={{}}mm (open={{}}) em '{{}}'.".format(
@@ -1336,8 +1471,15 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 tx / 10.0, ty / 10.0, tz / 10.0
             )
             moves = root.features.moveFeatures
-            inp = moves.createInput(coll, transform)
-            moves.add(inp)
+            # G5: moveFeatures.createInput(entities, transform) foi deprecada
+            # em favor de createInput2(entities)+defineAsFreeMove(transform).
+            try:
+                inp = moves.createInput(coll, transform)
+                moves.add(inp)
+            except (AttributeError, RuntimeError, TypeError):
+                inp = moves.createInput2(coll)
+                inp.defineAsFreeMove(transform)
+                moves.add(inp)
             return {{
                 "message": "Body '{{}}' movido ({{}},{{}},{{}})mm.".format(
                     body.name, tx, ty, tz
