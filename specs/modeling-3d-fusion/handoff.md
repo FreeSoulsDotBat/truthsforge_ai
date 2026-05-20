@@ -13,6 +13,27 @@ Refatoração v2 (chat-first integral + título obrigatório). **Onda 5
 concluída localmente** na branch `codex/3d-chat-title-required`; falta
 PR/merge.
 
+### Redesenho do processo 3D (discovery→aprovação→edição) — spec `chat-flow-redesign.md`
+
+Pedido do dono do produto (2026-05-20): (1) agente deve perguntar antes de
+planejar; (2) plano não pode executar sem aprovação; (3) edição não pode
+quebrar/recriar o modelo. Diagnóstico: a maquinaria chat-first
+(`chat_state.py` + `chat_orchestrator.py` + cards no front) já existe, mas a
+rota de chat a ignorava e auto-executava em `safe_auto`. Faseado em P1–P4 na
+spec. **Decisões do dono:** aprovação sempre (primário e edições), com "modo
+fluido" opt-in por chat liberando edições aditivas (P3); discovery pergunta
+só quando ambíguo (limiar); follow-up assume edição por default e pergunta se
+ambíguo (P3 corrige `open_design` que recria `Untitled`).
+
+- **P1 ENTREGUE** (branch `feat/modeling-3d-approval-gate`): rota
+  `chat.py:modeling_events` deixou de auto-executar; força
+  `waiting_approval`, emite o card e PARA; sessão → `planning`. Execução só
+  via `/approve`+`/execute` (card já ligado). Teste
+  `test_chat_stream_proposes_plan_without_executing`. Revisa a ADR-013
+  (fluxo fluido vira opt-in na P3).
+- **P2/P3/P4 pendentes** (discovery agent; edição-vs-novo + fix open_design +
+  modo fluido; edição de plano).
+
 | Onda                                                 | Status               | PR                   | Commits-chave                         |
 | ---------------------------------------------------- | -------------------- | -------------------- | ------------------------------------- |
 | 0 — Specs/docs/ADRs                                  | mergeado             | #19                  | `bf9395a`                             |

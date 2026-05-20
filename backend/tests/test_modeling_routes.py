@@ -169,6 +169,66 @@ def test_modeling_plan_only_draft_does_not_execute_directly(monkeypatch) -> None
     assert "modo planejamento" in execution_payload["events"][0]
 
 
+def _sse_event(text: str, event_name: str) -> dict[str, Any] | None:
+    """Extrai o ``data`` JSON do primeiro bloco SSE com ``event: <name>``."""
+
+    current_event: str | None = None
+    for line in text.splitlines():
+        if line.startswith("event:"):
+            current_event = line[len("event:") :].strip()
+        elif line.startswith("data:") and current_event == event_name:
+            return json.loads(line[len("data:") :].strip())
+    return None
+
+
+def test_chat_stream_proposes_plan_without_executing(monkeypatch) -> None:
+    """P1 (gate de aprovação): a rota /api/chat/stream com modeling_3d
+    ligado deve PROPOR o plano (status waiting_approval) e NÃO executar,
+    mesmo em mode=safe_auto. A execução só acontece via /approve+/execute
+    (acionados pelo card). Regressão da dor "o plano executa sem autorização".
+    Ver specs/modeling-3d-fusion/chat-flow-redesign.md (P1).
+    """
+
+    monkeypatch.setattr(FusionDesktopAdapter, "is_available", lambda self: False)
+    monkeypatch.setattr(settings, "require_chat_title", False)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "Crie uma placa 80x60x5mm com furo central de 10mm.",
+            "title": "Placa parametrizada",
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "safe_auto",
+                "software_override": "fusion",
+            },
+        },
+    )
+    assert response.status_code == 200
+
+    plan_event = _sse_event(response.text, "modeling_plan")
+    assert plan_event is not None, "stream não emitiu evento modeling_plan"
+    plan = plan_event["plan"]
+
+    # Núcleo da P1: parou para aprovação, não executou.
+    assert plan["status"] == "waiting_approval"
+    assert all(step["status"] == "pending" for step in plan["steps"])
+    assert all(step["output_json"] in ({}, None) for step in plan["steps"])
+    # Nenhum runtime status de execução concluída deve aparecer.
+    assert "Execução MCP 3D concluída" not in response.text
+
+    # A sessão ficou no estágio planning (aguardando aprovação), não editing.
+    store = get_store()
+    session = store.get_chat_session(plan_event["plan"]["conversation_id"])
+    assert session.modeling_stage.value == "planning"
+    assert session.modeling_plan_id == plan["id"]
+
+    # O plano persistido também está waiting_approval (card mostra Aprovar).
+    persisted = client.get(f"/api/3d/plans/{plan['id']}").json()
+    assert persisted["status"] == "waiting_approval"
+
+
 def test_modeling_snapshot_records_manifest() -> None:
     client = TestClient(app)
     response = client.post(

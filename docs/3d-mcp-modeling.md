@@ -656,8 +656,10 @@ Alternativa por HTTP (sem SQL), reconstrói a timeline pelo `trace_id`:
 A seção "Modelagem 3D" em Configurações gerais expõe:
 
 - Preferência de software do próximo chat (`auto`, Blender ou Fusion).
-- Aviso do modo fluido allowlistado: adições e alterações normais podem
-  autoexecutar; deleções, ações destrutivas e high-risk exigem aprovação humana.
+- Aviso do modo fluido allowlistado (opt-in por chat, fase P3): quando
+  ativado, adições e alterações normais em EDIÇÕES autoexecutam; o plano
+  primário sempre pede aprovação; deleções, ações destrutivas e high-risk
+  exigem aprovação humana sempre.
 - O status técnico de adapter fica no `ModelingDiagnosticsModal`; valores de
   ambiente como `TRUTHS_FORGE_BLENDER_EXECUTABLE`,
   `TRUTHS_FORGE_FUSION_MCP_URL`, `TRUTHS_FORGE_MCP_TRANSPORT` e timeout seguem
@@ -670,9 +672,18 @@ Resposta textual livre **não** aciona execução. Uma vez aprovado, o plano
 primário cobre todas as etapas, incluindo high-risk. Rejeição (com motivo
 opcional) volta o chat para `discovery` e o agente retoma a conversa.
 
+> **Gate de aprovação (P1, 2026-05-20).** A rota de chat
+> (`chat.py:modeling_events`) **sempre** propõe o plano com
+> `status=waiting_approval` e PARA — nunca auto-executa, nem em `safe_auto`.
+> A execução só ocorre quando o usuário clica em Aprovar (que chama
+> `/plans/{id}/approve` + `/execute`). A sessão fica em `planning` até a
+> aprovação. Ver `specs/modeling-3d-fusion/chat-flow-redesign.md`.
+
 Em edições, mini-planos sem high-risk autoexecutam e renderizam
 `ModelingEditCard` compacto. Se a edição tocar em high-risk, o card retorna a
-pedir aprovação inline.
+pedir aprovação inline. **Nota:** o caminho de edição auto-executável depende
+do "modo fluido" opt-in por chat, ainda **não** entregue (fase P3 da spec
+`chat-flow-redesign.md`); até lá, todo plano para no card.
 
 ## Transporte MCP: in-process vs stdio
 
