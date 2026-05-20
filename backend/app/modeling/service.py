@@ -162,14 +162,16 @@ class ModelingService:
         history: list[dict[str, str]] | None = None,
         software_override: Any = None,
         threshold: float | None = None,
+        has_existing_model: bool = False,
     ) -> ModelingDiscoveryAssessment:
-        """P2 discovery: avalia se o pedido está pronto para planejar."""
+        """P2/P3 discovery: avalia prontidão e intent (edit/new_model)."""
 
         return await self.planner.assess_request_async(
             prompt,
             history=history,
             software_override=software_override,
             threshold=threshold,
+            has_existing_model=has_existing_model,
         )
 
     # ------------------------------------------------------------------

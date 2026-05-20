@@ -242,7 +242,10 @@ def test_chat_stream_asks_clarification_when_ambiguous(monkeypatch) -> None:
     from app.core.contracts import ModelingDiscoveryAssessment
     from app.modeling.service import ModelingService
 
-    async def _fake_assess(self, prompt, *, history=None, software_override=None, threshold=None):
+    async def _fake_assess(
+        self, prompt, *, history=None, software_override=None, threshold=None,
+        has_existing_model=False,
+    ):
         return ModelingDiscoveryAssessment(
             ready_to_plan=False,
             confidence=0.3,
@@ -277,6 +280,129 @@ def test_chat_stream_asks_clarification_when_ambiguous(monkeypatch) -> None:
     session = get_store().get_chat_session(meta["session_id"])
     assert session.modeling_stage.value == "discovery"
     assert session.modeling_plan_id is None
+
+
+def _editing_session(store, **overrides):
+    from app.core.contracts import ChatModelingStage, ChatSession
+
+    session = ChatSession(
+        title=overrides.pop("title", "Chat 3D em edição"),
+        is_modeling_3d=True,
+        modeling_stage=ChatModelingStage.editing,
+        modeling_plan_id=overrides.pop("modeling_plan_id", "m3d_plan_prev"),
+        **overrides,
+    )
+    store.upsert_chat_session(session)
+    return session
+
+
+def _mock_assess(monkeypatch, *, intent: str, ready: bool = True):
+    from app.core.contracts import ModelingDiscoveryAssessment
+    from app.modeling.service import ModelingService
+
+    async def _fake(self, prompt, *, history=None, software_override=None,
+                    threshold=None, has_existing_model=False):
+        return ModelingDiscoveryAssessment(
+            ready_to_plan=ready,
+            confidence=0.95,
+            questions=[] if ready else ["?"],
+            refined_brief=prompt if ready else "",
+            intent=intent,
+            rationale="mock",
+        )
+
+    monkeypatch.setattr(ModelingService, "assess_request_async", _fake)
+
+
+def test_chat_stream_edit_proposes_edit_plan_without_executing(monkeypatch) -> None:
+    """P3: follow-up classificado como edição vira plano kind=edit e PARA no
+    card (modo fluido desligado). Não executa."""
+
+    from app.modeling.blender_adapter import BlenderAdapter
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+    monkeypatch.setattr(settings, "require_chat_title", False)
+    _mock_assess(monkeypatch, intent="edit")
+
+    store = get_store()
+    session = _editing_session(store, modeling_fluid_mode=False)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "arredonde as bordas em 2mm",
+            "title": "Editar peça",
+            "session_id": session.id,
+            "modeling_3d": {"enabled": True, "mode": "safe_auto", "software_override": "blender"},
+        },
+    )
+    assert response.status_code == 200
+    plan_event = _sse_event(response.text, "modeling_plan")
+    assert plan_event is not None
+    plan = plan_event["plan"]
+    assert plan["status"] == "waiting_approval"
+    assert all(step["status"] == "pending" for step in plan["steps"])
+
+    persisted = client.get(f"/api/3d/plans/{plan['id']}").json()
+    assert persisted["kind"] == "edit"
+    assert persisted["parent_plan_id"] == "m3d_plan_prev"
+
+
+def test_chat_stream_ambiguous_intent_asks(monkeypatch) -> None:
+    """P3: quando a intenção edição-vs-novo é ambígua, a rota pergunta e não
+    cria plano."""
+
+    monkeypatch.setattr(settings, "require_chat_title", False)
+    _mock_assess(monkeypatch, intent="ambiguous")
+
+    store = get_store()
+    session = _editing_session(store)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "faz um suporte",
+            "title": "Ambíguo",
+            "session_id": session.id,
+            "modeling_3d": {"enabled": True, "mode": "safe_auto"},
+        },
+    )
+    assert response.status_code == 200
+    assert _sse_event(response.text, "modeling_plan") is None
+    assert "edição do modelo atual" in response.text or "começar" in response.text
+    refreshed = store.get_chat_session(session.id)
+    assert refreshed.modeling_stage.value == "editing"
+
+
+def test_chat_stream_fluid_edit_auto_executes(monkeypatch) -> None:
+    """P3: com modo fluido ligado, edição aditiva sem high-risk auto-executa
+    (pula o card)."""
+
+    from app.modeling.blender_adapter import BlenderAdapter
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+    monkeypatch.setattr(settings, "require_chat_title", False)
+    _mock_assess(monkeypatch, intent="edit")
+
+    store = get_store()
+    session = _editing_session(store, modeling_fluid_mode=True)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "adicione um chanfro de 1mm",
+            "title": "Fluido",
+            "session_id": session.id,
+            "modeling_3d": {"enabled": True, "mode": "safe_auto", "software_override": "blender"},
+        },
+    )
+    assert response.status_code == 200
+    plan_event = _sse_event(response.text, "modeling_plan")
+    assert plan_event is not None
+    assert plan_event["plan"]["status"] == "completed"
 
 
 def test_execute_advances_chat_to_editing(monkeypatch) -> None:

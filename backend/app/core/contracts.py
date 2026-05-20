@@ -911,6 +911,10 @@ class ModelingDiscoveryAssessment(BaseModel):
     questions: list[str] = Field(default_factory=list)
     refined_brief: str = ""
     rationale: str = ""
+    # P3 — edição vs modelo novo. Só é significativo quando já existe um
+    # modelo na conversa. ``edit`` = alterar o modelo atual (default),
+    # ``new_model`` = começar do zero, ``ambiguous`` = backend pergunta.
+    intent: Literal["edit", "new_model", "ambiguous"] = "new_model"
     source: ModelingPlannerSource = ModelingPlannerSource.heuristic
 
 

@@ -41,6 +41,7 @@ DISCOVERY_SCHEMA: dict[str, Any] = {
         "confidence",
         "questions",
         "refined_brief",
+        "intent",
         "rationale",
     ],
     "properties": {
@@ -48,6 +49,7 @@ DISCOVERY_SCHEMA: dict[str, Any] = {
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "questions": {"type": "array", "items": {"type": "string"}},
         "refined_brief": {"type": "string"},
+        "intent": {"type": "string", "enum": ["edit", "new_model", "ambiguous"]},
         "rationale": {"type": "string"},
     },
 }
@@ -78,6 +80,12 @@ _SYSTEM_PROMPT = (
     "COMPLETA em linguagem natural (com dimensões em mm e suposições "
     "explícitas) que será a entrada do planner. Quando false, deixe "
     "refined_brief vazio e preencha questions.\n"
+    "- intent: edição vs modelo novo. Se NÃO existe modelo ainda na conversa, "
+    "use 'new_model'. Se JÁ existe um modelo: use 'edit' quando o pedido pode "
+    "ser uma alteração do modelo atual (ESTE É O DEFAULT — adicionar furo, "
+    "mudar dimensão, arredondar borda...); 'new_model' SÓ quando o usuário "
+    "deixa claro que quer começar do zero/descartar o atual; 'ambiguous' "
+    "quando a frase permite as duas leituras (aí o backend pergunta).\n"
     "- rationale: 1 frase explicando a decisão.\n"
     "Responda APENAS no JSON do schema modeling_discovery_assessment."
 )
@@ -87,6 +95,7 @@ def _build_messages(
     prompt: str,
     history: list[dict[str, str]] | None,
     software_override: ModelingSoftware | None,
+    has_existing_model: bool,
 ) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = [{"role": "system", "content": _SYSTEM_PROMPT}]
     if history:
@@ -95,6 +104,16 @@ def _build_messages(
             content = (item.get("content") or "").strip()
             if role in {"user", "assistant"} and content:
                 messages.append({"role": role, "content": content})
+    if has_existing_model:
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "CONTEXTO: já existe um modelo nesta conversa. Classifique "
+                    "intent (edit/new_model/ambiguous). Default é 'edit'."
+                ),
+            }
+        )
     user_block = prompt.strip()
     if software_override is not None:
         user_block = (
@@ -107,7 +126,7 @@ def _build_messages(
 
 
 def _assessment_from_payload(
-    parsed: dict[str, Any], *, threshold: float
+    parsed: dict[str, Any], *, threshold: float, has_existing_model: bool = False
 ) -> ModelingDiscoveryAssessment:
     ready = bool(parsed.get("ready_to_plan", True))
     try:
@@ -122,6 +141,15 @@ def _assessment_from_payload(
     ]
     refined_brief = (parsed.get("refined_brief") or "").strip()
     rationale = (parsed.get("rationale") or "").strip()
+
+    intent = str(parsed.get("intent") or "").strip().lower()
+    if intent not in {"edit", "new_model", "ambiguous"}:
+        # Sem modelo: é sempre um modelo novo. Com modelo: o default seguro é
+        # tratar como edição (não recriar do zero).
+        intent = "edit" if has_existing_model else "new_model"
+    if not has_existing_model:
+        # intent só importa quando há modelo; força new_model para clareza.
+        intent = "new_model"
 
     # Decisão final: só prossegue quando o LLM diz ready, a confiança bate o
     # limiar E não restaram perguntas. Qualquer pergunta listada força o
@@ -139,6 +167,7 @@ def _assessment_from_payload(
         questions=[] if effective_ready else questions,
         refined_brief=refined_brief if effective_ready else "",
         rationale=rationale,
+        intent=intent,
         source=ModelingPlannerSource.llm,
     )
 
@@ -151,6 +180,7 @@ async def assess_request_async(
     history: list[dict[str, str]] | None = None,
     software_override: ModelingSoftware | None = None,
     threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+    has_existing_model: bool = False,
 ) -> ModelingDiscoveryAssessment:
     """Call the LLM to assess whether ``prompt`` is ready to plan.
 
@@ -158,24 +188,30 @@ async def assess_request_async(
     :func:`heuristic_assessment`.
     """
 
-    messages = _build_messages(prompt, history, software_override)
+    messages = _build_messages(prompt, history, software_override, has_existing_model)
     parsed = await gateway.generate_structured(
         model=model,
         messages=messages,
         schema_name="modeling_discovery_assessment",
         schema=DISCOVERY_SCHEMA,
     )
-    return _assessment_from_payload(parsed, threshold=threshold)
+    return _assessment_from_payload(
+        parsed, threshold=threshold, has_existing_model=has_existing_model
+    )
 
 
 def heuristic_assessment(
-    prompt: str, history: list[dict[str, str]] | None = None
+    prompt: str,
+    history: list[dict[str, str]] | None = None,
+    *,
+    has_existing_model: bool = False,
 ) -> ModelingDiscoveryAssessment:
     """Fallback when no planner model is available.
 
     Conservatively does NOT block the user: returns ready_to_plan=true so the
     flow degrades to "propose plan" (still held by the P1 approval gate). The
-    refined_brief is just the raw prompt.
+    refined_brief is just the raw prompt. Quando já há modelo, assume
+    ``intent=edit`` (default seguro: não recria do zero).
     """
 
     return ModelingDiscoveryAssessment(
@@ -184,6 +220,7 @@ def heuristic_assessment(
         questions=[],
         refined_brief=prompt.strip(),
         rationale="discovery_llm_unavailable",
+        intent="edit" if has_existing_model else "new_model",
         source=ModelingPlannerSource.heuristic,
     )
 

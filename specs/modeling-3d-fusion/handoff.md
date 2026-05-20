@@ -38,8 +38,18 @@ ambíguo (P3 corrige `open_design` que recria `Untitled`).
   (chat fica em `discovery`), ou usa `refined_brief` quando pronto. Flags
   `MODELING_DISCOVERY_ENABLED`/`_THRESHOLD`. Testes em
   `test_modeling_discovery.py` + rota.
-- **P3/P4 pendentes** (edição-vs-novo + fix open_design + modo fluido; edição
-  de plano).
+- **P3 ENTREGUE** (mesma branch): (a) `open_design` reusa o design ativo por
+  padrão (corrige "edição quebra/recria o modelo"; force-new via
+  `new_document`/`reset`); (b) `/execute` avança o chat para `editing`;
+  (c) discovery classifica `intent` edit/new_model/ambiguous (default edit
+  quando há modelo) — ambíguo PERGUNTA, edit vira `kind=edit`, new_model força
+  doc limpo; (d) **modo fluido** opt-in (`modeling_fluid_mode`): edição
+  aditiva sem high-risk auto-executa, default OFF. Testes em
+  `test_modeling_discovery.py` + `test_modeling_routes.py`. **Validação real
+  pendente:** qualidade do delta de edição (precisa do estado do modelo via
+  G2.2) e comportamento de documento do `open_design` — iterar via
+  fix-by-trace no Fusion.
+- **P4 pendente** (editar o plano antes de aprovar: PATCH /plans/{id} + UI).
 
 | Onda                                                 | Status               | PR                   | Commits-chave                         |
 | ---------------------------------------------------- | -------------------- | -------------------- | ------------------------------------- |

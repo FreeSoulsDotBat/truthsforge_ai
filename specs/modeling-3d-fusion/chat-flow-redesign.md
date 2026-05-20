@@ -208,3 +208,35 @@ e destrutivas continuam parando no card.
   cria plano; sessão fica em `discovery`).
 - **Pendente:** UI dedicada para as perguntas é opcional (hoje vão como
   mensagem normal do assistente, que o chat já renderiza). P3/P4 seguem.
+
+### P3 — Edição vs novo + fix open_design + modo fluido ✅ ENTREGUE (2026-05-20)
+
+**P3a (fundação, branch `feat/modeling-3d-approval-gate`):**
+- `open_design` (adapter) agora REUSA o design ativo por padrão; só cria
+  documento novo sem design ativo OU com `new_document`/`reset`/`force_new`.
+  Corrige "edição quebra/recria o modelo".
+- `/plans/{id}/execute` avança o chat 3D para `editing` após execução
+  concluída (helper `_advance_chat_to_editing_after_execute`), para que
+  follow-ups sejam edições.
+- `ChatSession.modeling_fluid_mode` + `ChatModeling3DContext.fluid_mode`.
+
+**P3b (fluxo):**
+- Discovery agent ganhou `intent` (edit/new_model/ambiguous) no schema +
+  prompt; só significativo quando já há modelo. `assess_request_async` recebe
+  `has_existing_model`. Default seguro: com modelo → `edit`; sem → `new_model`.
+- Rota `chat.py`: roda discovery também em `editing`. Se `intent=ambiguous`,
+  PERGUNTA "edição ou novo?" e para. `intent=edit` → plano `kind=edit`
+  (parent = plano atual). `intent=new_model` (com modelo) → força documento
+  limpo (`_force_plan_new_document` marca o open_design com `new_document`).
+- **Modo fluido:** com `modeling_fluid_mode` ligado, edição aditiva SEM
+  high-risk auto-executa (pula o card); plano primário e high-risk/destrutivo
+  SEMPRE param. Default OFF.
+- Testes: intents em `test_modeling_discovery.py`; rota em
+  `test_modeling_routes.py` (edit propõe e para; ambíguo pergunta; fluido
+  auto-executa; execute→editing; open_design compile).
+- **Validação real pendente:** a QUALIDADE do delta de edição depende do
+  planner ver o estado atual do modelo (query_geometry/G2.2) — iterar via
+  fix-by-trace no Fusion real. open_design reuse precisa de validação no
+  Fusion (comportamento de documento ativo).
+
+### Status geral: P1 ✅ · P2 ✅ · P3 ✅ · P4 (editar plano) pendente.

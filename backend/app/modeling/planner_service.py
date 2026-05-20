@@ -139,10 +139,11 @@ class ModelingPlannerService:
         history: list[dict[str, str]] | None = None,
         software_override: Any = None,
         threshold: float | None = None,
+        has_existing_model: bool = False,
     ) -> ModelingDiscoveryAssessment:
-        """P2: avalia se o pedido está pronto para planejar ou precisa de
-        perguntas. Reusa a resolução de modelo + gateway do planner. Em
-        qualquer falha (modelo indisponível ou erro do provider) cai no
+        """P2/P3: avalia se o pedido está pronto para planejar (e, quando já
+        existe modelo, classifica intent edit/new_model/ambiguous). Reusa a
+        resolução de modelo + gateway do planner. Em qualquer falha cai no
         fallback heurístico, que NÃO bloqueia o usuário.
         """
 
@@ -153,7 +154,9 @@ class ModelingPlannerService:
         )
         model = self._resolve_planner_model()
         if model is None:
-            return heuristic_assessment(prompt, history)
+            return heuristic_assessment(
+                prompt, history, has_existing_model=has_existing_model
+            )
         try:
             with self._tracer.record_span(
                 "discovery.assess",
@@ -165,6 +168,7 @@ class ModelingPlannerService:
                     "threshold": effective_threshold,
                     "history_len": len(history or []),
                     "prompt_length": len(prompt or ""),
+                    "has_existing_model": has_existing_model,
                 },
             ) as span:
                 assessment = await assess_discovery_async(
@@ -174,12 +178,14 @@ class ModelingPlannerService:
                     history=history,
                     software_override=software_override,
                     threshold=effective_threshold,
+                    has_existing_model=has_existing_model,
                 )
                 span.attach(
                     {
                         "ready_to_plan": assessment.ready_to_plan,
                         "confidence": assessment.confidence,
                         "question_count": len(assessment.questions),
+                        "intent": assessment.intent,
                     }
                 )
             self._tracer.record(
@@ -195,13 +201,16 @@ class ModelingPlannerService:
                     "ready_to_plan": assessment.ready_to_plan,
                     "confidence": assessment.confidence,
                     "question_count": len(assessment.questions),
+                    "intent": assessment.intent,
                     "threshold": effective_threshold,
                 },
             )
             return assessment
         except Exception as exc:  # noqa: BLE001 - fallback is intentional
             self._classify_and_record_llm_error(exc, model)
-            return heuristic_assessment(prompt, history)
+            return heuristic_assessment(
+                prompt, history, has_existing_model=has_existing_model
+            )
 
     # ------------------------------------------------------------------
     # internals

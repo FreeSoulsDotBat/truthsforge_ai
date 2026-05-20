@@ -73,3 +73,49 @@ def test_heuristic_assessment_never_blocks() -> None:
     assert out.questions == []
     assert out.refined_brief == "uma peça qualquer"
     assert out.source.value == "heuristic"
+    assert out.intent == "new_model"
+
+
+def test_intent_edit_when_model_exists() -> None:
+    parsed = {
+        "ready_to_plan": True,
+        "confidence": 0.9,
+        "questions": [],
+        "refined_brief": "Aumentar a espessura para 8mm.",
+        "intent": "edit",
+        "rationale": "alteração do modelo atual",
+    }
+    out = _assessment_from_payload(parsed, threshold=0.7, has_existing_model=True)
+    assert out.ready_to_plan is True
+    assert out.intent == "edit"
+
+
+def test_intent_ambiguous_preserved_when_model_exists() -> None:
+    parsed = {
+        "ready_to_plan": True,
+        "confidence": 0.9,
+        "questions": [],
+        "refined_brief": "Fazer um suporte.",
+        "intent": "ambiguous",
+        "rationale": "pode ser edição ou novo",
+    }
+    out = _assessment_from_payload(parsed, threshold=0.7, has_existing_model=True)
+    assert out.intent == "ambiguous"
+
+
+def test_intent_forced_new_model_without_existing_model() -> None:
+    parsed = {
+        "ready_to_plan": True,
+        "confidence": 0.9,
+        "questions": [],
+        "refined_brief": "Cubo 20mm.",
+        "intent": "edit",  # LLM errou; sem modelo, deve virar new_model
+        "rationale": "",
+    }
+    out = _assessment_from_payload(parsed, threshold=0.7, has_existing_model=False)
+    assert out.intent == "new_model"
+
+
+def test_heuristic_intent_edit_when_model_exists() -> None:
+    out = heuristic_assessment("adicione um furo", has_existing_model=True)
+    assert out.intent == "edit"
