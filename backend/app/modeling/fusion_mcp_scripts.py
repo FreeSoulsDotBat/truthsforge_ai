@@ -896,7 +896,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             radius_mm = _eval_param(args.get("radius_mm"), design, 0.0) or 0.0
             if radius_mm <= 0:
                 raise ToolError("fusion.invalid_dimensions", "radius_mm precisa ser positivo.")
-            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
             selector = args.get("edge_selector") or args.get("edges") or "all"
             edges = _select_edges(body, selector)
             if edges.count == 0:
@@ -924,7 +924,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             distance_mm = _eval_param(args.get("distance_mm"), design, 0.0) or 0.0
             if distance_mm <= 0:
                 raise ToolError("fusion.invalid_dimensions", "distance_mm precisa ser positivo.")
-            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
             selector = args.get("edge_selector") or args.get("edges") or "all"
             edges = _select_edges(body, selector)
             if edges.count == 0:
@@ -951,8 +951,15 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             thickness_mm = _eval_param(args.get("thickness_mm"), design, 0.0) or 0.0
             if thickness_mm <= 0:
                 raise ToolError("fusion.invalid_dimensions", "thickness_mm precisa ser positivo.")
-            body = _find_body(design, args.get("body_ref") or args.get("body"))
-            open_sel = str(args.get("open_faces") or "top").lower()
+            body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
+            # Schema drift (teste bola): o LLM manda `faces` em vez de
+            # `open_faces`. "all"/"none" => casca fechada (sem face aberta;
+            # abrir "todas" deletaria o corpo, entao tratamos como fechada).
+            open_sel = str(
+                args.get("open_faces") or args.get("faces") or "top"
+            ).lower()
+            if open_sel == "all":
+                open_sel = "none"
             faces = _select_faces(body, open_sel)
             coll = adsk.core.ObjectCollection.create()
             if faces.count > 0:
@@ -985,7 +992,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 raise ToolError("fusion.invalid_dimensions", "diameter_mm precisa ser positivo.")
             depth_mm = _eval_param(args.get("depth_mm"), design, 0.0) or 0.0
             pos = _eval_pair(args.get("position_mm"), design) or (0.0, 0.0)
-            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
             top_faces = _select_faces(body, "top")
             if top_faces.count == 0:
                 raise ToolError(
@@ -1045,9 +1052,23 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
         def _pattern_rectangular(args):
             # Onda D: replica um body em grade retangular ao longo de 2 eixos.
             design = _design()
-            body = _find_body(design, args.get("body_ref") or args.get("body"))
-            count_x = int(_eval_param(args.get("count_x"), design, 1.0) or 1)
-            count_y = int(_eval_param(args.get("count_y"), design, 1.0) or 1)
+            body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
+            count_x = int(
+                _eval_param(
+                    args.get("count_x") or args.get("occurrences_x") or args.get("instances_x"),
+                    design,
+                    1.0,
+                )
+                or 1
+            )
+            count_y = int(
+                _eval_param(
+                    args.get("count_y") or args.get("occurrences_y") or args.get("instances_y"),
+                    design,
+                    1.0,
+                )
+                or 1
+            )
             spacing_x = _eval_param(args.get("spacing_x_mm"), design, 0.0) or 0.0
             spacing_y = _eval_param(args.get("spacing_y_mm"), design, 0.0) or 0.0
             if count_x < 1 or count_y < 1:
@@ -1081,11 +1102,26 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
         def _pattern_circular(args):
             # Onda D: replica um body em torno de um eixo.
             design = _design()
-            body = _find_body(design, args.get("body_ref") or args.get("body"))
-            count = int(_eval_param(args.get("count"), design, 1.0) or 1)
+            body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
+            # Schema drift (teste bola): o LLM manda occurrences/quantity em
+            # vez de count, e angle_deg em vez de total_angle_deg. Sem os
+            # aliases, count defaultava pra 1 (pattern virava no-op).
+            count = int(
+                _eval_param(
+                    args.get("count")
+                    or args.get("occurrences")
+                    or args.get("quantity")
+                    or args.get("instances"),
+                    design,
+                    1.0,
+                )
+                or 1
+            )
             if count < 1:
                 raise ToolError("fusion.invalid_dimensions", "count precisa ser >= 1.")
-            total_angle = _eval_param(args.get("total_angle_deg"), design, 360.0)
+            total_angle = _eval_param(
+                args.get("total_angle_deg") or args.get("angle_deg"), design, 360.0
+            )
             if not total_angle:
                 total_angle = 360.0
             root = _root(design)
@@ -1110,7 +1146,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
         def _mirror_feature(args):
             # Onda D: espelha um body em torno de um plano construtivo.
             design = _design()
-            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
             plane = _plane_from_name(design, args.get("plane") or "xy")
             root = _root(design)
             coll = adsk.core.ObjectCollection.create()
@@ -1277,7 +1313,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
         def _move_body(args):
             # Onda F: translada (e opcionalmente nao rotaciona ainda) um body.
             design = _design()
-            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
             trans = _eval_pair(args.get("translation_mm"), design)
             tx = ty = tz = 0.0
             raw = args.get("translation_mm")
@@ -1313,7 +1349,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
         def _scale_body(args):
             # Onda F: escala uniforme (factor) de um body em torno da origem.
             design = _design()
-            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
             factor = _eval_param(args.get("factor"), design, 0.0) or 0.0
             if factor <= 0:
                 raise ToolError("fusion.invalid_dimensions", "factor precisa ser positivo.")
@@ -1337,7 +1373,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Onda F (destructive): remove um body. Exige aprovacao humana
             # (categoria destructive na policy).
             design = _design()
-            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
             name = body.name
             removes = _root(design).features.removeFeatures
             removes.add(body)

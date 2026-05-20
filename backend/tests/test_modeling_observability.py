@@ -793,6 +793,39 @@ def test_schema_drift_arc_line_sketch_revolve_aliases() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_pattern_shell_accept_llm_aliases() -> None:
+    """Schema drift do 2o teste da bola (20/05): pattern_circular aceita
+    occurrences/quantity + angle_deg; shell_body aceita faces + body_name;
+    tools de body aceitam body_name. Scripts precisam compilar.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        "fusion.pattern_circular": {
+            "body_name": "Body1",
+            "axis": "Z",
+            "angle_deg": 360,
+            "occurrences": 12,
+        },
+        "fusion.pattern_rectangular": {
+            "body_name": "Body1",
+            "occurrences_x": 3,
+            "spacing_x_mm": 20,
+            "occurrences_y": 2,
+            "spacing_y_mm": 15,
+        },
+        "fusion.shell_body": {"body_name": "Body1", "faces": "all", "thickness_mm": 2.5},
+        "fusion.fillet_edges": {"body_name": "Body1", "radius_mm": 2},
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
 def test_add_circle_accepts_aliases() -> None:
     """Quick fix: add_circle aceita circle_diameter_mm e radius_mm além de
     diameter_mm. Verifica que o script compila com cada alias.

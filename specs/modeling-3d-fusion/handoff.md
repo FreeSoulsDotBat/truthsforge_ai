@@ -50,6 +50,29 @@ feito um semicírculo completo cruzando o eixo — sólido inválido).
 
 Teste: `test_schema_drift_arc_line_sketch_revolve_aliases`.
 
+### Schema drift 2 (2o teste da bola, 20/05) — branch `fix/fusion-pattern-shell-aliases`
+
+MARCO: `add_sphere` funcionou, esfera materializou pela 1a vez (8/9 steps
+OK, STL exportado). Mas o resultado foi esfera SÓLIDA com 1 dente de
+pentágono, não bola de futebol. Trace `mt_019e4623c801` expôs:
+
+- **pattern_circular fez 1x**: o LLM manda `occurrences`/`angle_deg`, o
+  tool lia só `count`/`total_angle_deg` → count defaultava 1 (no-op).
+  Fix: aceitar `occurrences`/`quantity`/`instances` + `angle_deg`.
+- **shell_body**: o LLM manda `faces`/`body_name`, o tool lia
+  `open_faces`/`body_ref`. Fix: aceitar `faces` (+ "all"→"none" enclosed)
+  e `body_name`. Esfera fechada ainda falha no shell (limitação do Fusion
+  para sólido sem face plana — esperado).
+- **body_name alias** adicionado nos 10 call sites de `_find_body`.
+
+**Limitação conceitual (não-bug):** o LLM modela "soccer ball" como
+pentágono plano + cut + pattern num plano — geometricamente ingênuo. Um
+icosaedro truncado real precisa de matemática esférica de posicionamento
+de 32 painéis, que o LLM não faz. Nenhum fix de adapter resolve isso;
+seria prompt/estratégia de modelagem ou uma tool dedicada de alto nível.
+
+Teste: `test_pattern_shell_accept_llm_aliases`.
+
 ### Onda 8D-F — pattern/mirror/combine + loft/sweep/plane/spline + move/scale/delete
 
 Branch `feat/fusion-onda-def` (encadeada sobre C→B→A). 11 tools.
