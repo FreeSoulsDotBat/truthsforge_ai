@@ -965,6 +965,32 @@ def test_schema_drift_param_expression_syntax() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_schema_drift_add_box_dimensions_list() -> None:
+    """Drift do trace placa (mt_019e46cf2726): o LLM manda as 3 medidas do
+    box numa lista unica (dimensions_mm=[w,d,h]) com chave extra ``primitive``
+    e ``origin_mm`` como canto, em vez de width_mm/depth_mm/height_mm. O
+    script deve compilar com esse formato.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    for args in (
+        {
+            "name": "PlateBody",
+            "origin_mm": [0, 0, 0],
+            "primitive": "box",
+            "dimensions_mm": [80, 60, 5],
+        },
+        {"size_mm": [10, 20, 30]},
+        {"width_mm": 10, "depth_mm": 20, "height_mm": 30},
+    ):
+        script = build_autodesk_fusion_script(tool_name="fusion.add_box", arguments=args)
+        ast.parse(script)
+        assert 'TOOL_NAME = "fusion.add_box"' in script
+
+
 def test_unwrap_inner_fusion_result_captures_traceback() -> None:
     """Traceback do inner result vai parar em host_details para debug."""
 

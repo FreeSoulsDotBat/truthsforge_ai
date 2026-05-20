@@ -28,6 +28,28 @@ PR/merge.
 | 8C — Features (fillet/chamfer/shell/hole)            | em PR                | —                    | branch `feat/fusion-features-onda-c`  |
 | 8D-F — Replicação/sweeps/modificação direta          | em PR                | —                    | branch `feat/fusion-onda-def`         |
 
+### Schema drift add_box lista de dimensões (placa, 2º teste, 20/05) — branch `fix/fusion-param-expression-syntax`
+
+Trace `mt_019e46cf2726` (re-teste da placa após o fix de sintaxe de
+expressão). Os drifts anteriores sumiram (set_parameter/add_circle OK). O
+LLM gerou plano DIFERENTE (7 steps, `add_box` direto) e expôs 1 drift novo
++ 2 falhas em cascata:
+
+- **add_box** (raiz): o LLM manda as 3 medidas numa lista única
+  `dimensions_mm:[80,60,5]` (+ chave extra `primitive:"box"` e
+  `origin_mm:[0,0,0]` como CANTO), não `width_mm`/`depth_mm`/`height_mm`.
+  Step falhava com `... precisam ser positivos`. **Fix:** aceitar
+  `dimensions_mm`/`size_mm`/`dimensions`/`size` como lista [w,d,h]; tratar
+  `origin_mm` como canto inferior (senão `center_mm` centraliza). Isso também
+  alinha a semântica: o LLM põe o furo em `[40,30]` = centro de uma placa
+  0..80×0..60 ancorada no canto.
+- **extrude_profile cut** (step 5) e **export_stl** (step 7) falharam em
+  CASCATA — sem body (add_box falhou), o cut não tinha alvo e o STL achou o
+  design vazio. Devem resolver sozinhos com o add_box corrigido; se o cut
+  coincidente (5mm através de 5mm) falhar, próximo passo é honrar `through_all`.
+
+Teste: `test_schema_drift_add_box_dimensions_list`.
+
 ### Schema drift sintaxe de expressão (placa parametrizada, 20/05) — branch `fix/fusion-param-expression-syntax`
 
 Trace `mt_019e46942241` (prompt "placa 80x60mm espessura 5mm com furo

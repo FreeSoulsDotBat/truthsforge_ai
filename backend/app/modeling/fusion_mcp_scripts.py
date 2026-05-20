@@ -1083,21 +1083,47 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             w = _eval_param(args.get("width_mm"), design, 0.0) or 0.0
             d = _eval_param(args.get("depth_mm"), design, 0.0) or 0.0
             h = _eval_param(args.get("height_mm"), design, 0.0) or 0.0
+            # Drift do trace placa (mt_019e46cf2726): o LLM manda as 3 medidas
+            # numa lista unica ``dimensions_mm``/``size_mm``/``dimensions``
+            # [w, d, h] em vez das chaves separadas. Resolve elemento a elemento
+            # (cada um pode ser numero ou expressao parametrica).
+            if w <= 0 and d <= 0 and h <= 0:
+                dims = (
+                    args.get("dimensions_mm")
+                    or args.get("size_mm")
+                    or args.get("dimensions")
+                    or args.get("size")
+                )
+                if isinstance(dims, (list, tuple)) and len(dims) >= 3:
+                    w = _eval_param(dims[0], design, 0.0) or 0.0
+                    d = _eval_param(dims[1], design, 0.0) or 0.0
+                    h = _eval_param(dims[2], design, 0.0) or 0.0
             if w <= 0 or d <= 0 or h <= 0:
                 raise ToolError(
                     "fusion.invalid_dimensions",
-                    "width_mm, depth_mm e height_mm precisam ser positivos.",
+                    "width_mm, depth_mm e height_mm (ou dimensions_mm=[w,d,h]) "
+                    "precisam ser positivos.",
                 )
-            center = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
             root = _root(design)
             sketch = root.sketches.add(root.xYConstructionPlane)
             sketch.name = _unique_sketch_name(design, str(args.get("name") or "Box"))
-            cx_cm = center[0] / 10.0
-            cy_cm = center[1] / 10.0
             w_cm = w / 10.0
             d_cm = d / 10.0
-            p1 = adsk.core.Point3D.create(cx_cm - w_cm / 2, cy_cm - d_cm / 2, 0)
-            p2 = adsk.core.Point3D.create(cx_cm + w_cm / 2, cy_cm + d_cm / 2, 0)
+            # Posicionamento: ``origin_mm`` trata o ponto como CANTO inferior
+            # (modelo mental do LLM: origem no canto, furos referenciados a
+            # partir dela); ``center_mm`` (ou ausencia) CENTRALIZA no ponto.
+            origin = _eval_pair(args.get("origin_mm"), design)
+            if origin is not None:
+                ox_cm = origin[0] / 10.0
+                oy_cm = origin[1] / 10.0
+                p1 = adsk.core.Point3D.create(ox_cm, oy_cm, 0)
+                p2 = adsk.core.Point3D.create(ox_cm + w_cm, oy_cm + d_cm, 0)
+            else:
+                center = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
+                cx_cm = center[0] / 10.0
+                cy_cm = center[1] / 10.0
+                p1 = adsk.core.Point3D.create(cx_cm - w_cm / 2, cy_cm - d_cm / 2, 0)
+                p2 = adsk.core.Point3D.create(cx_cm + w_cm / 2, cy_cm + d_cm / 2, 0)
             sketch.sketchCurves.sketchLines.addTwoPointRectangle(p1, p2)
             extrudes = root.features.extrudeFeatures
             inp = extrudes.createInput(
