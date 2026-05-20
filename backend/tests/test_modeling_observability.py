@@ -755,6 +755,44 @@ def test_onda_def_tools_are_registered_and_compile() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_schema_drift_arc_line_sketch_revolve_aliases() -> None:
+    """Schema drift do teste real da bola (20/05): create_sketch aceita
+    'sketch' como nome; add_arc aceita forma polar (center+radius+angles);
+    add_line aceita start_mm+end_mm; revolve aceita 'result'. Os scripts
+    precisam compilar com essas formas.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        "fusion.create_sketch": {"plane": "XY", "sketch": "profile_sketch"},
+        "fusion.add_arc": {
+            "sketch": "profile_sketch",
+            "center_mm": [0, 0],
+            "radius_mm": 110,
+            "start_angle_deg": 0,
+            "end_angle_deg": 180,
+        },
+        "fusion.add_line": {
+            "sketch": "profile_sketch",
+            "start_mm": [-110, 0],
+            "end_mm": [110, 0],
+            "closed": True,
+        },
+        "fusion.revolve_profile": {
+            "sketch": "profile_sketch",
+            "angle_deg": 360,
+            "result": "new_body",
+        },
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
 def test_add_circle_accepts_aliases() -> None:
     """Quick fix: add_circle aceita circle_diameter_mm e radius_mm além de
     diameter_mm. Verifica que o script compila com cada alias.

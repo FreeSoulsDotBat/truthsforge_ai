@@ -28,6 +28,28 @@ PR/merge.
 | 8C — Features (fillet/chamfer/shell/hole)            | em PR                | —                    | branch `feat/fusion-features-onda-c`  |
 | 8D-F — Replicação/sweeps/modificação direta          | em PR                | —                    | branch `feat/fusion-onda-def`         |
 
+### Schema drift G5 (teste real da bola, 20/05) — branch `fix/fusion-schema-drift-arc-line-sketch`
+
+Trace `mt_019e45f8c20e_0bbd73d75b34eacc` (bola via revolve manual) expôs
+4 drifts LLM↔adapter (todos no parsing de args, antes da API do Fusion):
+
+- **create_sketch** não aceitava `sketch` como nome → o LLM usava
+  `sketch: "profile_sketch"` em todos os steps, o nome virava default
+  `TF_Sketch`, e os steps seguintes davam `sketch_not_found` (drift de
+  identidade). **Fix mais crítico**: aceitar `sketch` como alias do nome.
+- **add_arc** só aceitava `center+start_mm+sweep_deg`; o LLM manda forma
+  POLAR (`center+radius_mm+start_angle_deg+end_angle_deg`). Aceita os dois.
+- **add_line** só aceitava `points_mm[]`; o LLM manda `start_mm+end_mm`
+  para uma linha única. Aceita os dois.
+- **revolve_profile** aceitava só `operation`; o LLM manda `result`. Alias.
+
+Também: nudge no prompt do planner para **preferir primitivas diretas**
+(`add_sphere`/`add_box`/`add_cylinder`/`add_cone`) em formas básicas, e
+aviso de que o meio-perfil do revolve não pode cruzar o eixo (o LLM tinha
+feito um semicírculo completo cruzando o eixo — sólido inválido).
+
+Teste: `test_schema_drift_arc_line_sketch_revolve_aliases`.
+
 ### Onda 8D-F — pattern/mirror/combine + loft/sweep/plane/spline + move/scale/delete
 
 Branch `feat/fusion-onda-def` (encadeada sobre C→B→A). 11 tools.

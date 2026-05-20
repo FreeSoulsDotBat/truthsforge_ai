@@ -309,9 +309,20 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # usuário.
             # Fix #8: planos desconhecidos (ex: 'InnerFace_Left') caiam
             # em XY com warning visivel via trace ao inves de cascade.
+            # Schema drift (teste bola, 20/05): o LLM usa ``sketch`` como nome
+            # consistentemente em create_sketch E nos steps seguintes
+            # (add_arc/add_line/revolve que buscam por ``sketch``). Aceitar
+            # ``sketch`` como alias do nome aqui faz toda a cadeia linkar —
+            # senao o nome vira default TF_Sketch e os steps seguintes dao
+            # sketch_not_found (drift de identidade do handoff).
             design = _design()
             plane_ref = str(args.get("plane_ref") or args.get("plane") or "xy")
-            name = str(args.get("sketch_name") or args.get("name") or "TF_Sketch")
+            name = str(
+                args.get("sketch_name")
+                or args.get("name")
+                or args.get("sketch")
+                or "TF_Sketch"
+            )
             _KNOWN_PLANES = ("xy", "yz", "xz", "top", "front", "right")
             fallback_applied = plane_ref.lower() not in _KNOWN_PLANES
             sketch = _root(design).sketches.add(_plane_from_ref(design, plane_ref))
@@ -565,10 +576,17 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # perfis arbitrarios fechados para extrude/revolve.
             design = _design()
             raw_points = args.get("points_mm") or args.get("points") or []
+            # Schema drift (teste bola): o LLM tambem manda uma unica linha
+            # como start_mm + end_mm. Convertemos para a lista de 2 pontos.
+            if not raw_points:
+                s = args.get("start_mm")
+                e = args.get("end_mm")
+                if s is not None and e is not None:
+                    raw_points = [s, e]
             if not isinstance(raw_points, list) or len(raw_points) < 2:
                 raise ToolError(
                     "fusion.invalid_dimensions",
-                    "points_mm precisa ser uma lista com >= 2 pontos.",
+                    "informe points_mm (>= 2 pontos) OU start_mm + end_mm.",
                 )
             pts = []
             for raw in raw_points:
@@ -596,14 +614,31 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
         def _add_arc(args):
             # Onda A: arco por centro + ponto inicial + angulo de varredura.
+            # Schema drift (teste bola): o LLM tambem manda forma POLAR
+            # (center_mm + radius_mm + start_angle_deg + end_angle_deg).
+            # Aceitamos os dois: se start_mm faltar mas radius+start_angle
+            # vierem, derivamos o ponto inicial; se sweep_deg faltar mas
+            # end_angle vier, derivamos sweep = end - start.
             design = _design()
             center_pair = _eval_pair(args.get("center_mm"), design)
+            if center_pair is None:
+                raise ToolError("fusion.invalid_dimensions", "center_mm e obrigatorio.")
             start_pair = _eval_pair(args.get("start_mm"), design)
             sweep_deg = _eval_param(args.get("sweep_deg"), design, 0.0) or 0.0
-            if center_pair is None or start_pair is None or sweep_deg == 0:
+            radius_mm = _eval_param(args.get("radius_mm"), design, 0.0) or 0.0
+            start_angle = _eval_param(args.get("start_angle_deg"), design, 0.0) or 0.0
+            end_angle = _eval_param(args.get("end_angle_deg"), design)
+            if start_pair is None and radius_mm > 0:
+                start_pair = (
+                    center_pair[0] + radius_mm * math.cos(start_angle * math.pi / 180.0),
+                    center_pair[1] + radius_mm * math.sin(start_angle * math.pi / 180.0),
+                )
+            if sweep_deg == 0 and end_angle is not None:
+                sweep_deg = float(end_angle) - start_angle
+            if start_pair is None or sweep_deg == 0:
                 raise ToolError(
                     "fusion.invalid_dimensions",
-                    "center_mm, start_mm e sweep_deg (!=0) sao obrigatorios.",
+                    "informe start_mm+sweep_deg OU radius_mm+start_angle_deg+end_angle_deg.",
                 )
             center = adsk.core.Point3D.create(
                 center_pair[0] / 10.0, center_pair[1] / 10.0, 0
@@ -636,7 +671,11 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             angle_deg = _eval_param(args.get("angle_deg"), design, 360.0)
             if not angle_deg:
                 angle_deg = 360.0
-            operation = str(args.get("operation") or "new_body").lower()
+            # Schema drift (teste bola): o LLM manda ``result`` em vez de
+            # ``operation``. Aceitamos os dois.
+            operation = str(
+                args.get("operation") or args.get("result") or "new_body"
+            ).lower()
             operation_map = {{
                 "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
                 "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
