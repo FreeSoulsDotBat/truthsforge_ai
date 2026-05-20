@@ -826,6 +826,34 @@ def test_pattern_shell_accept_llm_aliases() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_g1_2_and_hole_v2_scripts_compile() -> None:
+    """G1.2 (sketch dims paramétricas guarded em rectangle/circle) e G3
+    hole v2 (counterbore). Scripts compilam com args param e counterbore.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        # G1.2: dimensão amarrada a parâmetro
+        "fusion.add_rectangle": {"sketch": "s", "width_mm": "box_w_mm", "height_mm": "box_h_mm"},
+        "fusion.add_circle": {"sketch": "s", "diameter_mm": "bore_mm"},
+        # G3: hole counterbore
+        "fusion.hole": {
+            "diameter_mm": 5,
+            "position_mm": [0, 0],
+            "type": "counterbore",
+            "counterbore_diameter_mm": 10,
+            "counterbore_depth_mm": 3,
+        },
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
 def test_onda9_rest_scripts_compile() -> None:
     """Onda 9 restante: query_geometry (G2.2), edge_ids/face_ids,
     result_name (G2.3), add_ellipse/add_slot/split_body (G3). Compilam.

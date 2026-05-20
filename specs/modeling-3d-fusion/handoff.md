@@ -50,6 +50,24 @@ feito um semicírculo completo cruzando o eixo — sólido inválido).
 
 Teste: `test_schema_drift_arc_line_sketch_revolve_aliases`.
 
+### Onda 9 — G1.2 (seguro) + hole v2 — branch `feat/fusion-g1.2-sketch-params`
+
+- **G1.2 (parametrização de sketch):** `add_rectangle` (single) e `add_circle`
+  agora amarram width/height/diameter/radius ao parâmetro quando o arg é uma
+  referência pura a userParameter (helper `_param_name_or_none`). **Padrão
+  seguro:** a geometria é desenhada primeiro (bakeada no valor resolvido) e
+  a `sketchDimension` é adicionada DEPOIS em `try/except` — se a API falhar
+  ou over-constrain, o try/except mantém a geometria bakeada (zero regressão
+  no extrude). Resposta marca `[parametrico]` quando o vínculo foi criado.
+  Grid de retângulos e primitivas (box/cylinder) seguem bakeados por ora.
+- **G3 hole v2:** `fusion.hole` aceita `type=counterbore` +
+  `counterbore_diameter_mm`/`counterbore_depth_mm` (recesso cilíndrico para
+  cabeça de parafuso, via 2º cut). countersink (cônico) fica para futuro
+  (exige revolve/chamfer da borda).
+- **Validar com Fusion real:** a API `sketchDimensions.addDiameterDimension/
+  addRadialDimension/addDistanceDimension` e o counterbore. Como tudo é
+  guarded, o pior caso é "não parametrizou" (não quebra).
+
 ### Onda 9 restante (G2.2 + G2.3 + G3 parcial + G4 decisão) — branch `feat/fusion-gaps-onda9-rest`
 
 - **G2.2:** `fusion.query_geometry` (read-only) lista bodies/faces/arestas

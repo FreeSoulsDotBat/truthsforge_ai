@@ -212,6 +212,19 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return adsk.core.ValueInput.createByReal(mm / 10.0)
 
 
+        def _param_name_or_none(arg, design):
+            # G1.2: retorna o nome do parametro se ``arg`` e uma referencia
+            # pura a um userParameter existente; senao None. Usado para
+            # decidir se vale a pena amarrar uma sketch dimension.
+            if not isinstance(arg, str):
+                return None
+            token = arg.strip()
+            if token and all(c.isalnum() or c == "_" for c in token):
+                if design.userParameters.itemByName(token) is not None:
+                    return token
+            return None
+
+
         def _find_sketch(design, sketch_ref=None):
             sketches = _root(design).sketches
             if not sketch_ref:
@@ -602,10 +615,42 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             height_cm = height_mm / 10.0
             point1 = adsk.core.Point3D.create(-width_cm / 2, -height_cm / 2, 0)
             point2 = adsk.core.Point3D.create(width_cm / 2, height_cm / 2, 0)
-            sketch.sketchCurves.sketchLines.addTwoPointRectangle(point1, point2)
+            rect_lines = sketch.sketchCurves.sketchLines.addTwoPointRectangle(point1, point2)
+            # G1.2: amarra width/height a parametros quando vieram como
+            # referencia. SEGURO: retangulo ja desenhado; dimension em
+            # try/except mantem o bakeado se algo falhar (sem regressao).
+            _param_dim = False
+            try:
+                w_name = _param_name_or_none(args.get("width_mm"), design)
+                h_name = _param_name_or_none(args.get("height_mm"), design)
+                dims = sketch.sketchDimensions
+                horiz = adsk.fusion.DimensionOrientations.HorizontalDimensionOrientation
+                vert = adsk.fusion.DimensionOrientations.VerticalDimensionOrientation
+                if w_name:
+                    bottom = rect_lines.item(0)
+                    dim = dims.addDistanceDimension(
+                        bottom.startSketchPoint,
+                        bottom.endSketchPoint,
+                        horiz,
+                        adsk.core.Point3D.create(0, -height_cm / 2 - 0.5, 0),
+                    )
+                    dim.parameter.expression = w_name
+                    _param_dim = True
+                if h_name:
+                    right = rect_lines.item(1)
+                    dim = dims.addDistanceDimension(
+                        right.startSketchPoint,
+                        right.endSketchPoint,
+                        vert,
+                        adsk.core.Point3D.create(width_cm / 2 + 0.5, 0, 0),
+                    )
+                    dim.parameter.expression = h_name
+                    _param_dim = True
+            except Exception:
+                _param_dim = False
             return {{
-                "message": "Retângulo {{}}x{{}} mm adicionado a '{{}}'.".format(
-                    width_mm, height_mm, sketch.name
+                "message": "Retângulo {{}}x{{}} mm adicionado a '{{}}'{{}}.".format(
+                    width_mm, height_mm, sketch.name, " [parametrico]" if _param_dim else ""
                 ),
                 "sketch_name": sketch.name,
             }}
@@ -641,9 +686,36 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 center_y_mm / 10.0,
                 0,
             )
-            sketch.sketchCurves.sketchCircles.addByCenterRadius(center, radius_cm)
+            circle = sketch.sketchCurves.sketchCircles.addByCenterRadius(center, radius_cm)
+            # G1.2: se diameter/radius veio como referencia a parametro, amarra
+            # uma sketch dimension ao parametro (geometria editavel-por-param).
+            # SEGURO: a geometria ja foi desenhada acima no valor resolvido;
+            # se a dimension falhar/over-constrain, o try/except mantem o
+            # circulo bakeado (sem regressao no extrude).
+            _param_dim = False
+            try:
+                d_name = _param_name_or_none(
+                    args.get("diameter_mm") or args.get("circle_diameter_mm"), design
+                )
+                r_name = _param_name_or_none(args.get("radius_mm"), design)
+                if d_name:
+                    dim = sketch.sketchDimensions.addDiameterDimension(
+                        circle, circle.centerSketchPoint.geometry
+                    )
+                    dim.parameter.expression = d_name
+                    _param_dim = True
+                elif r_name:
+                    dim = sketch.sketchDimensions.addRadialDimension(
+                        circle, circle.centerSketchPoint.geometry
+                    )
+                    dim.parameter.expression = r_name
+                    _param_dim = True
+            except Exception:
+                _param_dim = False
             return {{
-                "message": "Círculo ø{{}} mm adicionado a '{{}}'.".format(diameter_mm, sketch.name),
+                "message": "Círculo ø{{}} mm adicionado a '{{}}'{{}}.".format(
+                    diameter_mm, sketch.name, " [parametrico]" if _param_dim else ""
+                ),
                 "sketch_name": sketch.name,
             }}
 
@@ -1296,9 +1368,37 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             else:
                 inp.setAllExtent(adsk.fusion.ExtentDirections.NegativeExtentDirection)
             extrudes.add(inp)
+            # G3 hole v2: counterbore = recesso cilindrico mais largo e raso
+            # no topo (para cabeca de parafuso). type=counterbore +
+            # counterbore_diameter_mm + counterbore_depth_mm. countersink
+            # (conico) fica para futuro (exige revolve/chamfer da borda).
+            hole_type = str(args.get("type") or "simple").lower()
+            cbore_note = ""
+            if hole_type in ("counterbore", "cbore"):
+                cb_d = _eval_param(args.get("counterbore_diameter_mm"), design, 0.0) or 0.0
+                cb_depth = _eval_param(args.get("counterbore_depth_mm"), design, 0.0) or 0.0
+                if cb_d > diameter_mm and cb_depth > 0:
+                    cb_sketch = root.sketches.add(face)
+                    cb_sketch.name = _unique_sketch_name(design, "Counterbore")
+                    cb_center = cb_sketch.modelToSketchSpace(world)
+                    cb_center.z = 0
+                    cb_sketch.sketchCurves.sketchCircles.addByCenterRadius(
+                        cb_center, cb_d / 20.0
+                    )
+                    cb_inp = extrudes.createInput(
+                        cb_sketch.profiles.item(0),
+                        adsk.fusion.FeatureOperations.CutFeatureOperation,
+                    )
+                    cb_inp.setDistanceExtent(
+                        False, adsk.core.ValueInput.createByReal(-cb_depth / 10.0)
+                    )
+                    extrudes.add(cb_inp)
+                    cbore_note = " + counterbore o{{}}x{{}}mm".format(cb_d, cb_depth)
+                else:
+                    cbore_note = " [WARN: counterbore exige counterbore_diameter_mm>diameter e _depth_mm>0]"
             return {{
-                "message": "Furo o{{}}mm (prof={{}}) em '{{}}'.".format(
-                    diameter_mm, depth_mm or "through", body.name
+                "message": "Furo o{{}}mm (prof={{}}) em '{{}}'{{}}.".format(
+                    diameter_mm, depth_mm or "through", body.name, cbore_note
                 ),
                 "body_name": body.name,
             }}
