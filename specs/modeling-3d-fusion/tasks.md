@@ -162,3 +162,17 @@ para exigir geometria explícita antes de extrude/revolve (vai junto com A).
 - [x] [P3] [any] **Onda E**: `loft_profiles`, `sweep_profile`, `add_construction_plane` (offset), `add_spline`. Branch `feat/fusion-onda-def`.
 - [x] [P3] [any] **Onda F**: `move_body` (translação), `scale_body` (uniforme), `delete_body` (delete = destructive, aprovação obrigatória). Branch `feat/fusion-onda-def`. Falta validação manual de todas as ondas D-F com Fusion real (APIs de pattern/loft/sweep/move variam por versão).
 - [x] [P1] [any] Quick fixes de schema drift (independem das ondas): `add_circle` aceitar alias `circle_diameter_mm`/`radius_mm`/`center_mm`; `extrude_profile` mapear `operation` desconhecida para `new_body` com warning no message. (entregue junto da Onda A)
+
+### Onda 9 — Cobertura dos gaps pós-MVP
+
+Spec completa: `specs/modeling-3d-fusion/adapter-gaps-roadmap.md`. Fases
+priorizadas por valor/custo. Aguardando priorização do dono do produto.
+
+- [ ] [P0] [any] **G1.1** — parametrização de distâncias de feature: helper `_param_value_input` (createByString quando arg é referência a parâmetro/expressão) em extrude/revolve/fillet/chamfer/shell/hole/primitivas. Modelo passa a ser editável-por-parâmetro nas distâncias.
+- [ ] [P1] [any] **G5** (contínuo) — validação real das ondas C-F no Fusion + fallback `createInput2`/`createInput` por versão; bateria por tool no `smoke-modeling-trace.ps1`.
+- [ ] [P1] [any] **G2.1** — mais selectors semânticos (orientação ±x/±y/±z, tipo planar/cylindrical, tamanho, posição `near`).
+- [ ] [P1] [any] **G2.2** — tool read-only `fusion.query_geometry` (lista faces/arestas/bodies com id estável) + fluxo query→select no prompt.
+- [ ] [P2] [any] **G1.2** — dimensões de sketch amarradas a parâmetros (add_rectangle/add_circle primeiro).
+- [ ] [P2] [any] **G2.3** — referência estável a features (`result_name` + `feature_ref` em pattern/mirror). Resolve drift de identidade.
+- [ ] [P2] [any] **G3** — gaps de features sob demanda: hole v2 (counterbore/countersink/tapped), ellipse/slot, draft, rib, thicken, split_body, fillet variável, chamfer 2-distâncias, plano por ângulo/3-pontos, rotação em move_body, texto.
+- [ ] [P3] [any] **G4** (epic) — assemblies/componentes/joints/materiais. Decidir escopo com o dono antes de specar em detalhe.
