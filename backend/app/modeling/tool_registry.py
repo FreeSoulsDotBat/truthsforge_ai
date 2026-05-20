@@ -305,6 +305,30 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Revolve um perfil em torno de um eixo (esferas, cones, vasos) (Onda A).",
     ),
     _t(
+        "fusion.fillet_edges",
+        _FUSION,
+        _MUT,
+        "Arredonda arestas de um corpo (selector semântico all/top/bottom/...) (Onda C).",
+    ),
+    _t(
+        "fusion.chamfer_edges",
+        _FUSION,
+        _MUT,
+        "Chanfra arestas de um corpo (selector semântico) (Onda C).",
+    ),
+    _t(
+        "fusion.shell_body",
+        _FUSION,
+        _MUT,
+        "Oca um corpo deixando paredes de espessura definida (open_faces top/bottom/none) (Onda C).",
+    ),
+    _t(
+        "fusion.hole",
+        _FUSION,
+        _MUT,
+        "Faz um furo (cut) na face superior de um corpo (Onda C).",
+    ),
+    _t(
         "fusion.set_parameter",
         _FUSION,
         _MUT,

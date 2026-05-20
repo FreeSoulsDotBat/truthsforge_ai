@@ -18,6 +18,10 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.add_cone",
     "fusion.extrude_profile",
     "fusion.revolve_profile",
+    "fusion.fillet_edges",
+    "fusion.chamfer_edges",
+    "fusion.shell_body",
+    "fusion.hole",
     "fusion.set_parameter",
     "fusion.export_step",
     "fusion.export_stl",
@@ -185,6 +189,97 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 if item.name == sketch_ref or item.entityToken == sketch_ref:
                     return item
             raise ToolError("fusion.sketch_not_found", "Sketch não encontrado.")
+
+
+        def _find_body(design, body_ref=None):
+            # Onda C: resolve body por nome, indice (int/str) ou ultimo criado.
+            bodies = _root(design).bRepBodies
+            if bodies.count == 0:
+                raise ToolError("fusion.no_body", "Nenhum corpo solido na cena.")
+            if body_ref is None or body_ref == "":
+                return bodies.item(bodies.count - 1)
+            ref = str(body_ref)
+            for i in range(bodies.count):
+                if bodies.item(i).name == ref:
+                    return bodies.item(i)
+            try:
+                idx = int(ref)
+                if 0 <= idx < bodies.count:
+                    return bodies.item(idx)
+            except (TypeError, ValueError):
+                pass
+            raise ToolError("fusion.body_not_found", "Corpo nao encontrado: " + ref)
+
+
+        def _edge_z_range(edge):
+            # Retorna (zmin, zmax) de uma aresta. Arestas circulares podem nao
+            # ter start/end vertex; cai no boundingBox.
+            try:
+                z0 = edge.startVertex.geometry.z
+                z1 = edge.endVertex.geometry.z
+                return (min(z0, z1), max(z0, z1))
+            except Exception:
+                ebb = edge.boundingBox
+                return (ebb.minPoint.z, ebb.maxPoint.z)
+
+
+        def _select_edges(body, selector):
+            # Onda C: selectors SEMANTICOS (o LLM nao conhece edge tokens do
+            # Fusion). Suportados: all, top, bottom, vertical, horizontal.
+            selector = str(selector or "all").lower()
+            coll = adsk.core.ObjectCollection.create()
+            bbox = body.boundingBox
+            zmin = bbox.minPoint.z
+            zmax = bbox.maxPoint.z
+            tol = max(1e-4, (zmax - zmin) * 0.01)
+            for i in range(body.edges.count):
+                edge = body.edges.item(i)
+                if selector == "all":
+                    coll.add(edge)
+                    continue
+                ez_min, ez_max = _edge_z_range(edge)
+                if selector == "top" and abs(ez_min - zmax) <= tol and abs(ez_max - zmax) <= tol:
+                    coll.add(edge)
+                elif (
+                    selector == "bottom"
+                    and abs(ez_min - zmin) <= tol
+                    and abs(ez_max - zmin) <= tol
+                ):
+                    coll.add(edge)
+                elif selector == "vertical" and (ez_max - ez_min) > tol:
+                    coll.add(edge)
+                elif selector == "horizontal" and (ez_max - ez_min) <= tol:
+                    coll.add(edge)
+            return coll
+
+
+        def _select_faces(body, selector):
+            # Onda C: faces semanticas para shell. top/bottom = face planar no
+            # zmax/zmin; none = nenhuma (shell totalmente fechado).
+            selector = str(selector or "top").lower()
+            coll = adsk.core.ObjectCollection.create()
+            if selector == "none":
+                return coll
+            bbox = body.boundingBox
+            zmin = bbox.minPoint.z
+            zmax = bbox.maxPoint.z
+            tol = max(1e-4, (zmax - zmin) * 0.01)
+            for i in range(body.faces.count):
+                face = body.faces.item(i)
+                fbb = face.boundingBox
+                if (
+                    selector == "top"
+                    and abs(fbb.minPoint.z - zmax) <= tol
+                    and abs(fbb.maxPoint.z - zmax) <= tol
+                ):
+                    coll.add(face)
+                elif (
+                    selector == "bottom"
+                    and abs(fbb.minPoint.z - zmin) <= tol
+                    and abs(fbb.maxPoint.z - zmin) <= tol
+                ):
+                    coll.add(face)
+            return coll
 
 
         def _open_design(_args):
@@ -744,6 +839,139 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
+        def _fillet_edges(args):
+            # Onda C: arredonda arestas de um body. edge_selector semantico
+            # (all/top/bottom/vertical/horizontal). body_ref opcional.
+            design = _design()
+            radius_mm = _eval_param(args.get("radius_mm"), design, 0.0) or 0.0
+            if radius_mm <= 0:
+                raise ToolError("fusion.invalid_dimensions", "radius_mm precisa ser positivo.")
+            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            selector = args.get("edge_selector") or args.get("edges") or "all"
+            edges = _select_edges(body, selector)
+            if edges.count == 0:
+                raise ToolError(
+                    "fusion.no_edges",
+                    "Nenhuma aresta correspondeu ao selector '{{}}'.".format(selector),
+                )
+            fillets = _root(design).features.filletFeatures
+            inp = fillets.createInput()
+            inp.addConstantRadiusEdgeSet(
+                edges, adsk.core.ValueInput.createByReal(radius_mm / 10.0), True
+            )
+            fillets.add(inp)
+            return {{
+                "message": "Fillet r={{}}mm em {{}} aresta(s) ({{}}) de '{{}}'.".format(
+                    radius_mm, edges.count, selector, body.name
+                ),
+                "body_name": body.name,
+            }}
+
+
+        def _chamfer_edges(args):
+            # Onda C: chanfra arestas. Mesmo padrao de selector do fillet.
+            design = _design()
+            distance_mm = _eval_param(args.get("distance_mm"), design, 0.0) or 0.0
+            if distance_mm <= 0:
+                raise ToolError("fusion.invalid_dimensions", "distance_mm precisa ser positivo.")
+            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            selector = args.get("edge_selector") or args.get("edges") or "all"
+            edges = _select_edges(body, selector)
+            if edges.count == 0:
+                raise ToolError(
+                    "fusion.no_edges",
+                    "Nenhuma aresta correspondeu ao selector '{{}}'.".format(selector),
+                )
+            chamfers = _root(design).features.chamferFeatures
+            inp = chamfers.createInput(edges, True)
+            inp.setToEqualDistance(adsk.core.ValueInput.createByReal(distance_mm / 10.0))
+            chamfers.add(inp)
+            return {{
+                "message": "Chanfro d={{}}mm em {{}} aresta(s) ({{}}) de '{{}}'.".format(
+                    distance_mm, edges.count, selector, body.name
+                ),
+                "body_name": body.name,
+            }}
+
+
+        def _shell_body(args):
+            # Onda C: oca um body. open_faces semantico (top/bottom/none).
+            # none => casca totalmente fechada (passa o body, nao faces).
+            design = _design()
+            thickness_mm = _eval_param(args.get("thickness_mm"), design, 0.0) or 0.0
+            if thickness_mm <= 0:
+                raise ToolError("fusion.invalid_dimensions", "thickness_mm precisa ser positivo.")
+            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            open_sel = str(args.get("open_faces") or "top").lower()
+            faces = _select_faces(body, open_sel)
+            coll = adsk.core.ObjectCollection.create()
+            if faces.count > 0:
+                for i in range(faces.count):
+                    coll.add(faces.item(i))
+            else:
+                # Sem faces abertas (none, ou nao achou planar) => oca fechado.
+                coll.add(body)
+            shells = _root(design).features.shellFeatures
+            inp = shells.createInput(coll, False)
+            inp.insideThickness = adsk.core.ValueInput.createByReal(thickness_mm / 10.0)
+            shells.add(inp)
+            return {{
+                "message": "Shell t={{}}mm (open={{}}) em '{{}}'.".format(
+                    thickness_mm, open_sel, body.name
+                ),
+                "body_name": body.name,
+            }}
+
+
+        def _hole(args):
+            # Onda C: furo via circulo + cut-extrude na face superior do body.
+            # MVP pragmatico (nao usa holeFeatures, que exige point/face refs
+            # precisos). position_mm=[x,y] no plano da face; depth_mm opcional
+            # (sem depth = through-all). Limitacao documentada: assume face
+            # superior planar. Para furos em outras faces, iteracao futura.
+            design = _design()
+            diameter_mm = _eval_param(args.get("diameter_mm"), design, 0.0) or 0.0
+            if diameter_mm <= 0:
+                raise ToolError("fusion.invalid_dimensions", "diameter_mm precisa ser positivo.")
+            depth_mm = _eval_param(args.get("depth_mm"), design, 0.0) or 0.0
+            pos = _eval_pair(args.get("position_mm"), design) or (0.0, 0.0)
+            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            top_faces = _select_faces(body, "top")
+            if top_faces.count == 0:
+                raise ToolError(
+                    "fusion.no_face",
+                    "Sem face superior planar para o furo.",
+                )
+            face = top_faces.item(0)
+            root = _root(design)
+            sketch = root.sketches.add(face)
+            sketch.name = _unique_sketch_name(design, "Hole")
+            world = adsk.core.Point3D.create(
+                pos[0] / 10.0, pos[1] / 10.0, face.boundingBox.maxPoint.z
+            )
+            center = sketch.modelToSketchSpace(world)
+            center.z = 0
+            sketch.sketchCurves.sketchCircles.addByCenterRadius(center, diameter_mm / 20.0)
+            extrudes = root.features.extrudeFeatures
+            inp = extrudes.createInput(
+                sketch.profiles.item(0),
+                adsk.fusion.FeatureOperations.CutFeatureOperation,
+            )
+            if depth_mm > 0:
+                inp.setDistanceExtent(
+                    False, adsk.core.ValueInput.createByReal(-depth_mm / 10.0)
+                )
+            else:
+                inp.setAllExtent(adsk.fusion.ExtentDirections.NegativeExtentDirection)
+            extrudes.add(inp)
+            return {{
+                "message": "Furo o{{}}mm (prof={{}}) em '{{}}'.".format(
+                    diameter_mm, depth_mm or "through", body.name
+                ),
+                "body_name": body.name,
+            }}
+
+
         def _set_parameter(args):
             # Fix #1: aceita dois formatos:
             # (a) singular legado:  name='X', expression='10mm', unit='mm'
@@ -1051,6 +1279,14 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _add_sphere(args)
             if tool_name == "fusion.add_cone":
                 return _add_cone(args)
+            if tool_name == "fusion.fillet_edges":
+                return _fillet_edges(args)
+            if tool_name == "fusion.chamfer_edges":
+                return _chamfer_edges(args)
+            if tool_name == "fusion.shell_body":
+                return _shell_body(args)
+            if tool_name == "fusion.hole":
+                return _hole(args)
             if tool_name == "fusion.set_parameter":
                 return _set_parameter(args)
             if tool_name == "fusion.export_step":

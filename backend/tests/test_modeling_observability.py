@@ -664,6 +664,33 @@ def test_onda_b_primitives_are_registered_and_compile() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_onda_c_features_are_registered_and_compile() -> None:
+    """Onda C: fillet/chamfer/shell/hole estão na allowlist, no registry
+    (categoria mutative) e geram scripts Python válidos.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+    from app.modeling.tool_registry import TOOL_REGISTRY, ToolCategory
+
+    cases = {
+        "fusion.fillet_edges": {"radius_mm": 2, "edge_selector": "top"},
+        "fusion.chamfer_edges": {"distance_mm": 1, "edge_selector": "all"},
+        "fusion.shell_body": {"thickness_mm": 2, "open_faces": "top"},
+        "fusion.hole": {"diameter_mm": 5, "position_mm": [0, 0]},
+    }
+    for tool, args in cases.items():
+        assert tool in FUSION_SCRIPT_TOOLS, f"{tool} ausente em FUSION_SCRIPT_TOOLS"
+        assert TOOL_REGISTRY[tool].category == ToolCategory.mutative
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
 def test_add_circle_accepts_aliases() -> None:
     """Quick fix: add_circle aceita circle_diameter_mm e radius_mm além de
     diameter_mm. Verifica que o script compila com cada alias.

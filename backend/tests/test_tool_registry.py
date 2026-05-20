@@ -152,6 +152,11 @@ def test_planner_toolset_matches_allowlist() -> None:
         "fusion.add_cylinder",
         "fusion.add_sphere",
         "fusion.add_cone",
+        # Onda C
+        "fusion.fillet_edges",
+        "fusion.chamfer_edges",
+        "fusion.shell_body",
+        "fusion.hole",
     }
     assert set(PLANNER_TOOLSET) == expected
 

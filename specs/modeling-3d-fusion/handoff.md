@@ -25,6 +25,28 @@ PR/merge.
 | 7 — Observabilidade + 13 fixes do adapter Fusion     | mergeada na master   | #27/#28/#29          | ver seção Onda 7                      |
 | 8A — Expansão adapter Fusion (revolve + polygon)     | em PR                | —                    | branch `feat/fusion-revolve-polygon`  |
 | 8B — Primitivas diretas (box/cylinder/sphere/cone)   | em PR                | —                    | branch `feat/fusion-primitives-onda-b` |
+| 8C — Features (fillet/chamfer/shell/hole)            | em PR                | —                    | branch `feat/fusion-features-onda-c`  |
+
+### Onda 8C — fillet/chamfer/shell/hole + selectors semânticos
+
+Branch `feat/fusion-features-onda-c` (encadeada sobre B → A). 4 tools
+`mutative` + 3 helpers de seleção em `fusion_mcp_scripts.py`:
+
+- `_find_body(design, ref)` — body por nome/índice/último.
+- `_select_edges(body, selector)` — selectors SEMÂNTICOS
+  (`all`/`top`/`bottom`/`vertical`/`horizontal`) resolvidos por heurística
+  geométrica de Z (o LLM não conhece edge tokens do Fusion).
+- `_select_faces(body, selector)` — `top`/`bottom`/`none` para shell.
+- `fusion.fillet_edges` / `fusion.chamfer_edges` — arredonda/chanfra.
+- `fusion.shell_body` — oca (open_faces top/bottom/none).
+- `fusion.hole` — MVP pragmático: circle + cut-extrude na face superior
+  (NÃO usa holeFeatures, que exige point/face refs precisos). Limitação:
+  assume face superior planar.
+
+**Pontos frágeis a validar no Fusion real** (a observabilidade vai
+mostrar se a API divergir): selectors de aresta em geometria curva,
+`chamferFeatures.createInput`+`setToEqualDistance` (varia por versão),
+direção do cut em `hole`. Total agora: 36 tools (era 24 no v1).
 
 ### Onda 8A — add_polygon/add_line/add_arc/revolve_profile + fix do prompt
 
