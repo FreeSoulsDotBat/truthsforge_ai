@@ -1388,6 +1388,40 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
+        def _profile_for_circle(sketch, radius_cm):
+            # Bug do teste real da placa (mt_019e46e06f3b): ao criar um sketch
+            # SOBRE uma face existente, o Fusion inclui o contorno da face no
+            # sketch, entao desenhar um circulo gera DOIS profiles: o disco
+            # central e o anel (face menos o circulo). Pegar profiles.item(0)
+            # pode pegar o ANEL -> o CUT remove tudo menos o miolo, consumindo
+            # a peca e deixando so o plug cilindrico. Selecionamos o profile
+            # cuja area bate com a do circulo (pi*r^2). Fallback: menor area
+            # (o disco e sempre menor que o anel) e por fim item(0).
+            target = math.pi * radius_cm * radius_cm
+            best = None
+            best_err = None
+            for i in range(sketch.profiles.count):
+                prof = sketch.profiles.item(i)
+                try:
+                    area = prof.areaProperties(
+                        adsk.fusion.CalculationAccuracy.LowCalculationAccuracy
+                    ).area
+                except Exception:
+                    try:
+                        area = prof.areaProperties().area
+                    except Exception:
+                        area = None
+                if area is None:
+                    continue
+                err = abs(area - target)
+                if best_err is None or err < best_err:
+                    best_err = err
+                    best = prof
+            if best is not None:
+                return best
+            return sketch.profiles.item(0)
+
+
         def _hole(args):
             # Onda C: furo via circulo + cut-extrude na face superior do body.
             # MVP pragmatico (nao usa holeFeatures, que exige point/face refs
@@ -1419,7 +1453,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             sketch.sketchCurves.sketchCircles.addByCenterRadius(center, diameter_mm / 20.0)
             extrudes = root.features.extrudeFeatures
             inp = extrudes.createInput(
-                sketch.profiles.item(0),
+                _profile_for_circle(sketch, diameter_mm / 20.0),
                 adsk.fusion.FeatureOperations.CutFeatureOperation,
             )
             if depth_mm > 0:
@@ -1447,7 +1481,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         cb_center, cb_d / 20.0
                     )
                     cb_inp = extrudes.createInput(
-                        cb_sketch.profiles.item(0),
+                        _profile_for_circle(cb_sketch, cb_d / 20.0),
                         adsk.fusion.FeatureOperations.CutFeatureOperation,
                     )
                     cb_inp.setDistanceExtent(

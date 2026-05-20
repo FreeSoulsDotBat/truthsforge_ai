@@ -1028,6 +1028,28 @@ def test_schema_drift_param_suffix_convention() -> None:
         assert "_normalize_param_suffix" in script
 
 
+def test_hole_uses_circle_profile_selector() -> None:
+    """Bug do teste real da placa (mt_019e46e06f3b): o sketch do furo criado
+    SOBRE a face da peca gera 2 profiles (disco + anel); pegar item(0) podia
+    pegar o anel e o CUT consumia a peca, deixando so o plug. O hole deve usar
+    o seletor por area do circulo (_profile_for_circle), nao profiles.item(0).
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.hole",
+        arguments={"diameter_mm": 10, "position_mm": [0, 0], "through": True},
+    )
+    ast.parse(script)
+    assert "_profile_for_circle" in script
+    # o caminho do furo nao deve mais cair no profiles.item(0) cego dentro do
+    # createInput do cut (o helper substitui a selecao).
+    assert "_profile_for_circle(sketch, diameter_mm / 20.0)" in script
+
+
 def test_unwrap_inner_fusion_result_captures_traceback() -> None:
     """Traceback do inner result vai parar em host_details para debug."""
 

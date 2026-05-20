@@ -28,6 +28,29 @@ PR/merge.
 | 8C — Features (fillet/chamfer/shell/hole)            | em PR                | —                    | branch `feat/fusion-features-onda-c`  |
 | 8D-F — Replicação/sweeps/modificação direta          | em PR                | —                    | branch `feat/fusion-onda-def`         |
 
+### Bug de geometria: hole consumia a peça (placa, 4º teste, 20/05) — branch `fix/fusion-param-expression-syntax`
+
+Trace `mt_019e46e06f3b` — **todos os 11 steps OK**, mas o modelo saiu errado:
+sobrou só um cilindro Ø10×5mm (validate_printability: `Body1` dims [10,10,5],
+volume 392.7mm³ = π·5²·5). A placa 80×60×5 foi consumida. 1º teste do
+`fusion.hole` em Fusion REAL.
+
+**Causa raiz (geometria, não schema):** `_hole` cria o sketch SOBRE a face
+superior da peça. Ao criar sketch sobre uma face existente, o Fusion inclui o
+contorno da face no sketch → desenhar o círculo gera 2 profiles: o disco
+central e o ANEL (face menos círculo). `sketch.profiles.item(0)` pegava o
+anel; o CUT removeu tudo menos o miolo → restou o plug cilíndrico.
+
+**Fix:** helper `_profile_for_circle(sketch, radius_cm)` escolhe o profile
+cuja área bate com π·r² (fallback: menor área, depois item(0)). Aplicado ao
+furo principal e ao counterbore. **Limitação latente análoga:**
+`_extrude_profile` também usa `profiles.item(0)` — se o LLM criar um sketch
+de corte sobre uma face com múltiplos profiles, mesmo risco; não corrigido
+agora (o plano usou o tool `hole`). Documentar/observar.
+
+Teste: `test_hole_uses_circle_profile_selector` (compile + presença do helper;
+geometria real só valida no Fusion).
+
 ### Schema drift convenção `_param` (placa, 3º teste, 20/05) — branch `fix/fusion-param-expression-syntax`
 
 Trace `mt_019e46d6dc46` (3ª iteração da placa). O LLM mudou de novo o plano
