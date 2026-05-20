@@ -232,6 +232,24 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Adiciona um perfil circular dimensionado a um sketch.",
     ),
     _t(
+        "fusion.add_polygon",
+        _FUSION,
+        _ADD,
+        "Adiciona um polígono regular de N lados a um sketch (Onda A).",
+    ),
+    _t(
+        "fusion.add_line",
+        _FUSION,
+        _ADD,
+        "Adiciona uma polilinha (perfil arbitrário, opcionalmente fechado) a um sketch (Onda A).",
+    ),
+    _t(
+        "fusion.add_arc",
+        _FUSION,
+        _ADD,
+        "Adiciona um arco por centro/início/ângulo a um sketch (Onda A).",
+    ),
+    _t(
         "fusion.export_step",
         _FUSION,
         _ADD,
@@ -255,6 +273,12 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         _FUSION,
         _MUT,
         "Extruda um perfil de sketch (operação new_body/join/cut/intersect).",
+    ),
+    _t(
+        "fusion.revolve_profile",
+        _FUSION,
+        _MUT,
+        "Revolve um perfil em torno de um eixo (esferas, cones, vasos) (Onda A).",
     ),
     _t(
         "fusion.set_parameter",

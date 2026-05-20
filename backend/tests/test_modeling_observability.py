@@ -601,6 +601,60 @@ def test_fusion_script_template_compiles_for_every_tool() -> None:
             ) from exc
 
 
+def test_onda_a_tools_are_registered_and_compile() -> None:
+    """Onda A: as 4 tools novas (polygon, line, arc, revolve) estão na
+    allowlist do adapter, no registry, e geram scripts Python válidos com
+    args realistas (incluindo expressões paramétricas e listas de pontos).
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+    from app.modeling.tool_registry import FUSION_TOOLS
+
+    onda_a = [
+        "fusion.add_polygon",
+        "fusion.add_line",
+        "fusion.add_arc",
+        "fusion.revolve_profile",
+    ]
+    for tool in onda_a:
+        assert tool in FUSION_SCRIPT_TOOLS, f"{tool} ausente em FUSION_SCRIPT_TOOLS"
+        assert tool in FUSION_TOOLS, f"{tool} ausente no tool_registry"
+
+    cases = {
+        "fusion.add_polygon": {"sketch": "s", "sides": 6, "radius_mm": 25, "center_mm": [0, 0]},
+        "fusion.add_line": {"sketch": "s", "points_mm": [[0, 0], [10, 0], [10, 10]], "closed": True},
+        "fusion.add_arc": {"sketch": "s", "center_mm": [0, 0], "start_mm": [10, 0], "sweep_deg": 180},
+        "fusion.revolve_profile": {"sketch": "s", "axis": "y", "angle_deg": 360},
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)  # levanta SyntaxError se o template quebrou
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
+def test_add_circle_accepts_aliases() -> None:
+    """Quick fix: add_circle aceita circle_diameter_mm e radius_mm além de
+    diameter_mm. Verifica que o script compila com cada alias.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    for args in (
+        {"sketch": "s", "diameter_mm": 20},
+        {"sketch": "s", "circle_diameter_mm": 20},
+        {"sketch": "s", "radius_mm": 10},
+    ):
+        script = build_autodesk_fusion_script(tool_name="fusion.add_circle", arguments=args)
+        ast.parse(script)
+
+
 def test_unwrap_inner_fusion_result_captures_traceback() -> None:
     """Traceback do inner result vai parar em host_details para debug."""
 

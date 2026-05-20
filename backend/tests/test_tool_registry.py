@@ -109,10 +109,15 @@ def test_planner_toolset_excludes_run_script_tools() -> None:
     assert "fusion.run_script" not in PLANNER_TOOLSET
 
 
-def test_planner_toolset_matches_v1_allowlist() -> None:
-    """The visible-to-planner allowlist is exactly the 24 tools v1 exposed."""
+def test_planner_toolset_matches_allowlist() -> None:
+    """A allowlist visível ao planner = base v1 (24 tools) + Onda A.
 
-    expected_v1 = {
+    Onda A (spec adapter-tools-mvp.md) adicionou 4 tools de geometria/feature
+    ao Fusion: add_polygon, add_line, add_arc, revolve_profile. Ao adicionar
+    novas ondas (B-F), inclua as tools aqui.
+    """
+
+    expected = {
         "blender.create_mesh_primitive",
         "blender.apply_bevel",
         "blender.apply_boolean",
@@ -137,8 +142,13 @@ def test_planner_toolset_matches_v1_allowlist() -> None:
         "fusion.export_3mf",
         "fusion.validate_dimensions",
         "fusion.validate_printability",
+        # Onda A
+        "fusion.add_polygon",
+        "fusion.add_line",
+        "fusion.add_arc",
+        "fusion.revolve_profile",
     }
-    assert set(PLANNER_TOOLSET) == expected_v1
+    assert set(PLANNER_TOOLSET) == expected
 
 
 def test_blender_tools_lists_every_blender_descriptor_except_run_script() -> None:

@@ -9,7 +9,11 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.create_sketch",
     "fusion.add_rectangle",
     "fusion.add_circle",
+    "fusion.add_polygon",
+    "fusion.add_line",
+    "fusion.add_arc",
     "fusion.extrude_profile",
+    "fusion.revolve_profile",
     "fusion.set_parameter",
     "fusion.export_step",
     "fusion.export_stl",
@@ -313,14 +317,29 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
         def _add_circle(args):
             # Fix #10: diameter_mm/center_*_mm podem ser expressoes paramentricas.
+            # Onda A quick fix: aceita aliases circle_diameter_mm e radius_mm
+            # (LLM varia o nome do campo). center_mm=[x,y] como lista tambem.
             design = _design()
-            diameter_mm = _eval_param(args.get("diameter_mm"), design, 0.0) or 0.0
+            diameter_mm = _eval_param(
+                args.get("diameter_mm") or args.get("circle_diameter_mm"), design, 0.0
+            ) or 0.0
             if diameter_mm <= 0:
-                raise ToolError("fusion.invalid_dimensions", "diameter_mm precisa ser positivo.")
+                radius_mm = _eval_param(args.get("radius_mm"), design, 0.0) or 0.0
+                if radius_mm > 0:
+                    diameter_mm = radius_mm * 2
+            if diameter_mm <= 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "diameter_mm (ou radius_mm/circle_diameter_mm) precisa ser positivo.",
+                )
             sketch = _find_sketch(design, args.get("sketch"))
             radius_cm = diameter_mm / 20.0
-            center_x_mm = _eval_param(args.get("center_x_mm"), design, 0.0) or 0.0
-            center_y_mm = _eval_param(args.get("center_y_mm"), design, 0.0) or 0.0
+            center_pair = _eval_pair(args.get("center_mm"), design)
+            if center_pair is not None:
+                center_x_mm, center_y_mm = center_pair
+            else:
+                center_x_mm = _eval_param(args.get("center_x_mm"), design, 0.0) or 0.0
+                center_y_mm = _eval_param(args.get("center_y_mm"), design, 0.0) or 0.0
             center = adsk.core.Point3D.create(
                 center_x_mm / 10.0,
                 center_y_mm / 10.0,
@@ -350,11 +369,20 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 "cut": adsk.fusion.FeatureOperations.CutFeatureOperation,
                 "intersect": adsk.fusion.FeatureOperations.IntersectFeatureOperation,
             }}
+            # Onda A quick fix: operation desconhecida (ex: 'join_or_new_body'
+            # que o LLM inventou) cai em new_body com warning visivel no trace
+            # em vez de abortar o step. Tenta primeiro extrair um token valido
+            # da string composta.
+            operation_warning = ""
             if operation not in operation_map:
-                raise ToolError(
-                    "fusion.invalid_operation",
-                    "operation inválida. Use new_body, join, cut ou intersect.",
+                matched = next((op for op in operation_map if op in operation), None)
+                fallback_op = matched or "new_body"
+                operation_warning = (
+                    " [WARN: operation '{{}}' invalida, usei '{{}}']".format(
+                        operation, fallback_op
+                    )
                 )
+                operation = fallback_op
             sketch = _find_sketch(design, args.get("sketch"))
             if sketch.profiles.count == 0:
                 raise ToolError(
@@ -369,8 +397,159 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             )
             extrudes.add(input_obj)
             return {{
-                "message": "Extrusão de {{}} mm aplicada (operation={{}}).".format(
-                    distance_mm, operation
+                "message": "Extrusão de {{}} mm aplicada (operation={{}}).{{}}".format(
+                    distance_mm, operation, operation_warning
+                ),
+                "sketch_name": sketch.name,
+            }}
+
+
+        def _add_polygon(args):
+            # Onda A: poligono regular de N lados inscrito num circulo.
+            # Constroi os vertices por trigonometria e conecta com linhas
+            # (Fusion auto-merge de pontos coincidentes fecha o profile).
+            # Aceita diameter_mm OU radius_mm; center_mm=[x,y] opcional.
+            design = _design()
+            sides = int(_eval_param(args.get("sides"), design, 0.0) or 0)
+            if sides < 3:
+                raise ToolError("fusion.invalid_dimensions", "sides precisa ser >= 3.")
+            radius_mm = _eval_param(args.get("radius_mm"), design, 0.0) or 0.0
+            if radius_mm <= 0:
+                diameter_mm = _eval_param(args.get("diameter_mm"), design, 0.0) or 0.0
+                if diameter_mm > 0:
+                    radius_mm = diameter_mm / 2
+            if radius_mm <= 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "diameter_mm ou radius_mm precisa ser positivo.",
+                )
+            center_pair = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
+            cx_cm = center_pair[0] / 10.0
+            cy_cm = center_pair[1] / 10.0
+            radius_cm = radius_mm / 10.0
+            sketch = _find_sketch(design, args.get("sketch"))
+            points = []
+            for i in range(sides):
+                angle = 2 * math.pi * i / sides + math.pi / 2
+                points.append(
+                    adsk.core.Point3D.create(
+                        cx_cm + radius_cm * math.cos(angle),
+                        cy_cm + radius_cm * math.sin(angle),
+                        0,
+                    )
+                )
+            lines = sketch.sketchCurves.sketchLines
+            for i in range(sides):
+                lines.addByTwoPoints(points[i], points[(i + 1) % sides])
+            return {{
+                "message": "Poligono de {{}} lados (r={{}}mm) adicionado a '{{}}'.".format(
+                    sides, radius_mm, sketch.name
+                ),
+                "sketch_name": sketch.name,
+            }}
+
+
+        def _add_line(args):
+            # Onda A: polilinha a partir de uma lista de pontos [[x,y],...].
+            # closed=true fecha o loop (ultimo -> primeiro), permitindo
+            # perfis arbitrarios fechados para extrude/revolve.
+            design = _design()
+            raw_points = args.get("points_mm") or args.get("points") or []
+            if not isinstance(raw_points, list) or len(raw_points) < 2:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "points_mm precisa ser uma lista com >= 2 pontos.",
+                )
+            pts = []
+            for raw in raw_points:
+                pair = _eval_pair(raw, design)
+                if pair is None:
+                    raise ToolError(
+                        "fusion.invalid_dimensions",
+                        "ponto invalido em points_mm; use [x, y] em mm.",
+                    )
+                pts.append(adsk.core.Point3D.create(pair[0] / 10.0, pair[1] / 10.0, 0))
+            sketch = _find_sketch(design, args.get("sketch"))
+            lines = sketch.sketchCurves.sketchLines
+            closed = bool(args.get("closed"))
+            n = len(pts)
+            edges = n if closed else n - 1
+            for i in range(edges):
+                lines.addByTwoPoints(pts[i], pts[(i + 1) % n])
+            return {{
+                "message": "Polilinha de {{}} ponto(s){{}} adicionada a '{{}}'.".format(
+                    n, " (fechada)" if closed else "", sketch.name
+                ),
+                "sketch_name": sketch.name,
+            }}
+
+
+        def _add_arc(args):
+            # Onda A: arco por centro + ponto inicial + angulo de varredura.
+            design = _design()
+            center_pair = _eval_pair(args.get("center_mm"), design)
+            start_pair = _eval_pair(args.get("start_mm"), design)
+            sweep_deg = _eval_param(args.get("sweep_deg"), design, 0.0) or 0.0
+            if center_pair is None or start_pair is None or sweep_deg == 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "center_mm, start_mm e sweep_deg (!=0) sao obrigatorios.",
+                )
+            center = adsk.core.Point3D.create(
+                center_pair[0] / 10.0, center_pair[1] / 10.0, 0
+            )
+            start = adsk.core.Point3D.create(
+                start_pair[0] / 10.0, start_pair[1] / 10.0, 0
+            )
+            sketch = _find_sketch(design, args.get("sketch"))
+            sweep_rad = sweep_deg * math.pi / 180.0
+            sketch.sketchCurves.sketchArcs.addByCenterStartSweep(center, start, sweep_rad)
+            return {{
+                "message": "Arco de {{}} graus adicionado a '{{}}'.".format(
+                    sweep_deg, sketch.name
+                ),
+                "sketch_name": sketch.name,
+            }}
+
+
+        def _revolve_profile(args):
+            # Onda A: revolve um profile fechado em torno de um eixo
+            # (x/y/z) por um angulo (default 360 = solido completo).
+            # Destrava esferas (semicirculo revolvido), cones, vasos.
+            design = _design()
+            sketch = _find_sketch(design, args.get("sketch"))
+            if sketch.profiles.count == 0:
+                raise ToolError(
+                    "fusion.no_profile",
+                    "Sketch nao tem profile fechado para revolver.",
+                )
+            angle_deg = _eval_param(args.get("angle_deg"), design, 360.0)
+            if not angle_deg:
+                angle_deg = 360.0
+            operation = str(args.get("operation") or "new_body").lower()
+            operation_map = {{
+                "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+                "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
+                "cut": adsk.fusion.FeatureOperations.CutFeatureOperation,
+                "intersect": adsk.fusion.FeatureOperations.IntersectFeatureOperation,
+            }}
+            op = operation_map.get(operation, operation_map["new_body"])
+            axis_name = str(args.get("axis") or "y").lower()
+            root = _root(design)
+            axis_map = {{
+                "x": root.xConstructionAxis,
+                "y": root.yConstructionAxis,
+                "z": root.zConstructionAxis,
+            }}
+            axis = axis_map.get(axis_name, root.yConstructionAxis)
+            revolves = root.features.revolveFeatures
+            input_obj = revolves.createInput(sketch.profiles.item(0), axis, op)
+            angle_rad = float(angle_deg) * math.pi / 180.0
+            input_obj.setAngleExtent(False, adsk.core.ValueInput.createByReal(angle_rad))
+            revolves.add(input_obj)
+            return {{
+                "message": "Revolucao de {{}} graus (eixo {{}}) aplicada a '{{}}'.".format(
+                    angle_deg, axis_name, sketch.name
                 ),
                 "sketch_name": sketch.name,
             }}
@@ -665,8 +844,16 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _add_rectangle(args)
             if tool_name == "fusion.add_circle":
                 return _add_circle(args)
+            if tool_name == "fusion.add_polygon":
+                return _add_polygon(args)
+            if tool_name == "fusion.add_line":
+                return _add_line(args)
+            if tool_name == "fusion.add_arc":
+                return _add_arc(args)
             if tool_name == "fusion.extrude_profile":
                 return _extrude_profile(args)
+            if tool_name == "fusion.revolve_profile":
+                return _revolve_profile(args)
             if tool_name == "fusion.set_parameter":
                 return _set_parameter(args)
             if tool_name == "fusion.export_step":

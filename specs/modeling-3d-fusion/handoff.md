@@ -22,6 +22,33 @@ PR/merge.
 | 4 — Frontend cards + aprovação inline + auto-analyze | mergeado             | #25                  | `cf42144` → `424be99`                 |
 | 5 — Título obrigatório do chat (frontend)            | concluída localmente | —                    | branch `codex/3d-chat-title-required` |
 | 6 — QA / docs finais + wire orchestrator no stream   | iniciada (hotfix QA) | —                    | —                                     |
+| 7 — Observabilidade + 13 fixes do adapter Fusion     | mergeada na master   | #27/#28/#29          | ver seção Onda 7                      |
+| 8A — Expansão adapter Fusion (revolve + polygon)     | em PR                | —                    | branch `feat/fusion-revolve-polygon`  |
+
+### Onda 8A — add_polygon/add_line/add_arc/revolve_profile + fix do prompt
+
+Spec: `specs/modeling-3d-fusion/adapter-tools-mvp.md`. Branch
+`feat/fusion-revolve-polygon`. Entregue:
+
+- **4 tools novas** em `fusion_mcp_scripts.py` (template + dispatch + tupla)
+  + registry + planner toolset: `fusion.add_polygon` (N lados),
+  `fusion.add_line` (polilinha fechável), `fusion.add_arc`,
+  `fusion.revolve_profile` (esferas/cones/vasos). Todas reusam
+  `_eval_param`/`_eval_pair` (suporte a expressão paramétrica).
+- **Fix do prompt do planner** (causa raiz do `no_profile`): system prompt
+  agora explicita que `create_sketch` cria sketch VAZIO e exige uma tool de
+  geometria antes de extrude/revolve; proíbe geometria em campos de texto
+  (`notes`/`description`); orienta revolve para esfera e polygon para
+  pentágono/hexágono.
+- **Quick fixes de schema drift**: `add_circle` aceita
+  `circle_diameter_mm`/`radius_mm`/`center_mm`; `extrude_profile` mapeia
+  `operation` desconhecida (ex: `join_or_new_body`) para `new_body` com
+  warning no message em vez de abortar.
+- **Testes**: `test_onda_a_tools_are_registered_and_compile`,
+  `test_add_circle_accepts_aliases`, atualizado
+  `test_planner_toolset_matches_allowlist` (24 → 28 tools).
+- **Pendente**: validação manual com Fusion real (esfera por revolve,
+  hexágono por polygon). Próximas ondas (B-F) na spec.
 
 Verificação ao fim da Onda 4 (local, Windows):
 
