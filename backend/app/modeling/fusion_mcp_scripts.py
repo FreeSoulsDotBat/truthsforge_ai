@@ -2311,10 +2311,32 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
         )
 
 
+        def _normalize_param_suffix(args):
+            # Drift do trace placa (mt_019e46d6dc46): o LLM expressa vinculos
+            # parametricos com o sufixo "_param" carregando o NOME do parametro
+            # (ex: width_param="plate_length", distance_param="plate_thickness",
+            # diameter_param="hole_diameter"). A convencao e uniforme:
+            # <base>_param -> <base>_mm com valor = nome do parametro. Mapeamos
+            # aqui no dispatch para TODA tool dimensional; _eval_param /
+            # _param_value_input / _param_name_or_none ja resolvem nome de
+            # parametro como vinculo (G1.1/G1.2). So preenche se a chave _mm
+            # canonica ainda nao veio. Nao usar chaves literais em comentarios
+            # (modulo e f-string template).
+            for key in list(args.keys()):
+                if not key.endswith("_param"):
+                    continue
+                base = key[: -len("_param")]
+                target = base + "_mm"
+                if args.get(target) is None and args.get(key) is not None:
+                    args[target] = args[key]
+            return args
+
+
         def _dispatch(tool_name, args):
             # G2.3: wrapper que aplica result_name/output_name pos-criacao
             # nos tools que criam body, dando um handle estavel para steps
             # seguintes (pattern/mirror/fillet) referenciarem.
+            args = _normalize_param_suffix(args)
             result = _dispatch_inner(tool_name, args)
             if tool_name in _BODY_CREATORS and (
                 args.get("result_name") or args.get("output_name")

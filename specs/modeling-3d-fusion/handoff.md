@@ -28,6 +28,30 @@ PR/merge.
 | 8C — Features (fillet/chamfer/shell/hole)            | em PR                | —                    | branch `feat/fusion-features-onda-c`  |
 | 8D-F — Replicação/sweeps/modificação direta          | em PR                | —                    | branch `feat/fusion-onda-def`         |
 
+### Schema drift convenção `_param` (placa, 3º teste, 20/05) — branch `fix/fusion-param-expression-syntax`
+
+Trace `mt_019e46d6dc46` (3ª iteração da placa). O LLM mudou de novo o plano
+(12 steps com `set_parameter` + `create_sketch` + `add_rectangle`/`add_circle`
++ extrude) e expôs 1 drift **sistemático**: ele expressa vínculo paramétrico
+com o sufixo **`_param`** carregando o NOME do parâmetro:
+
+- `add_rectangle`: `width_param:"plate_length"`, `height_param:"plate_width"`.
+- `extrude_profile`: `distance_param:"plate_thickness"`.
+- `add_circle`: `diameter_param:"hole_diameter"`.
+
+**Fix (genérico, no `_dispatch`):** helper `_normalize_param_suffix` mapeia
+QUALQUER chave `<base>_param` → `<base>_mm` (só se a `_mm` canônica não veio),
+preservando o nome do parâmetro como valor. Os helpers `_eval_param`/
+`_param_value_input`/`_param_name_or_none` já resolvem nome de parâmetro como
+vínculo (G1.1/G1.2). Resolvido para TODAS as tools dimensionais de uma vez —
+mata a classe inteira desse drift. `set_parameter`/`validate_dimensions` não
+têm chaves que terminam exatamente em `_param` (`parameters`/`check_parameters`
+não casam), então é seguro.
+
+Teste: `test_schema_drift_param_suffix_convention`. Documentado o fluxo
+fix-by-trace + scripts SQL de debug em `docs/3d-mcp-modeling.md` (seção
+"Debug de schema drift do adapter Fusion").
+
 ### Schema drift add_box lista de dimensões (placa, 2º teste, 20/05) — branch `fix/fusion-param-expression-syntax`
 
 Trace `mt_019e46cf2726` (re-teste da placa após o fix de sintaxe de

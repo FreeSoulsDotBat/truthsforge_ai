@@ -991,6 +991,43 @@ def test_schema_drift_add_box_dimensions_list() -> None:
         assert 'TOOL_NAME = "fusion.add_box"' in script
 
 
+def test_schema_drift_param_suffix_convention() -> None:
+    """Drift do trace placa (mt_019e46d6dc46): o LLM expressa vinculos
+    parametricos com o sufixo ``_param`` carregando o nome do parametro
+    (width_param/height_param/distance_param/diameter_param). O dispatch
+    normaliza <base>_param -> <base>_mm; os scripts devem compilar e o helper
+    _normalize_param_suffix deve estar presente no template.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        "fusion.add_rectangle": {
+            "sketch": "s",
+            "centered": True,
+            "width_param": "plate_length",
+            "height_param": "plate_width",
+        },
+        "fusion.extrude_profile": {
+            "sketch": "s",
+            "operation": "new_body",
+            "distance_param": "plate_thickness",
+        },
+        "fusion.add_circle": {
+            "sketch": "s",
+            "center_mm": [0, 0],
+            "diameter_param": "hole_diameter",
+        },
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+        assert "_normalize_param_suffix" in script
+
+
 def test_unwrap_inner_fusion_result_captures_traceback() -> None:
     """Traceback do inner result vai parar em host_details para debug."""
 
