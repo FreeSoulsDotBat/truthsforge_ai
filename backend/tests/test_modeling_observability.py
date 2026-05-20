@@ -1050,6 +1050,29 @@ def test_hole_uses_circle_profile_selector() -> None:
     assert "_profile_for_circle(sketch, diameter_mm / 20.0)" in script
 
 
+def test_open_design_reuses_active_design() -> None:
+    """P3: open_design deve REUSAR o design ativo por padrão (não recriar um
+    Untitled e zerar o modelo); só cria novo com new_document/reset/force_new.
+    Validação de runtime depende do Fusion real; aqui garantimos que o script
+    compila e contém a lógica de reuso/force_new.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    for args in ({}, {"new_document": True}, {"reset": True}):
+        script = build_autodesk_fusion_script(
+            tool_name="fusion.open_design", arguments=args
+        )
+        ast.parse(script)
+        assert 'TOOL_NAME = "fusion.open_design"' in script
+    # A lógica de reuso e de force_new precisa estar presente no template.
+    assert "force_new" in script
+    assert "activeProduct" in script
+    assert '"reused"' in script
+
+
 def test_unwrap_inner_fusion_result_captures_traceback() -> None:
     """Traceback do inner result vai parar em host_details para debug."""
 

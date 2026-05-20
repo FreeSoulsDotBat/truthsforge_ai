@@ -279,6 +279,42 @@ def test_chat_stream_asks_clarification_when_ambiguous(monkeypatch) -> None:
     assert session.modeling_plan_id is None
 
 
+def test_execute_advances_chat_to_editing(monkeypatch) -> None:
+    """P3: ao executar um plano vinculado a um chat 3D via card, o chat avança
+    para ``editing`` (para que follow-ups sejam tratados como edição).
+    Ver specs/modeling-3d-fusion/chat-flow-redesign.md (P3).
+    """
+
+    from app.core.contracts import ChatModelingStage, ChatSession
+    from app.modeling.blender_adapter import BlenderAdapter
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+
+    store = get_store()
+    session = ChatSession(
+        title="Chat 3D edição",
+        is_modeling_3d=True,
+        modeling_stage=ChatModelingStage.planning,
+    )
+    store.upsert_chat_session(session)
+
+    plan = _create_plan_via_service(
+        prompt="Crie um cubo visual no Blender.",
+        mode=ModelingExecutionMode.safe_auto,
+        software_override=ModelingSoftware.blender,
+        conversation_id=session.id,
+    )
+
+    client = TestClient(app)
+    executed = client.post(f"/api/3d/plans/{plan['id']}/execute")
+    assert executed.status_code == 200
+    assert executed.json()["plan"]["status"] == "completed"
+
+    refreshed = store.get_chat_session(session.id)
+    assert refreshed.modeling_stage == ChatModelingStage.editing
+    assert refreshed.modeling_plan_id == plan["id"]
+
+
 def test_modeling_snapshot_records_manifest() -> None:
     client = TestClient(app)
     response = client.post(

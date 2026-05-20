@@ -398,6 +398,10 @@ class ChatSession(BaseModel):
     modeling_software_preference: ModelingSoftware | None = None
     modeling_stage: ChatModelingStage | None = None
     modeling_plan_id: str | None = None
+    # P3 (chat-flow-redesign): "modo fluido" opt-in por chat. Quando True,
+    # edições aditivas (sem high-risk) auto-executam sem parar no card; o
+    # plano primário e ações destrutivas/high-risk SEMPRE pedem aprovação.
+    modeling_fluid_mode: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
@@ -509,6 +513,9 @@ class ChatModeling3DContext(BaseModel):
     enabled: bool = False
     mode: ModelingExecutionMode = ModelingExecutionMode.safe_auto
     software_override: ModelingSoftware | None = None
+    # P3: opt-in por chat. ``None`` = não alterar a preferência atual da
+    # sessão; True/False atualiza o ``modeling_fluid_mode`` da ChatSession.
+    fluid_mode: bool | None = None
 
     @model_validator(mode="after")
     def normalize_software_override(self) -> ChatModeling3DContext:

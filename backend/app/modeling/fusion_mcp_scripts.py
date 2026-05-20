@@ -491,11 +491,40 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return coll
 
 
-        def _open_design(_args):
-            doc = _app().documents.add(adsk.core.DocumentTypes.FusionDesignDocumentType)
+        def _open_design(args):
+            # P3 (edicao nao pode quebrar o modelo): por padrao REUSA o design
+            # ativo em vez de criar um 'Untitled' novo a cada execucao — antes,
+            # toda edicao criava um documento novo e zerava o modelo. Cria um
+            # documento novo apenas quando NAO ha design ativo OU quando o
+            # caller pede explicitamente (new_document/reset/force_new), que e
+            # o caso de "modelo do zero". Ver chat-flow-redesign.md (P3).
+            args = args or {{}}
+            force_new = bool(
+                args.get("new_document")
+                or args.get("reset")
+                or args.get("force_new")
+            )
+            app = _app()
+            if not force_new:
+                active = adsk.fusion.Design.cast(app.activeProduct)
+                if active is not None:
+                    doc_name = ""
+                    try:
+                        doc_name = app.activeDocument.name
+                    except Exception:
+                        doc_name = ""
+                    return {{
+                        "message": "Design ativo reutilizado{{}}.".format(
+                            " ('" + doc_name + "')" if doc_name else ""
+                        ),
+                        "document_name": doc_name,
+                        "reused": True,
+                    }}
+            doc = app.documents.add(adsk.core.DocumentTypes.FusionDesignDocumentType)
             return {{
                 "message": "Documento '{{}}' criado.".format(doc.name),
                 "document_name": doc.name,
+                "reused": False,
             }}
 
 
