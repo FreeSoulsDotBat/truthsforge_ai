@@ -183,3 +183,28 @@ e destrutivas continuam parando no card.
   inclusive follow-ups — o que é o default seguro acordado.
 - **Revisão da ADR-013:** o "fluxo fluido" (auto-executar adições) deixou de
   ser o default; vira opt-in por chat na P3. Formalizar ADR junto da P3.
+
+### P2 — Discovery Agent ✅ ENTREGUE (2026-05-20, mesma branch)
+
+- Novo módulo `app/modeling/discovery.py`: avaliação via LLM (Structured
+  Outputs, `DISCOVERY_SCHEMA`) que decide `ready_to_plan` + `confidence` +
+  `questions` + `refined_brief`. **Pergunta só quando ambíguo:** só prossegue
+  se o LLM marcar ready, a confiança bater o limiar E não houver perguntas;
+  qualquer pergunta força o loop de descoberta. Fallback `heuristic_assessment`
+  nunca bloqueia (ready=true) quando não há modelo.
+- `ModelingPlannerService.assess_request_async` reusa resolução de modelo +
+  gateway + tracer (eventos `discovery.assess` span e `discovery.assessed`).
+  Exposto na fachada `ModelingService.assess_request_async`.
+- Rota `chat.py:modeling_events`: antes de planejar, roda discovery (pula em
+  `editing` e quando a flag está off). Se não-pronto, emite as perguntas como
+  mensagem do assistente, mantém o chat em `discovery`, audita
+  `modeling.chat.clarification_asked` e PARA (sem criar plano). Se pronto, usa
+  `refined_brief` como prompt do planner. Quando o usuário responde, o próximo
+  turno re-roda discovery com o histórico acumulado.
+- Flags novas: `TRUTHS_FORGE_MODELING_DISCOVERY_ENABLED` (default true) e
+  `TRUTHS_FORGE_MODELING_DISCOVERY_THRESHOLD` (default 0.7).
+- Testes: `tests/test_modeling_discovery.py` (limiar/perguntas/heurístico) e
+  `test_chat_stream_asks_clarification_when_ambiguous` (rota pergunta e não
+  cria plano; sessão fica em `discovery`).
+- **Pendente:** UI dedicada para as perguntas é opcional (hoje vão como
+  mensagem normal do assistente, que o chat já renderiza). P3/P4 seguem.

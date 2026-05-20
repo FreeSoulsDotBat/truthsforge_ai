@@ -31,8 +31,15 @@ ambíguo (P3 corrige `open_design` que recria `Untitled`).
   via `/approve`+`/execute` (card já ligado). Teste
   `test_chat_stream_proposes_plan_without_executing`. Revisa a ADR-013
   (fluxo fluido vira opt-in na P3).
-- **P2/P3/P4 pendentes** (discovery agent; edição-vs-novo + fix open_design +
-  modo fluido; edição de plano).
+- **P2 ENTREGUE** (mesma branch): discovery agent (`app/modeling/discovery.py`)
+  avalia o pedido antes de planejar e **pergunta só quando ambíguo** (limiar
+  de confiança). `ModelingPlannerService.assess_request_async` reusa modelo+
+  gateway+tracer; rota `chat.py` faz as perguntas e PARA quando não-pronto
+  (chat fica em `discovery`), ou usa `refined_brief` quando pronto. Flags
+  `MODELING_DISCOVERY_ENABLED`/`_THRESHOLD`. Testes em
+  `test_modeling_discovery.py` + rota.
+- **P3/P4 pendentes** (edição-vs-novo + fix open_design + modo fluido; edição
+  de plano).
 
 | Onda                                                 | Status               | PR                   | Commits-chave                         |
 | ---------------------------------------------------- | -------------------- | -------------------- | ------------------------------------- |

@@ -191,6 +191,9 @@ def test_chat_stream_proposes_plan_without_executing(monkeypatch) -> None:
 
     monkeypatch.setattr(FusionDesktopAdapter, "is_available", lambda self: False)
     monkeypatch.setattr(settings, "require_chat_title", False)
+    # Foca o teste no gate de aprovação (P1); a descoberta (P2) é coberta à
+    # parte. Sem isso o teste tentaria uma chamada LLM de descoberta antes.
+    monkeypatch.setattr(settings, "modeling_discovery_enabled", False)
 
     client = TestClient(app)
     response = client.post(
@@ -227,6 +230,53 @@ def test_chat_stream_proposes_plan_without_executing(monkeypatch) -> None:
     # O plano persistido também está waiting_approval (card mostra Aprovar).
     persisted = client.get(f"/api/3d/plans/{plan['id']}").json()
     assert persisted["status"] == "waiting_approval"
+
+
+def test_chat_stream_asks_clarification_when_ambiguous(monkeypatch) -> None:
+    """P2 (discovery): quando o agente avalia o pedido como ambíguo, a rota
+    /api/chat/stream deve FAZER perguntas e NÃO criar plano; o chat fica em
+    ``discovery``. Mockamos a avaliação para não depender do LLM.
+    Ver specs/modeling-3d-fusion/chat-flow-redesign.md (P2).
+    """
+
+    from app.core.contracts import ModelingDiscoveryAssessment
+    from app.modeling.service import ModelingService
+
+    async def _fake_assess(self, prompt, *, history=None, software_override=None, threshold=None):
+        return ModelingDiscoveryAssessment(
+            ready_to_plan=False,
+            confidence=0.3,
+            questions=["Qual a altura em mm?", "Qual o material?"],
+            refined_brief="",
+            rationale="pedido vago",
+        )
+
+    monkeypatch.setattr(settings, "require_chat_title", False)
+    monkeypatch.setattr(settings, "modeling_discovery_enabled", True)
+    monkeypatch.setattr(ModelingService, "assess_request_async", _fake_assess)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "quero uma peça",
+            "title": "Peça vaga",
+            "modeling_3d": {"enabled": True, "mode": "safe_auto"},
+        },
+    )
+    assert response.status_code == 200
+
+    # NÃO deve propor plano nenhum.
+    assert _sse_event(response.text, "modeling_plan") is None
+    # As perguntas aparecem no texto da resposta.
+    assert "Qual a altura em mm?" in response.text
+    assert "Qual o material?" in response.text
+
+    # A sessão ficou em discovery, sem plano vinculado.
+    meta = _sse_event(response.text, "meta")
+    session = get_store().get_chat_session(meta["session_id"])
+    assert session.modeling_stage.value == "discovery"
+    assert session.modeling_plan_id is None
 
 
 def test_modeling_snapshot_records_manifest() -> None:

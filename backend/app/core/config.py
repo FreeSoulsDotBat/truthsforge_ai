@@ -130,6 +130,23 @@ class Settings(BaseModel):
             os.getenv("TRUTHS_FORGE_MODELING_TRACE_RETENTION_ERROR", "180")
         )
     )
+    # Discovery agent (P2 do chat-flow-redesign): antes de propor o plano, um
+    # agente LLM avalia se o pedido está claro o suficiente; se não, faz
+    # perguntas e PARA. Default ``true``. Desligar volta ao comportamento
+    # "propõe direto" (ainda com gate de aprovação da P1).
+    modeling_discovery_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_DISCOVERY_ENABLED", "true").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
+    # Limiar de confiança: abaixo dele (ou se o LLM listar perguntas) o agente
+    # pergunta em vez de propor o plano. Mais alto = pergunta mais.
+    modeling_discovery_confidence_threshold: float = Field(
+        default_factory=lambda: float(
+            os.getenv("TRUTHS_FORGE_MODELING_DISCOVERY_THRESHOLD", "0.7")
+        )
+    )
 
     @property
     def allowed_origins(self) -> list[str]:

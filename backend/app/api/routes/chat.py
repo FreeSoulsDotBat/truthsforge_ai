@@ -1268,6 +1268,54 @@ def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
     }
 
 
+def _modeling_chat_history(
+    store, session_id: str, *, exclude_message: str | None = None
+) -> list[dict[str, str]]:
+    """Histórico user/assistant da sessão para o agente de descoberta (P2).
+
+    ``exclude_message`` remove a última ocorrência igual ao texto do turno
+    atual (que já foi persistido) para não duplicá-lo — o discovery recebe o
+    prompt do turno separadamente.
+    """
+
+    history: list[dict[str, str]] = []
+    for chat_session in store.list_chat_sessions():
+        if chat_session.id != session_id:
+            continue
+        for message in getattr(chat_session, "messages", []) or []:
+            if message.role in {"user", "assistant"} and (message.content or "").strip():
+                history.append({"role": message.role, "content": message.content})
+        break
+    if exclude_message is not None:
+        for index in range(len(history) - 1, -1, -1):
+            if history[index]["role"] == "user" and history[index]["content"] == exclude_message:
+                history.pop(index)
+                break
+    return history
+
+
+def _format_clarification(assessment) -> str:
+    """Mensagem pt-BR com as perguntas de descoberta para o usuário."""
+
+    questions = assessment.questions or [
+        "Pode detalhar a geometria e as dimensões principais em milímetros?"
+    ]
+    lines = [
+        "Antes de montar o plano, preciso entender melhor o que você quer "
+        "modelar:",
+        "",
+    ]
+    lines.extend(f"{i}. {question}" for i, question in enumerate(questions, start=1))
+    lines.extend(
+        [
+            "",
+            "Responda e eu proponho o plano (você ainda aprova antes de "
+            "qualquer execução).",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _modeling_plan_chat_summary(plan: ModelingPlan) -> str:
     approval = (
         "aguardando sua aprovação"
@@ -1458,6 +1506,72 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 project_id=effective_project_id,
             )
 
+            # P2 (descoberta): antes de planejar, avalia se o pedido está
+            # claro o suficiente. Se não, faz perguntas e PARA (sem criar
+            # plano), mantendo o chat em ``discovery``. Pula em ``editing``
+            # (follow-up de edição é tratado na fase P3) e quando a flag
+            # está desligada. Falha de descoberta nunca bloqueia: o service
+            # já cai em heurístico (ready=true). Ver chat-flow-redesign.md.
+            plan_prompt = payload.message
+            if (
+                settings.modeling_discovery_enabled
+                and session.modeling_stage != ChatModelingStage.editing
+            ):
+                history = _modeling_chat_history(
+                    store, session.id, exclude_message=payload.message
+                )
+                assessment = await modeling_service.assess_request_async(
+                    payload.message,
+                    history=history,
+                    software_override=payload.modeling_3d.software_override,
+                )
+                _modeling_tracer.flush(current_trace_id())
+                if not assessment.ready_to_plan:
+                    session = session.model_copy(
+                        update={
+                            "modeling_stage": ChatModelingStage.discovery,
+                            "updated_at": now_utc(),
+                        }
+                    )
+                    if hasattr(store, "upsert_chat_session"):
+                        store.upsert_chat_session(session)
+                    assistant_message.content = _format_clarification(assessment)
+                    assistant_message.metadata["modeling_clarification"] = {
+                        "questions": assessment.questions,
+                        "confidence": assessment.confidence,
+                    }
+                    store.add_message(assistant_message)
+                    record_audit_event(
+                        AuditEvent(
+                            event_type="modeling.chat.clarification_asked",
+                            model_id=None,
+                            tokens_in=estimate_tokens(payload.message),
+                            tokens_out=estimate_tokens(assistant_message.content),
+                            estimated_cost_brl=0,
+                            metadata={
+                                "session_id": session.id,
+                                "project_id": effective_project_id,
+                                "question_count": len(assessment.questions),
+                                "confidence": assessment.confidence,
+                            },
+                        )
+                    )
+                    yield _runtime_status(
+                        "modeling_3d_discovery",
+                        "Preciso de mais detalhes",
+                        f"{len(assessment.questions)} pergunta(s) antes de planejar.",
+                    )
+                    yield _sse("token", {"content": assistant_message.content})
+                    yield _runtime_status("done", "Concluído")
+                    yield _sse(
+                        "done",
+                        {"session_id": session.id, "message_id": assistant_message.id},
+                    )
+                    _modeling_tracer.close_trace()
+                    return
+                if assessment.refined_brief:
+                    plan_prompt = assessment.refined_brief
+
             # PR#28 review (issue 2): close_trace() é chamado em TODOS os
             # exit points abaixo (early-return error paths + happy path)
             # para garantir cleanup do buffer. Sem isso o trace ficaria
@@ -1465,7 +1579,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
             try:
                 plan = await modeling_service.create_plan_async(
                     ModelingPlanCreate(
-                        prompt=payload.message,
+                        prompt=plan_prompt,
                         project_id=effective_project_id,
                         conversation_id=session.id,
                         mode=payload.modeling_3d.mode,

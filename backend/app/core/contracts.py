@@ -889,6 +889,24 @@ class ModelingPlanCreate(BaseModel):
         return self
 
 
+class ModelingDiscoveryAssessment(BaseModel):
+    """Resultado da descoberta (P2 do chat-flow-redesign).
+
+    Antes de propor o plano, o agente avalia se o pedido do usuário está
+    claro o suficiente. Quando ``ready_to_plan`` é ``False`` o backend faz
+    as ``questions`` ao usuário e NÃO cria plano (chat segue em
+    ``discovery``). Quando ``True``, ``refined_brief`` é uma descrição
+    completa em linguagem natural usada como entrada do planner.
+    """
+
+    ready_to_plan: bool = True
+    confidence: float = Field(default=0.7, ge=0, le=1)
+    questions: list[str] = Field(default_factory=list)
+    refined_brief: str = ""
+    rationale: str = ""
+    source: ModelingPlannerSource = ModelingPlannerSource.heuristic
+
+
 class ModelingApprovalRequest(BaseModel):
     decision: ModelingApprovalDecision
     reason: str = ""

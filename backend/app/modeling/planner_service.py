@@ -43,6 +43,7 @@ from app.core.contracts import (
     KnowledgeBase,
     ModelCapability,
     ModelConfig,
+    ModelingDiscoveryAssessment,
     ModelingPlan,
     ModelingPlanCreate,
     ModelingPlannerSource,
@@ -59,6 +60,8 @@ from app.llm_gateway.exceptions import (
     classify_provider_exception,
 )
 from app.llm_gateway.gateway import LLMGateway
+from app.modeling.discovery import assess_request_async as assess_discovery_async
+from app.modeling.discovery import heuristic_assessment
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner import (
     create_heuristic_plan,
@@ -128,6 +131,77 @@ class ModelingPlannerService:
             update={"planner_source": source, "fallback_reason": fallback_reason}
         )
         return self._persist_plan(plan, source, fallback_reason)
+
+    async def assess_request_async(
+        self,
+        prompt: str,
+        *,
+        history: list[dict[str, str]] | None = None,
+        software_override: Any = None,
+        threshold: float | None = None,
+    ) -> ModelingDiscoveryAssessment:
+        """P2: avalia se o pedido está pronto para planejar ou precisa de
+        perguntas. Reusa a resolução de modelo + gateway do planner. Em
+        qualquer falha (modelo indisponível ou erro do provider) cai no
+        fallback heurístico, que NÃO bloqueia o usuário.
+        """
+
+        effective_threshold = (
+            threshold
+            if threshold is not None
+            else settings.modeling_discovery_confidence_threshold
+        )
+        model = self._resolve_planner_model()
+        if model is None:
+            return heuristic_assessment(prompt, history)
+        try:
+            with self._tracer.record_span(
+                "discovery.assess",
+                source=ModelingTraceSource.backend,
+                payload={
+                    "model_id": model.id,
+                    "provider": model.provider.value,
+                    "provider_model_id": model.provider_model_id,
+                    "threshold": effective_threshold,
+                    "history_len": len(history or []),
+                    "prompt_length": len(prompt or ""),
+                },
+            ) as span:
+                assessment = await assess_discovery_async(
+                    prompt,
+                    gateway=self.gateway,
+                    model=model,
+                    history=history,
+                    software_override=software_override,
+                    threshold=effective_threshold,
+                )
+                span.attach(
+                    {
+                        "ready_to_plan": assessment.ready_to_plan,
+                        "confidence": assessment.confidence,
+                        "question_count": len(assessment.questions),
+                    }
+                )
+            self._tracer.record(
+                "discovery.assessed",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.info,
+                message=(
+                    "Pedido pronto para planejar"
+                    if assessment.ready_to_plan
+                    else f"Descoberta pediu {len(assessment.questions)} esclarecimento(s)"
+                ),
+                payload={
+                    "ready_to_plan": assessment.ready_to_plan,
+                    "confidence": assessment.confidence,
+                    "question_count": len(assessment.questions),
+                    "threshold": effective_threshold,
+                },
+            )
+            return assessment
+        except Exception as exc:  # noqa: BLE001 - fallback is intentional
+            self._classify_and_record_llm_error(exc, model)
+            return heuristic_assessment(prompt, history)
 
     # ------------------------------------------------------------------
     # internals

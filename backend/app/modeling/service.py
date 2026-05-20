@@ -28,6 +28,7 @@ from app.core.contracts import (
     ModelingApprovalRequest,
     ModelingCapabilities,
     ModelingCapability,
+    ModelingDiscoveryAssessment,
     ModelingExecutionResult,
     ModelingPlan,
     ModelingPlanCreate,
@@ -153,6 +154,23 @@ class ModelingService:
 
     async def create_plan_async(self, payload: ModelingPlanCreate) -> ModelingPlan:
         return await self.planner.create_plan_async(payload)
+
+    async def assess_request_async(
+        self,
+        prompt: str,
+        *,
+        history: list[dict[str, str]] | None = None,
+        software_override: Any = None,
+        threshold: float | None = None,
+    ) -> ModelingDiscoveryAssessment:
+        """P2 discovery: avalia se o pedido está pronto para planejar."""
+
+        return await self.planner.assess_request_async(
+            prompt,
+            history=history,
+            software_override=software_override,
+            threshold=threshold,
+        )
 
     # ------------------------------------------------------------------
     # approval & step decisions (kept inline; mutate only the persisted plan)
