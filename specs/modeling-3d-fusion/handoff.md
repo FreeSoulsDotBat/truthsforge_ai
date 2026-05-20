@@ -24,6 +24,7 @@ PR/merge.
 | 6 — QA / docs finais + wire orchestrator no stream   | iniciada (hotfix QA) | —                    | —                                     |
 | 7 — Observabilidade + 13 fixes do adapter Fusion     | mergeada na master   | #27/#28/#29          | ver seção Onda 7                      |
 | 8A — Expansão adapter Fusion (revolve + polygon)     | em PR                | —                    | branch `feat/fusion-revolve-polygon`  |
+| 8B — Primitivas diretas (box/cylinder/sphere/cone)   | em PR                | —                    | branch `feat/fusion-primitives-onda-b` |
 
 ### Onda 8A — add_polygon/add_line/add_arc/revolve_profile + fix do prompt
 

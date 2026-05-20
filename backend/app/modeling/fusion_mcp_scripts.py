@@ -12,6 +12,10 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.add_polygon",
     "fusion.add_line",
     "fusion.add_arc",
+    "fusion.add_box",
+    "fusion.add_cylinder",
+    "fusion.add_sphere",
+    "fusion.add_cone",
     "fusion.extrude_profile",
     "fusion.revolve_profile",
     "fusion.set_parameter",
@@ -555,6 +559,191 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
+        def _unique_sketch_name(design, base):
+            # Gera um nome de sketch livre (base, base (1), base (2)...).
+            existing = set()
+            sketches = _root(design).sketches
+            for i in range(sketches.count):
+                existing.add(sketches.item(i).name)
+            if base not in existing:
+                return base
+            n = 1
+            while "{{}} ({{}})".format(base, n) in existing:
+                n += 1
+            return "{{}} ({{}})".format(base, n)
+
+
+        def _add_box(args):
+            # Onda B: primitiva direta. Cria sketch interno + extrude num
+            # unico step (corpo editavel na timeline, nao TemporaryBRep).
+            design = _design()
+            w = _eval_param(args.get("width_mm"), design, 0.0) or 0.0
+            d = _eval_param(args.get("depth_mm"), design, 0.0) or 0.0
+            h = _eval_param(args.get("height_mm"), design, 0.0) or 0.0
+            if w <= 0 or d <= 0 or h <= 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "width_mm, depth_mm e height_mm precisam ser positivos.",
+                )
+            center = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
+            root = _root(design)
+            sketch = root.sketches.add(root.xYConstructionPlane)
+            sketch.name = _unique_sketch_name(design, str(args.get("name") or "Box"))
+            cx_cm = center[0] / 10.0
+            cy_cm = center[1] / 10.0
+            w_cm = w / 10.0
+            d_cm = d / 10.0
+            p1 = adsk.core.Point3D.create(cx_cm - w_cm / 2, cy_cm - d_cm / 2, 0)
+            p2 = adsk.core.Point3D.create(cx_cm + w_cm / 2, cy_cm + d_cm / 2, 0)
+            sketch.sketchCurves.sketchLines.addTwoPointRectangle(p1, p2)
+            extrudes = root.features.extrudeFeatures
+            inp = extrudes.createInput(
+                sketch.profiles.item(0),
+                adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+            )
+            inp.setDistanceExtent(False, adsk.core.ValueInput.createByReal(h / 10.0))
+            extrudes.add(inp)
+            return {{
+                "message": "Caixa {{}}x{{}}x{{}} mm criada ('{{}}').".format(
+                    w, d, h, sketch.name
+                ),
+                "sketch_name": sketch.name,
+            }}
+
+
+        def _add_cylinder(args):
+            # Onda B: cilindro = circulo + extrude.
+            design = _design()
+            diameter_mm = _eval_param(args.get("diameter_mm"), design, 0.0) or 0.0
+            if diameter_mm <= 0:
+                radius_mm = _eval_param(args.get("radius_mm"), design, 0.0) or 0.0
+                if radius_mm > 0:
+                    diameter_mm = radius_mm * 2
+            h = _eval_param(args.get("height_mm"), design, 0.0) or 0.0
+            if diameter_mm <= 0 or h <= 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "diameter_mm (ou radius_mm) e height_mm precisam ser positivos.",
+                )
+            center = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
+            root = _root(design)
+            sketch = root.sketches.add(root.xYConstructionPlane)
+            sketch.name = _unique_sketch_name(design, str(args.get("name") or "Cylinder"))
+            center_pt = adsk.core.Point3D.create(
+                center[0] / 10.0, center[1] / 10.0, 0
+            )
+            sketch.sketchCurves.sketchCircles.addByCenterRadius(
+                center_pt, diameter_mm / 20.0
+            )
+            extrudes = root.features.extrudeFeatures
+            inp = extrudes.createInput(
+                sketch.profiles.item(0),
+                adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+            )
+            inp.setDistanceExtent(False, adsk.core.ValueInput.createByReal(h / 10.0))
+            extrudes.add(inp)
+            return {{
+                "message": "Cilindro o{{}}x{{}} mm criado ('{{}}').".format(
+                    diameter_mm, h, sketch.name
+                ),
+                "sketch_name": sketch.name,
+            }}
+
+
+        def _add_sphere(args):
+            # Onda B: esfera = semicirculo revolvido 360 graus.
+            # Desenha um meio-perfil (linha diametral no eixo + arco) no
+            # plano XZ e revolve em torno da linha diametral.
+            design = _design()
+            diameter_mm = _eval_param(args.get("diameter_mm"), design, 0.0) or 0.0
+            if diameter_mm <= 0:
+                radius_mm = _eval_param(args.get("radius_mm"), design, 0.0) or 0.0
+                if radius_mm > 0:
+                    diameter_mm = radius_mm * 2
+            if diameter_mm <= 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "diameter_mm (ou radius_mm) precisa ser positivo.",
+                )
+            r_cm = diameter_mm / 20.0
+            root = _root(design)
+            sketch = root.sketches.add(root.xZConstructionPlane)
+            sketch.name = _unique_sketch_name(design, str(args.get("name") or "Sphere"))
+            top = adsk.core.Point3D.create(0, r_cm, 0)
+            bottom = adsk.core.Point3D.create(0, -r_cm, 0)
+            # Linha diametral (eixo de revolucao) + arco semicircular ao lado +X.
+            axis_line = sketch.sketchCurves.sketchLines.addByTwoPoints(bottom, top)
+            sketch.sketchCurves.sketchArcs.addByCenterStartSweep(
+                adsk.core.Point3D.create(0, 0, 0), top, -math.pi
+            )
+            revolves = root.features.revolveFeatures
+            inp = revolves.createInput(
+                sketch.profiles.item(0),
+                axis_line,
+                adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+            )
+            inp.setAngleExtent(False, adsk.core.ValueInput.createByReal(2 * math.pi))
+            revolves.add(inp)
+            return {{
+                "message": "Esfera o{{}} mm criada ('{{}}').".format(
+                    diameter_mm, sketch.name
+                ),
+                "sketch_name": sketch.name,
+            }}
+
+
+        def _add_cone(args):
+            # Onda B: cone/frustum = trapezio (ou triangulo) revolvido.
+            # top_diameter_mm=0 => cone pontudo; >0 => frustum.
+            design = _design()
+            base_d = _eval_param(args.get("base_diameter_mm"), design, 0.0) or 0.0
+            if base_d <= 0:
+                base_r = _eval_param(args.get("base_radius_mm"), design, 0.0) or 0.0
+                if base_r > 0:
+                    base_d = base_r * 2
+            top_d = _eval_param(args.get("top_diameter_mm"), design, 0.0) or 0.0
+            h = _eval_param(args.get("height_mm"), design, 0.0) or 0.0
+            if base_d <= 0 or h <= 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "base_diameter_mm e height_mm precisam ser positivos.",
+                )
+            base_r_cm = base_d / 20.0
+            top_r_cm = top_d / 20.0
+            h_cm = h / 10.0
+            root = _root(design)
+            sketch = root.sketches.add(root.xZConstructionPlane)
+            sketch.name = _unique_sketch_name(design, str(args.get("name") or "Cone"))
+            # Perfil no semiplano +X: (0,0) -> (base_r,0) -> (top_r,h) -> (0,h)
+            # fechando de volta em (0,0). A aresta x=0 e o eixo de revolucao.
+            pts = [
+                adsk.core.Point3D.create(0, 0, 0),
+                adsk.core.Point3D.create(base_r_cm, 0, 0),
+                adsk.core.Point3D.create(max(top_r_cm, 0.0), h_cm, 0),
+                adsk.core.Point3D.create(0, h_cm, 0),
+            ]
+            lines = sketch.sketchCurves.sketchLines
+            axis_line = lines.addByTwoPoints(pts[3], pts[0])  # aresta x=0 = eixo
+            lines.addByTwoPoints(pts[0], pts[1])
+            lines.addByTwoPoints(pts[1], pts[2])
+            lines.addByTwoPoints(pts[2], pts[3])
+            revolves = root.features.revolveFeatures
+            inp = revolves.createInput(
+                sketch.profiles.item(0),
+                axis_line,
+                adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+            )
+            inp.setAngleExtent(False, adsk.core.ValueInput.createByReal(2 * math.pi))
+            revolves.add(inp)
+            shape = "cone" if top_d <= 0 else "tronco de cone"
+            return {{
+                "message": "{{}} base o{{}} topo o{{}} altura {{}} mm criado ('{{}}').".format(
+                    shape, base_d, top_d, h, sketch.name
+                ),
+                "sketch_name": sketch.name,
+            }}
+
+
         def _set_parameter(args):
             # Fix #1: aceita dois formatos:
             # (a) singular legado:  name='X', expression='10mm', unit='mm'
@@ -854,6 +1043,14 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _extrude_profile(args)
             if tool_name == "fusion.revolve_profile":
                 return _revolve_profile(args)
+            if tool_name == "fusion.add_box":
+                return _add_box(args)
+            if tool_name == "fusion.add_cylinder":
+                return _add_cylinder(args)
+            if tool_name == "fusion.add_sphere":
+                return _add_sphere(args)
+            if tool_name == "fusion.add_cone":
+                return _add_cone(args)
             if tool_name == "fusion.set_parameter":
                 return _set_parameter(args)
             if tool_name == "fusion.export_step":

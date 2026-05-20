@@ -250,6 +250,30 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Adiciona um arco por centro/início/ângulo a um sketch (Onda A).",
     ),
     _t(
+        "fusion.add_box",
+        _FUSION,
+        _ADD,
+        "Cria uma caixa paramétrica (sketch+extrude interno) num passo (Onda B).",
+    ),
+    _t(
+        "fusion.add_cylinder",
+        _FUSION,
+        _ADD,
+        "Cria um cilindro paramétrico num passo (Onda B).",
+    ),
+    _t(
+        "fusion.add_sphere",
+        _FUSION,
+        _ADD,
+        "Cria uma esfera paramétrica (semicírculo revolvido) num passo (Onda B).",
+    ),
+    _t(
+        "fusion.add_cone",
+        _FUSION,
+        _ADD,
+        "Cria um cone/tronco de cone paramétrico num passo (Onda B).",
+    ),
+    _t(
         "fusion.export_step",
         _FUSION,
         _ADD,

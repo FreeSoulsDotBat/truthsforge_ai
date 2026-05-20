@@ -157,7 +157,7 @@ para exigir geometria explícita antes de extrude/revolve (vai junto com A).
 - [x] [P0] [any] Aprovar a spec `adapter-tools-mvp.md` com o dono do produto.
 - [x] [P1] [any] **Onda A**: `add_polygon`, `add_line`, `add_arc`, `revolve_profile` + fix do prompt do planner (create_sketch é vazio; proibir geometria em `notes`). Destrava esferas e polígonos. Branch `feat/fusion-revolve-polygon`. Inclui quick fixes de schema drift. Falta validação manual com Fusion real.
 - [ ] [P1] [any] **Onda C**: `fillet_edges`, `chamfer_edges`, `shell_body`, `hole` + selectors semânticos de edge/face. Honra hints órfãos `fillet`/`chamfer`.
-- [ ] [P2] [any] **Onda B**: primitivas diretas `add_box`, `add_cylinder`, `add_sphere`, `add_cone` (paramétricas, não TemporaryBRep).
+- [x] [P2] [any] **Onda B**: primitivas diretas `add_box`, `add_cylinder`, `add_sphere`, `add_cone` (paramétricas via sketch+feature interno, não TemporaryBRep). Branch `feat/fusion-primitives-onda-b`. Falta validação manual com Fusion real.
 - [ ] [P2] [any] **Onda D**: `pattern_rectangular`, `pattern_circular`, `mirror_feature`, `combine_bodies` (combine = high_risk, aprovação obrigatória).
 - [ ] [P3] [any] **Onda E**: `loft_profiles`, `sweep_profile`, `add_construction_plane`, `add_spline`.
 - [ ] [P3] [any] **Onda F**: `move_body`, `scale_body`, `delete_body` (delete = destructive, aprovação obrigatória).

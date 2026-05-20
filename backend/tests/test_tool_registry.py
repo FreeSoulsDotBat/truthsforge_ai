@@ -147,6 +147,11 @@ def test_planner_toolset_matches_allowlist() -> None:
         "fusion.add_line",
         "fusion.add_arc",
         "fusion.revolve_profile",
+        # Onda B
+        "fusion.add_box",
+        "fusion.add_cylinder",
+        "fusion.add_sphere",
+        "fusion.add_cone",
     }
     assert set(PLANNER_TOOLSET) == expected
 

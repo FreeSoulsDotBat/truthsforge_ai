@@ -637,6 +637,33 @@ def test_onda_a_tools_are_registered_and_compile() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_onda_b_primitives_are_registered_and_compile() -> None:
+    """Onda B: as 4 primitivas diretas (box, cylinder, sphere, cone) estão
+    na allowlist do adapter, no registry, e geram scripts Python válidos.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+    from app.modeling.tool_registry import FUSION_TOOLS
+
+    cases = {
+        "fusion.add_box": {"width_mm": 40, "depth_mm": 20, "height_mm": 10},
+        "fusion.add_cylinder": {"diameter_mm": 30, "height_mm": 50},
+        "fusion.add_sphere": {"diameter_mm": 50},
+        "fusion.add_cone": {"base_diameter_mm": 40, "top_diameter_mm": 0, "height_mm": 60},
+    }
+    for tool, args in cases.items():
+        assert tool in FUSION_SCRIPT_TOOLS, f"{tool} ausente em FUSION_SCRIPT_TOOLS"
+        assert tool in FUSION_TOOLS, f"{tool} ausente no tool_registry"
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
 def test_add_circle_accepts_aliases() -> None:
     """Quick fix: add_circle aceita circle_diameter_mm e radius_mm além de
     diameter_mm. Verifica que o script compila com cada alias.
