@@ -176,4 +176,4 @@ priorizadas por valor/custo. Aguardando priorização do dono do produto.
 - [x] [P2] [any] **G2.3** — `result_name`/`output_name` nos tools que criam body (rename pós-criação no `_dispatch`), dando handle estável para pattern/mirror/fillet. Branch `feat/fusion-gaps-onda9-rest`.
 - [~] [P2] [any] **G1.2** — ADIADO com critério: modifica add_rectangle/add_circle que toda modelagem composta usa; sketch dimensions sem teste real arriscam over-constraint que regrediria o extrude. Fazer com Fusion real no loop.
 - [x] [P2] [any] **G3 (parcial)** — `add_ellipse`, `add_slot` (sketch), `split_body` (por plano). Branch `feat/fusion-gaps-onda9-rest`. Restante do long-tail (hole counterbore/countersink, draft, rib, thicken, fillet variável, chamfer 2-distâncias) sob demanda.
-- [~] [P3] [any] **G4** (epic) — spec de decisão em `g4-assemblies-decision.md`. AGUARDANDO decisão do dono (recomendação: Opção A, manter single-body). Não codar antes.
+- [x] [P3] [any] **G4** (epic) — DECIDIDO 2026-05-20: **Opção A (manter single-body)**. Ver `g4-assemblies-decision.md`. Sem componentes/juntas/materiais; reavaliar só com demanda real de montagem. G4 sai do roadmap ativo.

@@ -86,9 +86,24 @@ printability/export por componente, e plano de risco das APIs de joint.
 
 ## 6. Decisão registrada
 
-- [ ] Opção A — manter single-body (recomendada)
+- [x] **Opção A — manter single-body (recomendada)** ✅ ESCOLHIDA
 - [ ] Opção B — componentes leves sem juntas
 - [ ] Opção C — assemblies completo
 - [ ] Adiar decisão
 
-**Decidido por:** ____________  **Data:** ____________
+**Decidido por:** dono do produto (Jonatãn)  **Data:** 2026-05-20
+
+### Consequências da decisão
+
+- O adapter 3D **permanece single-body** (root component, bodies soltos).
+  As 50 tools cobrem o caso dominante: peça única imprimível + multi-body
+  no mesmo design + `combine_bodies` para boolean.
+- **Não implementar** componentes/ocorrências/juntas/materiais físicos sem
+  reabrir esta decisão.
+- Reavaliar para Opção B **somente** quando surgir demanda concreta de
+  montagem (ex: kit de peças que se encaixam, BOM). Aí, primeiro passo é a
+  spec de arquitetura (data model do plano com componentes, selectors/refs,
+  UI do card, printability/export por componente).
+- G4 sai do roadmap ativo (`adapter-gaps-roadmap.md`); o trabalho de gaps
+  do adapter está concluído no escopo decidido (G1.1/G2.1/G2.2/G2.3/G3
+  parcial/G5 entregues; G1.2 adiado para validação com Fusion real).
