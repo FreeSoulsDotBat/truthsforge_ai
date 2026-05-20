@@ -22,6 +22,17 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.chamfer_edges",
     "fusion.shell_body",
     "fusion.hole",
+    "fusion.pattern_rectangular",
+    "fusion.pattern_circular",
+    "fusion.mirror_feature",
+    "fusion.combine_bodies",
+    "fusion.loft_profiles",
+    "fusion.sweep_profile",
+    "fusion.add_construction_plane",
+    "fusion.add_spline",
+    "fusion.move_body",
+    "fusion.scale_body",
+    "fusion.delete_body",
     "fusion.set_parameter",
     "fusion.export_step",
     "fusion.export_stl",
@@ -972,6 +983,328 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
+        # ---- Onda D: replicacao e combinacao ----
+
+        def _axis_from_name(design, axis_name):
+            root = _root(design)
+            return {{
+                "x": root.xConstructionAxis,
+                "y": root.yConstructionAxis,
+                "z": root.zConstructionAxis,
+            }}.get(str(axis_name or "x").lower(), root.xConstructionAxis)
+
+
+        def _plane_from_name(design, plane_name):
+            root = _root(design)
+            return {{
+                "xy": root.xYConstructionPlane,
+                "yz": root.yZConstructionPlane,
+                "xz": root.xZConstructionPlane,
+            }}.get(str(plane_name or "xy").lower(), root.xYConstructionPlane)
+
+
+        def _pattern_rectangular(args):
+            # Onda D: replica um body em grade retangular ao longo de 2 eixos.
+            design = _design()
+            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            count_x = int(_eval_param(args.get("count_x"), design, 1.0) or 1)
+            count_y = int(_eval_param(args.get("count_y"), design, 1.0) or 1)
+            spacing_x = _eval_param(args.get("spacing_x_mm"), design, 0.0) or 0.0
+            spacing_y = _eval_param(args.get("spacing_y_mm"), design, 0.0) or 0.0
+            if count_x < 1 or count_y < 1:
+                raise ToolError("fusion.invalid_dimensions", "count_x e count_y precisam ser >= 1.")
+            root = _root(design)
+            coll = adsk.core.ObjectCollection.create()
+            coll.add(body)
+            patterns = root.features.rectangularPatternFeatures
+            dist_type = adsk.fusion.PatternDistanceType.SpacingPatternDistanceType
+            inp = patterns.createInput(
+                coll,
+                _axis_from_name(design, args.get("axis_x") or "x"),
+                adsk.core.ValueInput.createByString(str(count_x)),
+                adsk.core.ValueInput.createByReal(spacing_x / 10.0),
+                dist_type,
+            )
+            inp.setDirectionTwo(
+                _axis_from_name(design, args.get("axis_y") or "y"),
+                adsk.core.ValueInput.createByString(str(count_y)),
+                adsk.core.ValueInput.createByReal(spacing_y / 10.0),
+            )
+            patterns.add(inp)
+            return {{
+                "message": "Padrao retangular {{}}x{{}} de '{{}}'.".format(
+                    count_x, count_y, body.name
+                ),
+                "body_name": body.name,
+            }}
+
+
+        def _pattern_circular(args):
+            # Onda D: replica um body em torno de um eixo.
+            design = _design()
+            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            count = int(_eval_param(args.get("count"), design, 1.0) or 1)
+            if count < 1:
+                raise ToolError("fusion.invalid_dimensions", "count precisa ser >= 1.")
+            total_angle = _eval_param(args.get("total_angle_deg"), design, 360.0)
+            if not total_angle:
+                total_angle = 360.0
+            root = _root(design)
+            coll = adsk.core.ObjectCollection.create()
+            coll.add(body)
+            patterns = root.features.circularPatternFeatures
+            inp = patterns.createInput(coll, _axis_from_name(design, args.get("axis") or "z"))
+            inp.quantity = adsk.core.ValueInput.createByString(str(count))
+            inp.totalAngle = adsk.core.ValueInput.createByString(
+                "{{}} deg".format(total_angle)
+            )
+            inp.isSymmetric = False
+            patterns.add(inp)
+            return {{
+                "message": "Padrao circular {{}}x ({{}} graus) de '{{}}'.".format(
+                    count, total_angle, body.name
+                ),
+                "body_name": body.name,
+            }}
+
+
+        def _mirror_feature(args):
+            # Onda D: espelha um body em torno de um plano construtivo.
+            design = _design()
+            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            plane = _plane_from_name(design, args.get("plane") or "xy")
+            root = _root(design)
+            coll = adsk.core.ObjectCollection.create()
+            coll.add(body)
+            mirrors = root.features.mirrorFeatures
+            inp = mirrors.createInput(coll, plane)
+            mirrors.add(inp)
+            return {{
+                "message": "Espelho de '{{}}' no plano {{}}.".format(
+                    body.name, str(args.get("plane") or "xy")
+                ),
+                "body_name": body.name,
+            }}
+
+
+        def _combine_bodies(args):
+            # Onda D (high_risk): boolean entre bodies existentes.
+            # target_ref + tool_refs[] (nomes/indices) + operation.
+            design = _design()
+            target = _find_body(design, args.get("target_ref") or args.get("target"))
+            tool_refs = args.get("tool_refs") or args.get("tools") or []
+            if not isinstance(tool_refs, list) or not tool_refs:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "tool_refs precisa ser uma lista nao vazia de bodies.",
+                )
+            tools = adsk.core.ObjectCollection.create()
+            for ref in tool_refs:
+                tools.add(_find_body(design, ref))
+            operation = str(args.get("operation") or "join").lower()
+            op_map = {{
+                "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
+                "cut": adsk.fusion.FeatureOperations.CutFeatureOperation,
+                "intersect": adsk.fusion.FeatureOperations.IntersectFeatureOperation,
+            }}
+            if operation not in op_map:
+                raise ToolError(
+                    "fusion.invalid_operation",
+                    "operation deve ser join, cut ou intersect.",
+                )
+            combines = _root(design).features.combineFeatures
+            inp = combines.createInput(target, tools)
+            inp.operation = op_map[operation]
+            combines.add(inp)
+            return {{
+                "message": "Combine {{}} de {{}} body(ies) em '{{}}'.".format(
+                    operation, tools.count, target.name
+                ),
+                "body_name": target.name,
+            }}
+
+
+        # ---- Onda E: sweeps avancados e construcao ----
+
+        def _loft_profiles(args):
+            # Onda E: loft entre 2+ profiles (sketches ordenados).
+            design = _design()
+            refs = args.get("profiles") or args.get("sketches") or []
+            if not isinstance(refs, list) or len(refs) < 2:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "profiles precisa listar >= 2 sketches.",
+                )
+            operation = str(args.get("operation") or "new_body").lower()
+            op_map = {{
+                "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+                "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
+                "cut": adsk.fusion.FeatureOperations.CutFeatureOperation,
+            }}
+            op = op_map.get(operation, op_map["new_body"])
+            lofts = _root(design).features.loftFeatures
+            inp = lofts.createInput(op)
+            for ref in refs:
+                sk = _find_sketch(design, ref)
+                if sk.profiles.count == 0:
+                    raise ToolError(
+                        "fusion.no_profile",
+                        "Sketch '{{}}' nao tem profile fechado.".format(ref),
+                    )
+                inp.loftSections.add(sk.profiles.item(0))
+            lofts.add(inp)
+            return {{
+                "message": "Loft entre {{}} profiles.".format(len(refs)),
+            }}
+
+
+        def _sweep_profile(args):
+            # Onda E: varre um profile ao longo de um caminho (sketch path).
+            design = _design()
+            profile_sketch = _find_sketch(design, args.get("profile") or args.get("profile_sketch"))
+            if profile_sketch.profiles.count == 0:
+                raise ToolError("fusion.no_profile", "Profile sem perfil fechado.")
+            path_sketch = _find_sketch(design, args.get("path") or args.get("path_sketch"))
+            if path_sketch.sketchCurves.count == 0:
+                raise ToolError("fusion.no_path", "Path sketch sem curvas.")
+            operation = str(args.get("operation") or "new_body").lower()
+            op_map = {{
+                "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+                "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
+                "cut": adsk.fusion.FeatureOperations.CutFeatureOperation,
+            }}
+            op = op_map.get(operation, op_map["new_body"])
+            root = _root(design)
+            path = root.features.createPath(path_sketch.sketchCurves.item(0))
+            sweeps = root.features.sweepFeatures
+            inp = sweeps.createInput(profile_sketch.profiles.item(0), path, op)
+            sweeps.add(inp)
+            return {{
+                "message": "Sweep do profile '{{}}' pelo path '{{}}'.".format(
+                    profile_sketch.name, path_sketch.name
+                ),
+            }}
+
+
+        def _add_construction_plane(args):
+            # Onda E: plano construtivo por offset de um plano base.
+            design = _design()
+            offset_mm = _eval_param(args.get("offset_mm"), design, 0.0) or 0.0
+            base_name = str(args.get("base") or "xy").lower()
+            base = _plane_from_name(design, base_name)
+            root = _root(design)
+            planes = root.constructionPlanes
+            inp = planes.createInput()
+            inp.setByOffset(base, adsk.core.ValueInput.createByReal(offset_mm / 10.0))
+            plane = planes.add(inp)
+            name = str(args.get("name") or "")
+            if name:
+                plane.name = name
+            return {{
+                "message": "Plano construtivo offset {{}}mm de {{}}.".format(
+                    offset_mm, base_name
+                ),
+                "plane_name": plane.name,
+            }}
+
+
+        def _add_spline(args):
+            # Onda E: spline ajustada por pontos num sketch.
+            design = _design()
+            raw_points = args.get("points_mm") or args.get("points") or []
+            if not isinstance(raw_points, list) or len(raw_points) < 2:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "points_mm precisa ter >= 2 pontos.",
+                )
+            sketch = _find_sketch(design, args.get("sketch"))
+            coll = adsk.core.ObjectCollection.create()
+            for raw in raw_points:
+                pair = _eval_pair(raw, design)
+                if pair is None:
+                    raise ToolError("fusion.invalid_dimensions", "ponto invalido em points_mm.")
+                coll.add(adsk.core.Point3D.create(pair[0] / 10.0, pair[1] / 10.0, 0))
+            sketch.sketchCurves.sketchFittedSplines.add(coll)
+            return {{
+                "message": "Spline de {{}} pontos em '{{}}'.".format(
+                    len(raw_points), sketch.name
+                ),
+                "sketch_name": sketch.name,
+            }}
+
+
+        # ---- Onda F: modificacao direta de bodies ----
+
+        def _move_body(args):
+            # Onda F: translada (e opcionalmente nao rotaciona ainda) um body.
+            design = _design()
+            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            trans = _eval_pair(args.get("translation_mm"), design)
+            tx = ty = tz = 0.0
+            raw = args.get("translation_mm")
+            if isinstance(raw, (list, tuple)) and len(raw) >= 3:
+                tx = _eval_param(raw[0], design, 0.0) or 0.0
+                ty = _eval_param(raw[1], design, 0.0) or 0.0
+                tz = _eval_param(raw[2], design, 0.0) or 0.0
+            elif trans is not None:
+                tx, ty = trans
+            if tx == 0 and ty == 0 and tz == 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "translation_mm precisa ter ao menos um componente nao-zero.",
+                )
+            root = _root(design)
+            coll = adsk.core.ObjectCollection.create()
+            coll.add(body)
+            transform = adsk.core.Matrix3D.create()
+            transform.translation = adsk.core.Vector3D.create(
+                tx / 10.0, ty / 10.0, tz / 10.0
+            )
+            moves = root.features.moveFeatures
+            inp = moves.createInput(coll, transform)
+            moves.add(inp)
+            return {{
+                "message": "Body '{{}}' movido ({{}},{{}},{{}})mm.".format(
+                    body.name, tx, ty, tz
+                ),
+                "body_name": body.name,
+            }}
+
+
+        def _scale_body(args):
+            # Onda F: escala uniforme (factor) de um body em torno da origem.
+            design = _design()
+            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            factor = _eval_param(args.get("factor"), design, 0.0) or 0.0
+            if factor <= 0:
+                raise ToolError("fusion.invalid_dimensions", "factor precisa ser positivo.")
+            root = _root(design)
+            coll = adsk.core.ObjectCollection.create()
+            coll.add(body)
+            scales = root.features.scaleFeatures
+            inp = scales.createInput(
+                coll,
+                root.originConstructionPoint,
+                adsk.core.ValueInput.createByReal(factor),
+            )
+            scales.add(inp)
+            return {{
+                "message": "Body '{{}}' escalado x{{}}.".format(body.name, factor),
+                "body_name": body.name,
+            }}
+
+
+        def _delete_body(args):
+            # Onda F (destructive): remove um body. Exige aprovacao humana
+            # (categoria destructive na policy).
+            design = _design()
+            body = _find_body(design, args.get("body_ref") or args.get("body"))
+            name = body.name
+            removes = _root(design).features.removeFeatures
+            removes.add(body)
+            return {{"message": "Body '{{}}' removido.".format(name)}}
+
+
         def _set_parameter(args):
             # Fix #1: aceita dois formatos:
             # (a) singular legado:  name='X', expression='10mm', unit='mm'
@@ -1287,6 +1620,28 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _shell_body(args)
             if tool_name == "fusion.hole":
                 return _hole(args)
+            if tool_name == "fusion.pattern_rectangular":
+                return _pattern_rectangular(args)
+            if tool_name == "fusion.pattern_circular":
+                return _pattern_circular(args)
+            if tool_name == "fusion.mirror_feature":
+                return _mirror_feature(args)
+            if tool_name == "fusion.combine_bodies":
+                return _combine_bodies(args)
+            if tool_name == "fusion.loft_profiles":
+                return _loft_profiles(args)
+            if tool_name == "fusion.sweep_profile":
+                return _sweep_profile(args)
+            if tool_name == "fusion.add_construction_plane":
+                return _add_construction_plane(args)
+            if tool_name == "fusion.add_spline":
+                return _add_spline(args)
+            if tool_name == "fusion.move_body":
+                return _move_body(args)
+            if tool_name == "fusion.scale_body":
+                return _scale_body(args)
+            if tool_name == "fusion.delete_body":
+                return _delete_body(args)
             if tool_name == "fusion.set_parameter":
                 return _set_parameter(args)
             if tool_name == "fusion.export_step":

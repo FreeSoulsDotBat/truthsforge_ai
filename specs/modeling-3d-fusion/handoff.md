@@ -26,6 +26,29 @@ PR/merge.
 | 8A — Expansão adapter Fusion (revolve + polygon)     | em PR                | —                    | branch `feat/fusion-revolve-polygon`  |
 | 8B — Primitivas diretas (box/cylinder/sphere/cone)   | em PR                | —                    | branch `feat/fusion-primitives-onda-b` |
 | 8C — Features (fillet/chamfer/shell/hole)            | em PR                | —                    | branch `feat/fusion-features-onda-c`  |
+| 8D-F — Replicação/sweeps/modificação direta          | em PR                | —                    | branch `feat/fusion-onda-def`         |
+
+### Onda 8D-F — pattern/mirror/combine + loft/sweep/plane/spline + move/scale/delete
+
+Branch `feat/fusion-onda-def` (encadeada sobre C→B→A). 11 tools.
+Total agora: **47 tools** (era 24 no v1).
+
+- **D (replicação/combinação):** `pattern_rectangular`,
+  `pattern_circular`, `mirror_feature` (mutative; operam sobre bodies
+  via `_find_body`), `combine_bodies` (**high_risk** — boolean entre
+  bodies existentes, aprovação obrigatória).
+- **E (sweeps/construção):** `loft_profiles` (2+ sketches),
+  `sweep_profile` (profile + path via `createPath`),
+  `add_construction_plane` (offset; additive), `add_spline` (additive).
+- **F (modificação direta):** `move_body` (translação via Matrix3D),
+  `scale_body` (uniforme em torno da origem), `delete_body`
+  (**destructive** — `removeFeatures`, aprovação obrigatória).
+
+**APIs sensíveis a versão a validar com Fusion real** (a observabilidade
+mostra divergência): `rectangularPatternFeatures.createInput` (assinatura
++ `PatternDistanceType`), `circularPatternFeatures` quantity/totalAngle,
+`createPath` no sweep, `moveFeatures.createInput`/`scaleFeatures.createInput`
+(deprecadas em favor de `createInput2` em versões novas).
 
 ### Onda 8C — fillet/chamfer/shell/hole + selectors semânticos
 

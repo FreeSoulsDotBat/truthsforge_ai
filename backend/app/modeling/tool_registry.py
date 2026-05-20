@@ -99,7 +99,7 @@ _PROJECT_STORE = ToolSoftware.project_store
 _RO = ToolCategory.read_only
 _ADD = ToolCategory.additive
 _MUT = ToolCategory.mutative
-_DESTR = ToolCategory.destructive  # noqa: F841 — kept for future tools
+_DESTR = ToolCategory.destructive
 _HR = ToolCategory.high_risk
 
 
@@ -327,6 +327,72 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         _FUSION,
         _MUT,
         "Faz um furo (cut) na face superior de um corpo (Onda C).",
+    ),
+    _t(
+        "fusion.pattern_rectangular",
+        _FUSION,
+        _MUT,
+        "Replica um corpo em grade retangular ao longo de 2 eixos (Onda D).",
+    ),
+    _t(
+        "fusion.pattern_circular",
+        _FUSION,
+        _MUT,
+        "Replica um corpo em torno de um eixo (Onda D).",
+    ),
+    _t(
+        "fusion.mirror_feature",
+        _FUSION,
+        _MUT,
+        "Espelha um corpo em torno de um plano construtivo (Onda D).",
+    ),
+    _t(
+        "fusion.loft_profiles",
+        _FUSION,
+        _MUT,
+        "Loft entre 2+ profiles de sketches (Onda E).",
+    ),
+    _t(
+        "fusion.sweep_profile",
+        _FUSION,
+        _MUT,
+        "Varre um profile ao longo de um caminho (Onda E).",
+    ),
+    _t(
+        "fusion.move_body",
+        _FUSION,
+        _MUT,
+        "Translada um corpo (Onda F).",
+    ),
+    _t(
+        "fusion.scale_body",
+        _FUSION,
+        _MUT,
+        "Escala uniformemente um corpo (Onda F).",
+    ),
+    _t(
+        "fusion.add_construction_plane",
+        _FUSION,
+        _ADD,
+        "Cria um plano construtivo por offset de um plano base (Onda E).",
+    ),
+    _t(
+        "fusion.add_spline",
+        _FUSION,
+        _ADD,
+        "Adiciona uma spline ajustada por pontos a um sketch (Onda E).",
+    ),
+    _t(
+        "fusion.combine_bodies",
+        _FUSION,
+        _HR,
+        "Boolean (join/cut/intersect) entre corpos existentes — high risk (Onda D).",
+    ),
+    _t(
+        "fusion.delete_body",
+        _FUSION,
+        _DESTR,
+        "Remove um corpo — destrutivo, exige aprovação (Onda F).",
     ),
     _t(
         "fusion.set_parameter",

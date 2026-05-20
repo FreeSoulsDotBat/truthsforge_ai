@@ -157,6 +157,20 @@ def test_planner_toolset_matches_allowlist() -> None:
         "fusion.chamfer_edges",
         "fusion.shell_body",
         "fusion.hole",
+        # Onda D
+        "fusion.pattern_rectangular",
+        "fusion.pattern_circular",
+        "fusion.mirror_feature",
+        "fusion.combine_bodies",
+        # Onda E
+        "fusion.loft_profiles",
+        "fusion.sweep_profile",
+        "fusion.add_construction_plane",
+        "fusion.add_spline",
+        # Onda F
+        "fusion.move_body",
+        "fusion.scale_body",
+        "fusion.delete_body",
     }
     assert set(PLANNER_TOOLSET) == expected
 
@@ -190,13 +204,15 @@ def test_read_only_set_matches_v1() -> None:
     assert set(READ_ONLY_TOOL_NAMES) == expected
 
 
-def test_high_risk_set_matches_v1() -> None:
+def test_high_risk_set_matches_allowlist() -> None:
     expected = {
         "blender.apply_boolean",
         "blender.repair_non_manifold",
         "blender.run_script",
         "fusion.run_script",
         "project_store.restore_snapshot",
+        # Onda D: boolean entre corpos existentes é high risk.
+        "fusion.combine_bodies",
     }
     assert set(HIGH_RISK_TOOL_NAMES) == expected
 

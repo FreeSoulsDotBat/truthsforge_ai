@@ -691,6 +691,70 @@ def test_onda_c_features_are_registered_and_compile() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_onda_def_tools_are_registered_and_compile() -> None:
+    """Ondas D-F: replicação, sweeps, modificação direta. Verifica allowlist,
+    categorias de risco corretas (combine=high_risk, delete=destructive) e
+    que os scripts compilam com args realistas.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+    from app.modeling.tool_registry import TOOL_REGISTRY, ToolCategory
+
+    cases = {
+        # Onda D
+        "fusion.pattern_rectangular": (
+            {"count_x": 3, "spacing_x_mm": 20, "count_y": 2, "spacing_y_mm": 15},
+            ToolCategory.mutative,
+        ),
+        "fusion.pattern_circular": (
+            {"count": 6, "axis": "z", "total_angle_deg": 360},
+            ToolCategory.mutative,
+        ),
+        "fusion.mirror_feature": ({"plane": "yz"}, ToolCategory.mutative),
+        "fusion.combine_bodies": (
+            {"target_ref": "Body1", "tool_refs": ["Body2"], "operation": "cut"},
+            ToolCategory.high_risk,
+        ),
+        # Onda E
+        "fusion.loft_profiles": (
+            {"profiles": ["s1", "s2"], "operation": "new_body"},
+            ToolCategory.mutative,
+        ),
+        "fusion.sweep_profile": (
+            {"profile": "prof", "path": "path", "operation": "new_body"},
+            ToolCategory.mutative,
+        ),
+        "fusion.add_construction_plane": (
+            {"base": "xy", "offset_mm": 10},
+            ToolCategory.additive,
+        ),
+        "fusion.add_spline": (
+            {"sketch": "s", "points_mm": [[0, 0], [10, 5], [20, 0]]},
+            ToolCategory.additive,
+        ),
+        # Onda F
+        "fusion.move_body": (
+            {"body_ref": "Body1", "translation_mm": [10, 0, 5]},
+            ToolCategory.mutative,
+        ),
+        "fusion.scale_body": ({"body_ref": "Body1", "factor": 2.0}, ToolCategory.mutative),
+        "fusion.delete_body": ({"body_ref": "Body1"}, ToolCategory.destructive),
+    }
+    for tool, (args, expected_category) in cases.items():
+        assert tool in FUSION_SCRIPT_TOOLS, f"{tool} ausente em FUSION_SCRIPT_TOOLS"
+        assert TOOL_REGISTRY[tool].category == expected_category, (
+            f"{tool} deveria ser {expected_category}"
+        )
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
 def test_add_circle_accepts_aliases() -> None:
     """Quick fix: add_circle aceita circle_diameter_mm e radius_mm além de
     diameter_mm. Verifica que o script compila com cada alias.
