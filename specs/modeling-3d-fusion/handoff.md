@@ -50,6 +50,27 @@ feito um semicírculo completo cruzando o eixo — sólido inválido).
 
 Teste: `test_schema_drift_arc_line_sketch_revolve_aliases`.
 
+### Onda 9 restante (G2.2 + G2.3 + G3 parcial + G4 decisão) — branch `feat/fusion-gaps-onda9-rest`
+
+- **G2.2:** `fusion.query_geometry` (read-only) lista bodies/faces/arestas
+  com índice + metadata; fillet/chamfer aceitam `edge_ids`, shell aceita
+  `face_ids`. O LLM pode consultar e mirar por índice (preciso) em vez de
+  adivinhar selectors.
+- **G2.3:** `result_name`/`output_name` nos body-creators (rename pós-criação
+  centralizado no `_dispatch` via `_maybe_rename_last_body`) → handle estável
+  para pattern/mirror/fillet. Mitiga o drift de identidade.
+- **G3 parcial:** `add_ellipse`, `add_slot` (sketch primitives), `split_body`
+  (divisão por plano construtivo/offset). Restante do long-tail sob demanda.
+- **G1.2 ADIADO** (com critério): mexe em add_rectangle/add_circle que toda
+  modelagem composta usa; sketch dimensions não-testadas arriscam
+  over-constraint regredindo o extrude. Fazer com Fusion real no loop.
+- **G4 BLOQUEADO por decisão:** `g4-assemblies-decision.md` — opções A
+  (single-body, recomendada) / B (componentes leves) / C (assemblies
+  completo). Muda data model + UI; aguarda o dono.
+
+Total: **50 tools** (era 24 no v1). Validação real das tools novas (G2.2/G3
++ G1.1/G2.1/G5) pendente — observabilidade mostra divergência de API.
+
 ### Onda 9 parcial (G1.1 + G2.1 + G5) — branch `feat/fusion-gaps-g1-g2-g5`
 
 Da spec `adapter-gaps-roadmap.md`, entregues as 3 fases de maior alavanca:

@@ -12,6 +12,8 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.add_polygon",
     "fusion.add_line",
     "fusion.add_arc",
+    "fusion.add_ellipse",
+    "fusion.add_slot",
     "fusion.add_box",
     "fusion.add_cylinder",
     "fusion.add_sphere",
@@ -33,6 +35,8 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.move_body",
     "fusion.scale_body",
     "fusion.delete_body",
+    "fusion.split_body",
+    "fusion.query_geometry",
     "fusion.set_parameter",
     "fusion.export_step",
     "fusion.export_stl",
@@ -419,6 +423,51 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return coll
 
 
+        def _maybe_rename_last_body(design, args):
+            # G2.3: se o caller passou result_name/output_name, renomeia o
+            # body recem-criado (assumido o ultimo) para um nome estavel,
+            # permitindo que pattern/mirror/fillet referenciem com seguranca
+            # e resolvendo o drift de identidade. NAO usa 'result' (que e
+            # alias de operation no revolve).
+            name = args.get("result_name") or args.get("output_name")
+            if not name:
+                return None
+            bodies = _root(design).bRepBodies
+            if bodies.count == 0:
+                return None
+            try:
+                bodies.item(bodies.count - 1).name = str(name)
+                return str(name)
+            except Exception:
+                return None
+
+
+        def _edges_by_ids(body, ids):
+            # G2.2: seleciona arestas por indice explicito (vindo de
+            # query_geometry). Mais preciso que selectors semanticos.
+            coll = adsk.core.ObjectCollection.create()
+            for raw in ids:
+                try:
+                    idx = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= idx < body.edges.count:
+                    coll.add(body.edges.item(idx))
+            return coll
+
+
+        def _faces_by_ids(body, ids):
+            coll = adsk.core.ObjectCollection.create()
+            for raw in ids:
+                try:
+                    idx = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= idx < body.faces.count:
+                    coll.add(body.faces.item(idx))
+            return coll
+
+
         def _open_design(_args):
             doc = _app().documents.add(adsk.core.DocumentTypes.FusionDesignDocumentType)
             return {{
@@ -783,6 +832,82 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
+        def _add_ellipse(args):
+            # G3: elipse por centro + eixos maior/menor (diametros em mm).
+            design = _design()
+            major_mm = _eval_param(args.get("major_mm") or args.get("width_mm"), design, 0.0) or 0.0
+            minor_mm = _eval_param(args.get("minor_mm") or args.get("height_mm"), design, 0.0) or 0.0
+            if major_mm <= 0 or minor_mm <= 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "major_mm e minor_mm precisam ser positivos.",
+                )
+            center_pair = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
+            cx = center_pair[0] / 10.0
+            cy = center_pair[1] / 10.0
+            a = major_mm / 20.0
+            b = minor_mm / 20.0
+            sketch = _find_sketch(design, args.get("sketch"))
+            center = adsk.core.Point3D.create(cx, cy, 0)
+            major = adsk.core.Point3D.create(cx + a, cy, 0)
+            through = adsk.core.Point3D.create(cx, cy + b, 0)
+            sketch.sketchCurves.sketchEllipses.add(center, major, through)
+            return {{
+                "message": "Elipse {{}}x{{}} mm adicionada a '{{}}'.".format(
+                    major_mm, minor_mm, sketch.name
+                ),
+                "sketch_name": sketch.name,
+            }}
+
+
+        def _add_slot(args):
+            # G3: slot (oblongo) horizontal: 2 arcos semicirculares + 2 linhas.
+            # length_mm = comprimento total (centro a centro + width); width_mm
+            # = diametro das pontas. Centrado em center_mm.
+            design = _design()
+            length_mm = _eval_param(args.get("length_mm"), design, 0.0) or 0.0
+            width_mm = _eval_param(args.get("width_mm"), design, 0.0) or 0.0
+            if length_mm <= 0 or width_mm <= 0 or length_mm <= width_mm:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "length_mm e width_mm positivos e length > width.",
+                )
+            center_pair = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
+            cx = center_pair[0] / 10.0
+            cy = center_pair[1] / 10.0
+            r = width_mm / 20.0
+            half = (length_mm - width_mm) / 20.0  # distancia do centro a cada arco
+            sketch = _find_sketch(design, args.get("sketch"))
+            lines = sketch.sketchCurves.sketchLines
+            arcs = sketch.sketchCurves.sketchArcs
+            # linhas superior e inferior
+            lines.addByTwoPoints(
+                adsk.core.Point3D.create(cx - half, cy + r, 0),
+                adsk.core.Point3D.create(cx + half, cy + r, 0),
+            )
+            lines.addByTwoPoints(
+                adsk.core.Point3D.create(cx - half, cy - r, 0),
+                adsk.core.Point3D.create(cx + half, cy - r, 0),
+            )
+            # arco direito (de cima para baixo, bulge +x) e esquerdo (bulge -x)
+            arcs.addByCenterStartSweep(
+                adsk.core.Point3D.create(cx + half, cy, 0),
+                adsk.core.Point3D.create(cx + half, cy + r, 0),
+                -math.pi,
+            )
+            arcs.addByCenterStartSweep(
+                adsk.core.Point3D.create(cx - half, cy, 0),
+                adsk.core.Point3D.create(cx - half, cy - r, 0),
+                -math.pi,
+            )
+            return {{
+                "message": "Slot {{}}x{{}} mm adicionado a '{{}}'.".format(
+                    length_mm, width_mm, sketch.name
+                ),
+                "sketch_name": sketch.name,
+            }}
+
+
         def _revolve_profile(args):
             # Onda A: revolve um profile fechado em torno de um eixo
             # (x/y/z) por um angulo (default 360 = solido completo).
@@ -1023,8 +1148,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if radius_mm <= 0:
                 raise ToolError("fusion.invalid_dimensions", "radius_mm precisa ser positivo.")
             body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
-            selector = args.get("edge_selector") or args.get("edges") or "all"
-            edges = _select_edges(body, selector)
+            edge_ids = args.get("edge_ids") or args.get("edge_indices")
+            if edge_ids:
+                selector = "edge_ids"
+                edges = _edges_by_ids(body, edge_ids)
+            else:
+                selector = args.get("edge_selector") or args.get("edges") or "all"
+                edges = _select_edges(body, selector)
             if edges.count == 0:
                 raise ToolError(
                     "fusion.no_edges",
@@ -1051,8 +1181,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if distance_mm <= 0:
                 raise ToolError("fusion.invalid_dimensions", "distance_mm precisa ser positivo.")
             body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
-            selector = args.get("edge_selector") or args.get("edges") or "all"
-            edges = _select_edges(body, selector)
+            edge_ids = args.get("edge_ids") or args.get("edge_indices")
+            if edge_ids:
+                selector = "edge_ids"
+                edges = _edges_by_ids(body, edge_ids)
+            else:
+                selector = args.get("edge_selector") or args.get("edges") or "all"
+                edges = _select_edges(body, selector)
             if edges.count == 0:
                 raise ToolError(
                     "fusion.no_edges",
@@ -1090,12 +1225,17 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Schema drift (teste bola): o LLM manda `faces` em vez de
             # `open_faces`. "all"/"none" => casca fechada (sem face aberta;
             # abrir "todas" deletaria o corpo, entao tratamos como fechada).
-            open_sel = str(
-                args.get("open_faces") or args.get("faces") or "top"
-            ).lower()
-            if open_sel == "all":
-                open_sel = "none"
-            faces = _select_faces(body, open_sel)
+            face_ids = args.get("face_ids") or args.get("face_indices")
+            if face_ids:
+                open_sel = "face_ids"
+                faces = _faces_by_ids(body, face_ids)
+            else:
+                open_sel = str(
+                    args.get("open_faces") or args.get("faces") or "top"
+                ).lower()
+                if open_sel == "all":
+                    open_sel = "none"
+                faces = _select_faces(body, open_sel)
             coll = adsk.core.ObjectCollection.create()
             if faces.count > 0:
                 for i in range(faces.count):
@@ -1522,6 +1662,105 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return {{"message": "Body '{{}}' removido.".format(name)}}
 
 
+        def _split_body(args):
+            # G3: divide um body por um plano construtivo (xy/yz/xz) ou por
+            # um plano de offset. Gera 2+ bodies.
+            design = _design()
+            body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
+            root = _root(design)
+            offset_mm = _eval_param(args.get("offset_mm"), design)
+            base_name = str(args.get("plane") or "xy").lower()
+            if offset_mm is not None:
+                planes = root.constructionPlanes
+                pinp = planes.createInput()
+                pinp.setByOffset(
+                    _plane_from_name(design, base_name),
+                    adsk.core.ValueInput.createByReal(offset_mm / 10.0),
+                )
+                splitting_tool = planes.add(pinp)
+            else:
+                splitting_tool = _plane_from_name(design, base_name)
+            splits = root.features.splitBodyFeatures
+            inp = splits.createInput(body, splitting_tool, True)
+            splits.add(inp)
+            return {{
+                "message": "Body '{{}}' dividido pelo plano {{}}.".format(
+                    body.name, base_name
+                ),
+                "body_name": body.name,
+            }}
+
+
+        def _query_geometry(args):
+            # G2.2 (read-only): lista bodies/faces/arestas com indice estavel
+            # + metadata, para o LLM mirar por face_ids/edge_ids depois em vez
+            # de adivinhar selectors. Limita contagem para nao estourar payload.
+            design = _design()
+            root = _root(design)
+            limit = int(_eval_param(args.get("limit"), design, 60.0) or 60)
+            bodies_out = []
+            for bi in range(root.bRepBodies.count):
+                body = root.bRepBodies.item(bi)
+                bbox = body.boundingBox
+                faces_out = []
+                for fi in range(min(body.faces.count, limit)):
+                    f = body.faces.item(fi)
+                    fbb = f.boundingBox
+                    try:
+                        stype = f.geometry.surfaceType
+                        type_name = {{
+                            adsk.core.SurfaceTypes.PlaneSurfaceType: "planar",
+                            adsk.core.SurfaceTypes.CylinderSurfaceType: "cylindrical",
+                            adsk.core.SurfaceTypes.ConeSurfaceType: "conical",
+                            adsk.core.SurfaceTypes.SphereSurfaceType: "spherical",
+                        }}.get(stype, "other")
+                    except Exception:
+                        type_name = "other"
+                    try:
+                        area_mm2 = f.area * 100.0
+                    except Exception:
+                        area_mm2 = 0.0
+                    faces_out.append({{
+                        "face_index": fi,
+                        "type": type_name,
+                        "area_mm2": round(area_mm2, 2),
+                        "normal_axis": _face_normal_axis(f),
+                        "center_mm": [
+                            round((fbb.minPoint.x + fbb.maxPoint.x) * 5.0, 2),
+                            round((fbb.minPoint.y + fbb.maxPoint.y) * 5.0, 2),
+                            round((fbb.minPoint.z + fbb.maxPoint.z) * 5.0, 2),
+                        ],
+                    }})
+                edges_out = []
+                for ei in range(min(body.edges.count, limit)):
+                    e = body.edges.item(ei)
+                    try:
+                        length_mm = e.length * 10.0
+                    except Exception:
+                        length_mm = 0.0
+                    edges_out.append({{
+                        "edge_index": ei,
+                        "length_mm": round(length_mm, 2),
+                    }})
+                bodies_out.append({{
+                    "body_index": bi,
+                    "name": body.name,
+                    "dimensions_mm": [
+                        round((bbox.maxPoint.x - bbox.minPoint.x) * 10.0, 2),
+                        round((bbox.maxPoint.y - bbox.minPoint.y) * 10.0, 2),
+                        round((bbox.maxPoint.z - bbox.minPoint.z) * 10.0, 2),
+                    ],
+                    "face_count": body.faces.count,
+                    "edge_count": body.edges.count,
+                    "faces": faces_out,
+                    "edges": edges_out,
+                }})
+            return {{
+                "message": "{{}} corpo(s) inspecionado(s).".format(len(bodies_out)),
+                "bodies": bodies_out,
+            }}
+
+
         def _set_parameter(args):
             # Fix #1: aceita dois formatos:
             # (a) singular legado:  name='X', expression='10mm', unit='mm'
@@ -1802,7 +2041,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
-        def _dispatch(tool_name, args):
+        def _dispatch_inner(tool_name, args):
             if tool_name == "fusion.open_design":
                 return _open_design(args)
             if tool_name == "fusion.create_sketch":
@@ -1817,6 +2056,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _add_line(args)
             if tool_name == "fusion.add_arc":
                 return _add_arc(args)
+            if tool_name == "fusion.add_ellipse":
+                return _add_ellipse(args)
+            if tool_name == "fusion.add_slot":
+                return _add_slot(args)
             if tool_name == "fusion.extrude_profile":
                 return _extrude_profile(args)
             if tool_name == "fusion.revolve_profile":
@@ -1859,6 +2102,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _scale_body(args)
             if tool_name == "fusion.delete_body":
                 return _delete_body(args)
+            if tool_name == "fusion.split_body":
+                return _split_body(args)
+            if tool_name == "fusion.query_geometry":
+                return _query_geometry(args)
             if tool_name == "fusion.set_parameter":
                 return _set_parameter(args)
             if tool_name == "fusion.export_step":
@@ -1872,6 +2119,35 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if tool_name == "fusion.validate_printability":
                 return _validate_printability(args)
             raise ToolError("fusion.tool_not_implemented", "Ferramenta sem handler determinístico.")
+
+
+        _BODY_CREATORS = (
+            "fusion.extrude_profile",
+            "fusion.revolve_profile",
+            "fusion.add_box",
+            "fusion.add_cylinder",
+            "fusion.add_sphere",
+            "fusion.add_cone",
+            "fusion.loft_profiles",
+            "fusion.sweep_profile",
+        )
+
+
+        def _dispatch(tool_name, args):
+            # G2.3: wrapper que aplica result_name/output_name pos-criacao
+            # nos tools que criam body, dando um handle estavel para steps
+            # seguintes (pattern/mirror/fillet) referenciarem.
+            result = _dispatch_inner(tool_name, args)
+            if tool_name in _BODY_CREATORS and (
+                args.get("result_name") or args.get("output_name")
+            ):
+                try:
+                    renamed = _maybe_rename_last_body(_design(), args)
+                    if renamed and isinstance(result, dict):
+                        result["body_name"] = renamed
+                except Exception:
+                    pass
+            return result
 
 
         def run(_context: str):

@@ -171,6 +171,11 @@ def test_planner_toolset_matches_allowlist() -> None:
         "fusion.move_body",
         "fusion.scale_body",
         "fusion.delete_body",
+        # Onda 9 (G2.2 / G3)
+        "fusion.query_geometry",
+        "fusion.add_ellipse",
+        "fusion.add_slot",
+        "fusion.split_body",
     }
     assert set(PLANNER_TOOLSET) == expected
 
@@ -192,7 +197,7 @@ def test_fusion_tools_lists_every_fusion_descriptor_except_run_script() -> None:
     assert fusion_entries == set(FUSION_TOOLS) | {"fusion.run_script"}
 
 
-def test_read_only_set_matches_v1() -> None:
+def test_read_only_set_matches_allowlist() -> None:
     expected = {
         "blender.measure_object",
         "blender.validate_mesh",
@@ -200,6 +205,8 @@ def test_read_only_set_matches_v1() -> None:
         "fusion.validate_dimensions",
         "fusion.validate_printability",
         "project_store.list_snapshots",
+        # G2.2: inspeção de geometria para seleção por índice.
+        "fusion.query_geometry",
     }
     assert set(READ_ONLY_TOOL_NAMES) == expected
 

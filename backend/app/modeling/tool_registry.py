@@ -201,6 +201,12 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Valida dimensões e tolerâncias de um corpo/sketch.",
     ),
     _t(
+        "fusion.query_geometry",
+        _FUSION,
+        _RO,
+        "Lista bodies/faces/arestas com índice estável + metadata para seleção precisa (G2.2).",
+    ),
+    _t(
         "fusion.validate_printability",
         _FUSION,
         _RO,
@@ -248,6 +254,18 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         _FUSION,
         _ADD,
         "Adiciona um arco por centro/início/ângulo a um sketch (Onda A).",
+    ),
+    _t(
+        "fusion.add_ellipse",
+        _FUSION,
+        _ADD,
+        "Adiciona uma elipse (major/minor) a um sketch (G3).",
+    ),
+    _t(
+        "fusion.add_slot",
+        _FUSION,
+        _ADD,
+        "Adiciona um slot oblongo (length/width) a um sketch (G3).",
     ),
     _t(
         "fusion.add_box",
@@ -369,6 +387,12 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         _FUSION,
         _MUT,
         "Escala uniformemente um corpo (Onda F).",
+    ),
+    _t(
+        "fusion.split_body",
+        _FUSION,
+        _MUT,
+        "Divide um corpo por um plano construtivo/offset (G3).",
     ),
     _t(
         "fusion.add_construction_plane",

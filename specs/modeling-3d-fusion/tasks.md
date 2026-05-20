@@ -172,7 +172,8 @@ priorizadas por valor/custo. Aguardando priorização do dono do produto.
 - [x] [P1] [any] **G5** — fallback `createInput2`/`createInput` por versão em chamfer e move (APIs deprecadas). Branch `feat/fusion-gaps-g1-g2-g5`. Validação real contínua conforme testes do usuário.
 - [x] [P1] [any] **G2.1** — selectors finos: arestas `longest`/`shortest`; faces `planar`/`cylindrical`/`largest`/`+x..-z` (orientação da normal), além de top/bottom. Branch `feat/fusion-gaps-g1-g2-g5`. (posição `near=[x,y,z]` fica para G2.2 junto com query_geometry.)
 - [ ] [P1] [any] **G2.2** — tool read-only `fusion.query_geometry` (lista faces/arestas/bodies com id estável) + fluxo query→select no prompt.
-- [ ] [P2] [any] **G1.2** — dimensões de sketch amarradas a parâmetros (add_rectangle/add_circle primeiro).
-- [ ] [P2] [any] **G2.3** — referência estável a features (`result_name` + `feature_ref` em pattern/mirror). Resolve drift de identidade.
-- [ ] [P2] [any] **G3** — gaps de features sob demanda: hole v2 (counterbore/countersink/tapped), ellipse/slot, draft, rib, thicken, split_body, fillet variável, chamfer 2-distâncias, plano por ângulo/3-pontos, rotação em move_body, texto.
-- [ ] [P3] [any] **G4** (epic) — assemblies/componentes/joints/materiais. Decidir escopo com o dono antes de specar em detalhe.
+- [x] [P1] [any] **G2.2** — `fusion.query_geometry` (read-only, lista bodies/faces/arestas com índice estável + metadata) + seleção por `edge_ids`/`face_ids` em fillet/chamfer/shell. Branch `feat/fusion-gaps-onda9-rest`.
+- [x] [P2] [any] **G2.3** — `result_name`/`output_name` nos tools que criam body (rename pós-criação no `_dispatch`), dando handle estável para pattern/mirror/fillet. Branch `feat/fusion-gaps-onda9-rest`.
+- [~] [P2] [any] **G1.2** — ADIADO com critério: modifica add_rectangle/add_circle que toda modelagem composta usa; sketch dimensions sem teste real arriscam over-constraint que regrediria o extrude. Fazer com Fusion real no loop.
+- [x] [P2] [any] **G3 (parcial)** — `add_ellipse`, `add_slot` (sketch), `split_body` (por plano). Branch `feat/fusion-gaps-onda9-rest`. Restante do long-tail (hole counterbore/countersink, draft, rib, thicken, fillet variável, chamfer 2-distâncias) sob demanda.
+- [~] [P3] [any] **G4** (epic) — spec de decisão em `g4-assemblies-decision.md`. AGUARDANDO decisão do dono (recomendação: Opção A, manter single-body). Não codar antes.

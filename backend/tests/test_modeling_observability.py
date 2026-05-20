@@ -826,6 +826,39 @@ def test_pattern_shell_accept_llm_aliases() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_onda9_rest_scripts_compile() -> None:
+    """Onda 9 restante: query_geometry (G2.2), edge_ids/face_ids,
+    result_name (G2.3), add_ellipse/add_slot/split_body (G3). Compilam.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+    from app.modeling.tool_registry import TOOL_REGISTRY, ToolCategory
+
+    cases = {
+        "fusion.query_geometry": ({"limit": 30}, ToolCategory.read_only),
+        "fusion.add_ellipse": ({"sketch": "s", "major_mm": 40, "minor_mm": 20}, ToolCategory.additive),
+        "fusion.add_slot": (
+            {"sketch": "s", "length_mm": 40, "width_mm": 10},
+            ToolCategory.additive,
+        ),
+        "fusion.split_body": ({"body_name": "Body1", "plane": "xy"}, ToolCategory.mutative),
+        # G2.2 index-based selection + G2.3 result_name
+        "fusion.fillet_edges": ({"body_name": "Body1", "radius_mm": 2, "edge_ids": [0, 3]}, None),
+        "fusion.extrude_profile": (
+            {"sketch": "s", "distance_mm": 10, "result_name": "Tower"},
+            None,
+        ),
+    }
+    for tool, (args, category) in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+        if category is not None:
+            assert TOOL_REGISTRY[tool].category == category
+
+
 def test_g1_g2_g5_scripts_compile() -> None:
     """G1.1 (parametrização), G2.1 (selectors finos), G5 (fallback de API):
     os scripts precisam compilar com args que exercitam os novos caminhos —
