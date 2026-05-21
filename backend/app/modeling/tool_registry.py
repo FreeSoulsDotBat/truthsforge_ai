@@ -99,7 +99,7 @@ _PROJECT_STORE = ToolSoftware.project_store
 _RO = ToolCategory.read_only
 _ADD = ToolCategory.additive
 _MUT = ToolCategory.mutative
-_DESTR = ToolCategory.destructive  # noqa: F841 — kept for future tools
+_DESTR = ToolCategory.destructive
 _HR = ToolCategory.high_risk
 
 
@@ -201,6 +201,12 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Valida dimensões e tolerâncias de um corpo/sketch.",
     ),
     _t(
+        "fusion.query_geometry",
+        _FUSION,
+        _RO,
+        "Lista bodies/faces/arestas com índice estável + metadata para seleção precisa (G2.2).",
+    ),
+    _t(
         "fusion.validate_printability",
         _FUSION,
         _RO,
@@ -232,6 +238,60 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Adiciona um perfil circular dimensionado a um sketch.",
     ),
     _t(
+        "fusion.add_polygon",
+        _FUSION,
+        _ADD,
+        "Adiciona um polígono regular de N lados a um sketch (Onda A).",
+    ),
+    _t(
+        "fusion.add_line",
+        _FUSION,
+        _ADD,
+        "Adiciona uma polilinha (perfil arbitrário, opcionalmente fechado) a um sketch (Onda A).",
+    ),
+    _t(
+        "fusion.add_arc",
+        _FUSION,
+        _ADD,
+        "Adiciona um arco por centro/início/ângulo a um sketch (Onda A).",
+    ),
+    _t(
+        "fusion.add_ellipse",
+        _FUSION,
+        _ADD,
+        "Adiciona uma elipse (major/minor) a um sketch (G3).",
+    ),
+    _t(
+        "fusion.add_slot",
+        _FUSION,
+        _ADD,
+        "Adiciona um slot oblongo (length/width) a um sketch (G3).",
+    ),
+    _t(
+        "fusion.add_box",
+        _FUSION,
+        _ADD,
+        "Cria uma caixa paramétrica (sketch+extrude interno) num passo (Onda B).",
+    ),
+    _t(
+        "fusion.add_cylinder",
+        _FUSION,
+        _ADD,
+        "Cria um cilindro paramétrico num passo (Onda B).",
+    ),
+    _t(
+        "fusion.add_sphere",
+        _FUSION,
+        _ADD,
+        "Cria uma esfera paramétrica (semicírculo revolvido) num passo (Onda B).",
+    ),
+    _t(
+        "fusion.add_cone",
+        _FUSION,
+        _ADD,
+        "Cria um cone/tronco de cone paramétrico num passo (Onda B).",
+    ),
+    _t(
         "fusion.export_step",
         _FUSION,
         _ADD,
@@ -255,6 +315,108 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         _FUSION,
         _MUT,
         "Extruda um perfil de sketch (operação new_body/join/cut/intersect).",
+    ),
+    _t(
+        "fusion.revolve_profile",
+        _FUSION,
+        _MUT,
+        "Revolve um perfil em torno de um eixo (esferas, cones, vasos) (Onda A).",
+    ),
+    _t(
+        "fusion.fillet_edges",
+        _FUSION,
+        _MUT,
+        "Arredonda arestas de um corpo (selector semântico all/top/bottom/...) (Onda C).",
+    ),
+    _t(
+        "fusion.chamfer_edges",
+        _FUSION,
+        _MUT,
+        "Chanfra arestas de um corpo (selector semântico) (Onda C).",
+    ),
+    _t(
+        "fusion.shell_body",
+        _FUSION,
+        _MUT,
+        "Oca um corpo deixando paredes de espessura definida (open_faces top/bottom/none) (Onda C).",
+    ),
+    _t(
+        "fusion.hole",
+        _FUSION,
+        _MUT,
+        "Faz um furo (cut) na face superior de um corpo (Onda C).",
+    ),
+    _t(
+        "fusion.pattern_rectangular",
+        _FUSION,
+        _MUT,
+        "Replica um corpo em grade retangular ao longo de 2 eixos (Onda D).",
+    ),
+    _t(
+        "fusion.pattern_circular",
+        _FUSION,
+        _MUT,
+        "Replica um corpo em torno de um eixo (Onda D).",
+    ),
+    _t(
+        "fusion.mirror_feature",
+        _FUSION,
+        _MUT,
+        "Espelha um corpo em torno de um plano construtivo (Onda D).",
+    ),
+    _t(
+        "fusion.loft_profiles",
+        _FUSION,
+        _MUT,
+        "Loft entre 2+ profiles de sketches (Onda E).",
+    ),
+    _t(
+        "fusion.sweep_profile",
+        _FUSION,
+        _MUT,
+        "Varre um profile ao longo de um caminho (Onda E).",
+    ),
+    _t(
+        "fusion.move_body",
+        _FUSION,
+        _MUT,
+        "Translada um corpo (Onda F).",
+    ),
+    _t(
+        "fusion.scale_body",
+        _FUSION,
+        _MUT,
+        "Escala uniformemente um corpo (Onda F).",
+    ),
+    _t(
+        "fusion.split_body",
+        _FUSION,
+        _MUT,
+        "Divide um corpo por um plano construtivo/offset (G3).",
+    ),
+    _t(
+        "fusion.add_construction_plane",
+        _FUSION,
+        _ADD,
+        "Cria um plano construtivo por offset de um plano base (Onda E).",
+    ),
+    _t(
+        "fusion.add_spline",
+        _FUSION,
+        _ADD,
+        "Adiciona uma spline ajustada por pontos a um sketch (Onda E).",
+    ),
+    _t(
+        "fusion.combine_bodies",
+        _FUSION,
+        _HR,
+        "Boolean (join/cut/intersect) entre corpos existentes — high risk (Onda D).",
+    ),
+    _t(
+        "fusion.delete_body",
+        _FUSION,
+        _DESTR,
+        "Remove um corpo — destrutivo, exige aprovação (Onda F).",
     ),
     _t(
         "fusion.set_parameter",

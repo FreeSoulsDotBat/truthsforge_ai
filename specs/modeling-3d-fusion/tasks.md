@@ -147,3 +147,43 @@ para rascunhos `Novo chat` já criados antes do primeiro envio.
 - [ ] [P1] [any] Atualizar `docs/3d-mcp-modeling.md` com diagramas finais.
 - [ ] [P1] [any] Atualizar `docs/delivery-checklist.md` com checklist da refator.
 - [ ] [P1] [any] Marcar tasks v2 concluídas e atualizar `handoff.md`.
+
+### Onda 8 — Expansão do adapter Fusion (MVP de operações)
+
+Spec completa: `specs/modeling-3d-fusion/adapter-tools-mvp.md`. Cada onda
+abaixo é um PR. Pré-requisito comum: atualizar o system prompt do planner
+para exigir geometria explícita antes de extrude/revolve (vai junto com A).
+
+- [x] [P0] [any] Aprovar a spec `adapter-tools-mvp.md` com o dono do produto.
+- [x] [P1] [any] **Onda A**: `add_polygon`, `add_line`, `add_arc`, `revolve_profile` + fix do prompt do planner (create_sketch é vazio; proibir geometria em `notes`). Destrava esferas e polígonos. Branch `feat/fusion-revolve-polygon`. Inclui quick fixes de schema drift. Falta validação manual com Fusion real.
+- [x] [P1] [any] **Onda C**: `fillet_edges`, `chamfer_edges`, `shell_body`, `hole` + selectors semânticos de edge/face (all/top/bottom/vertical/horizontal; open_faces top/bottom/none). Honra hints órfãos `fillet`/`chamfer`. Branch `feat/fusion-features-onda-c`. `hole` é MVP pragmático (cut na face superior, não holeFeatures). Falta validação manual com Fusion real — selectors e hole são os pontos mais prováveis de iterar.
+- [x] [P2] [any] **Onda B**: primitivas diretas `add_box`, `add_cylinder`, `add_sphere`, `add_cone` (paramétricas via sketch+feature interno, não TemporaryBRep). Branch `feat/fusion-primitives-onda-b`. Falta validação manual com Fusion real.
+- [x] [P2] [any] **Onda D**: `pattern_rectangular`, `pattern_circular`, `mirror_feature`, `combine_bodies` (combine = high_risk, aprovação obrigatória). Branch `feat/fusion-onda-def`. Patterns operam sobre bodies (não features) via `_find_body`.
+- [x] [P3] [any] **Onda E**: `loft_profiles`, `sweep_profile`, `add_construction_plane` (offset), `add_spline`. Branch `feat/fusion-onda-def`.
+- [x] [P3] [any] **Onda F**: `move_body` (translação), `scale_body` (uniforme), `delete_body` (delete = destructive, aprovação obrigatória). Branch `feat/fusion-onda-def`. Falta validação manual de todas as ondas D-F com Fusion real (APIs de pattern/loft/sweep/move variam por versão).
+- [x] [P1] [any] Quick fixes de schema drift (independem das ondas): `add_circle` aceitar alias `circle_diameter_mm`/`radius_mm`/`center_mm`; `extrude_profile` mapear `operation` desconhecida para `new_body` com warning no message. (entregue junto da Onda A)
+
+### Onda 9 — Cobertura dos gaps pós-MVP
+
+Spec completa: `specs/modeling-3d-fusion/adapter-gaps-roadmap.md`. Fases
+priorizadas por valor/custo. Aguardando priorização do dono do produto.
+
+- [x] [P0] [any] **G1.1** — parametrização de distâncias de feature: helper `_param_value_input` (createByString quando arg é nome de parâmetro existente → vínculo; createByReal quando número). Aplicado em extrude/fillet/chamfer/shell. Branch `feat/fusion-gaps-g1-g2-g5`. (revolve angle e primitivas ficam para quando G1.2 amarrar sketch dims; hole depth bakeado por causa da negação.)
+- [x] [P1] [any] **G5** — fallback `createInput2`/`createInput` por versão em chamfer e move (APIs deprecadas). Branch `feat/fusion-gaps-g1-g2-g5`. Validação real contínua conforme testes do usuário.
+- [x] [P1] [any] **G2.1** — selectors finos: arestas `longest`/`shortest`; faces `planar`/`cylindrical`/`largest`/`+x..-z` (orientação da normal), além de top/bottom. Branch `feat/fusion-gaps-g1-g2-g5`. (posição `near=[x,y,z]` fica para G2.2 junto com query_geometry.)
+- [ ] [P1] [any] **G2.2** — tool read-only `fusion.query_geometry` (lista faces/arestas/bodies com id estável) + fluxo query→select no prompt.
+- [x] [P1] [any] **G2.2** — `fusion.query_geometry` (read-only, lista bodies/faces/arestas com índice estável + metadata) + seleção por `edge_ids`/`face_ids` em fillet/chamfer/shell. Branch `feat/fusion-gaps-onda9-rest`.
+- [x] [P2] [any] **G2.3** — `result_name`/`output_name` nos tools que criam body (rename pós-criação no `_dispatch`), dando handle estável para pattern/mirror/fillet. Branch `feat/fusion-gaps-onda9-rest`.
+- [x] [P2] [any] **G1.2** — sketch dimensions paramétricas em add_rectangle (single) e add_circle, de forma SEGURA: geometria desenhada primeiro (bakeada), dimension amarrada ao param em try/except — se falhar/over-constrain, mantém bakeado (zero regressão no extrude). Branch `feat/fusion-g1.2-sketch-params`. Validar com Fusion real (sketchDimensions API). Grid de retângulos e primitivas ficam baked por ora.
+- [x] [P2] [any] **G3 (parcial)** — `add_ellipse`, `add_slot` (sketch), `split_body` (por plano) na branch `feat/fusion-gaps-onda9-rest`; `hole` v2 com `type=counterbore` na branch `feat/fusion-g1.2-sketch-params`. Restante do long-tail (hole countersink/tapped, draft, rib, thicken, fillet variável, chamfer 2-distâncias) sob demanda — exigem revolve/face-refs frágeis sem Fusion real.
+- [x] [P3] [any] **G4** (epic) — DECIDIDO 2026-05-20: **Opção A (manter single-body)**. Ver `g4-assemblies-decision.md`. Sem componentes/juntas/materiais; reavaliar só com demanda real de montagem. G4 sai do roadmap ativo.
+
+### Schema drift — sintaxe de expressão paramétrica (placa, 20/05)
+
+Trace `mt_019e46942241` (placa 80x60x5mm com furo central, parametrizada).
+Branch `fix/fusion-param-expression-syntax`. Detalhe no `handoff.md`.
+
+- [x] [P1] [any] `set_parameter` aceita `value_mm`/`value`/`value_cm`/`value_deg` como alias de `expression` (LLM emite `{name, value_mm}`).
+- [x] [P1] [any] `add_rectangle`/`add_circle`/`extrude_profile` aceitam chaves sem sufixo (`width`/`height`/`radius`/`diameter`/`distance`) mapeadas para as canônicas `_mm`.
+- [x] [P1] [any] `_eval_param`/`_param_value_input`/`_param_name_or_none` removem o `=` líder da sintaxe de expressão do Fusion (`=plate_width`, `=hole_diameter/2`) — nome puro vira vínculo paramétrico, expressão composta é bakeada.
+- [x] [P1] [any] Teste `test_schema_drift_param_expression_syntax` + suíte (63 passam). Falta validação manual com Fusion real.

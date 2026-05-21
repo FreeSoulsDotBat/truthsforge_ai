@@ -14,6 +14,8 @@ export type {
   ModelingApprovalRequest,
   ModelingExecutionResult,
   ModelingPlan,
+  ModelingPlanEdit,
+  ModelingPlanEditStep,
   ModelingPlanKind,
   ModelingPlanStatus,
   ModelingPlanStep,

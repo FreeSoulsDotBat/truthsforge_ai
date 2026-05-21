@@ -13,6 +13,64 @@ Refatoração v2 (chat-first integral + título obrigatório). **Onda 5
 concluída localmente** na branch `codex/3d-chat-title-required`; falta
 PR/merge.
 
+### Redesenho do processo 3D (discovery→aprovação→edição) — spec `chat-flow-redesign.md`
+
+Pedido do dono do produto (2026-05-20): (1) agente deve perguntar antes de
+planejar; (2) plano não pode executar sem aprovação; (3) edição não pode
+quebrar/recriar o modelo. Diagnóstico: a maquinaria chat-first
+(`chat_state.py` + `chat_orchestrator.py` + cards no front) já existe, mas a
+rota de chat a ignorava e auto-executava em `safe_auto`. Faseado em P1–P4 na
+spec. **Decisões do dono:** aprovação sempre (primário e edições), com "modo
+fluido" opt-in por chat liberando edições aditivas (P3); discovery pergunta
+só quando ambíguo (limiar); follow-up assume edição por default e pergunta se
+ambíguo (P3 corrige `open_design` que recria `Untitled`).
+
+- **P1 ENTREGUE** (branch `feat/modeling-3d-approval-gate`): rota
+  `chat.py:modeling_events` deixou de auto-executar; força
+  `waiting_approval`, emite o card e PARA; sessão → `planning`. Execução só
+  via `/approve`+`/execute` (card já ligado). Teste
+  `test_chat_stream_proposes_plan_without_executing`. Revisa a ADR-013
+  (fluxo fluido vira opt-in na P3).
+- **P2 ENTREGUE** (mesma branch): discovery agent (`app/modeling/discovery.py`)
+  avalia o pedido antes de planejar e **pergunta só quando ambíguo** (limiar
+  de confiança). `ModelingPlannerService.assess_request_async` reusa modelo+
+  gateway+tracer; rota `chat.py` faz as perguntas e PARA quando não-pronto
+  (chat fica em `discovery`), ou usa `refined_brief` quando pronto. Flags
+  `MODELING_DISCOVERY_ENABLED`/`_THRESHOLD`. Testes em
+  `test_modeling_discovery.py` + rota.
+- **P3 ENTREGUE** (mesma branch): (a) `open_design` reusa o design ativo por
+  padrão (corrige "edição quebra/recria o modelo"; force-new via
+  `new_document`/`reset`); (b) `/execute` avança o chat para `editing`;
+  (c) discovery classifica `intent` edit/new_model/ambiguous (default edit
+  quando há modelo) — ambíguo PERGUNTA, edit vira `kind=edit`, new_model força
+  doc limpo; (d) **modo fluido** opt-in (`modeling_fluid_mode`): edição
+  aditiva sem high-risk auto-executa, default OFF. Testes em
+  `test_modeling_discovery.py` + `test_modeling_routes.py`. **Validação real
+  pendente:** qualidade do delta de edição (precisa do estado do modelo via
+  G2.2) e comportamento de documento do `open_design` — iterar via
+  fix-by-trace no Fusion.
+- **P4 ENTREGUE** (mesma branch): `PATCH /api/3d/plans/{id}`
+  (`ModelingService.edit_plan`) edita o plano enquanto draft/waiting_approval
+  — envia a lista completa de etapas (editar/reordenar/remover/adicionar),
+  valida tool_name contra a allowlist (422), re-aplica policy e mantém
+  waiting_approval; 409 após aprovação. Frontend: `editPlan` no api+hook +
+  editor inline no `ModelingPlanCard` (título/tool/risco/JSON, mover, remover,
+  adicionar, valida JSON). Testes backend `test_edit_plan_*` + front
+  `ModelingPlanCard.test.tsx`.
+
+- **P5 ENTREGUE** (mesma branch): planner de edição ciente do modelo atual.
+  `build_edit_context_block` injeta no prompt do planner (quando `kind=edit`)
+  o histórico de construção do plano-pai + métricas de corpos extraídas das
+  saídas executadas; instrui a gerar só o delta e não recriar a base.
+  `_resolve_edit_context` busca o pai por `parent_plan_id`. Testes
+  `test_build_edit_context_block_*`. **Limitação:** usa estado CONHECIDO (não
+  leitura ao vivo do Fusion); evolução futura é persistir snapshot de
+  `query_geometry` após cada execução.
+
+**Redesenho do processo 3D COMPLETO (P1–P5).** Próximo passo principal:
+validar tudo no Fusion real via fix-by-trace — em especial P3 (edição/
+open_design) e a qualidade dos deltas com o contexto da P5.
+
 | Onda                                                 | Status               | PR                   | Commits-chave                         |
 | ---------------------------------------------------- | -------------------- | -------------------- | ------------------------------------- |
 | 0 — Specs/docs/ADRs                                  | mergeado             | #19                  | `bf9395a`                             |
@@ -22,6 +80,284 @@ PR/merge.
 | 4 — Frontend cards + aprovação inline + auto-analyze | mergeado             | #25                  | `cf42144` → `424be99`                 |
 | 5 — Título obrigatório do chat (frontend)            | concluída localmente | —                    | branch `codex/3d-chat-title-required` |
 | 6 — QA / docs finais + wire orchestrator no stream   | iniciada (hotfix QA) | —                    | —                                     |
+| 7 — Observabilidade + 13 fixes do adapter Fusion     | mergeada na master   | #27/#28/#29          | ver seção Onda 7                      |
+| 8A — Expansão adapter Fusion (revolve + polygon)     | em PR                | —                    | branch `feat/fusion-revolve-polygon`  |
+| 8B — Primitivas diretas (box/cylinder/sphere/cone)   | em PR                | —                    | branch `feat/fusion-primitives-onda-b` |
+| 8C — Features (fillet/chamfer/shell/hole)            | em PR                | —                    | branch `feat/fusion-features-onda-c`  |
+| 8D-F — Replicação/sweeps/modificação direta          | em PR                | —                    | branch `feat/fusion-onda-def`         |
+
+### Bug de geometria: hole consumia a peça (placa, 4º teste, 20/05) — branch `fix/fusion-param-expression-syntax`
+
+Trace `mt_019e46e06f3b` — **todos os 11 steps OK**, mas o modelo saiu errado:
+sobrou só um cilindro Ø10×5mm (validate_printability: `Body1` dims [10,10,5],
+volume 392.7mm³ = π·5²·5). A placa 80×60×5 foi consumida. 1º teste do
+`fusion.hole` em Fusion REAL.
+
+**Causa raiz (geometria, não schema):** `_hole` cria o sketch SOBRE a face
+superior da peça. Ao criar sketch sobre uma face existente, o Fusion inclui o
+contorno da face no sketch → desenhar o círculo gera 2 profiles: o disco
+central e o ANEL (face menos círculo). `sketch.profiles.item(0)` pegava o
+anel; o CUT removeu tudo menos o miolo → restou o plug cilíndrico.
+
+**Fix:** helper `_profile_for_circle(sketch, radius_cm)` escolhe o profile
+cuja área bate com π·r² (fallback: menor área, depois item(0)). Aplicado ao
+furo principal e ao counterbore. **Limitação latente análoga:**
+`_extrude_profile` também usa `profiles.item(0)` — se o LLM criar um sketch
+de corte sobre uma face com múltiplos profiles, mesmo risco; não corrigido
+agora (o plano usou o tool `hole`). Documentar/observar.
+
+Teste: `test_hole_uses_circle_profile_selector` (compile + presença do helper;
+geometria real só valida no Fusion).
+
+### Schema drift convenção `_param` (placa, 3º teste, 20/05) — branch `fix/fusion-param-expression-syntax`
+
+Trace `mt_019e46d6dc46` (3ª iteração da placa). O LLM mudou de novo o plano
+(12 steps com `set_parameter` + `create_sketch` + `add_rectangle`/`add_circle`
++ extrude) e expôs 1 drift **sistemático**: ele expressa vínculo paramétrico
+com o sufixo **`_param`** carregando o NOME do parâmetro:
+
+- `add_rectangle`: `width_param:"plate_length"`, `height_param:"plate_width"`.
+- `extrude_profile`: `distance_param:"plate_thickness"`.
+- `add_circle`: `diameter_param:"hole_diameter"`.
+
+**Fix (genérico, no `_dispatch`):** helper `_normalize_param_suffix` mapeia
+QUALQUER chave `<base>_param` → `<base>_mm` (só se a `_mm` canônica não veio),
+preservando o nome do parâmetro como valor. Os helpers `_eval_param`/
+`_param_value_input`/`_param_name_or_none` já resolvem nome de parâmetro como
+vínculo (G1.1/G1.2). Resolvido para TODAS as tools dimensionais de uma vez —
+mata a classe inteira desse drift. `set_parameter`/`validate_dimensions` não
+têm chaves que terminam exatamente em `_param` (`parameters`/`check_parameters`
+não casam), então é seguro.
+
+Teste: `test_schema_drift_param_suffix_convention`. Documentado o fluxo
+fix-by-trace + scripts SQL de debug em `docs/3d-mcp-modeling.md` (seção
+"Debug de schema drift do adapter Fusion").
+
+### Schema drift add_box lista de dimensões (placa, 2º teste, 20/05) — branch `fix/fusion-param-expression-syntax`
+
+Trace `mt_019e46cf2726` (re-teste da placa após o fix de sintaxe de
+expressão). Os drifts anteriores sumiram (set_parameter/add_circle OK). O
+LLM gerou plano DIFERENTE (7 steps, `add_box` direto) e expôs 1 drift novo
++ 2 falhas em cascata:
+
+- **add_box** (raiz): o LLM manda as 3 medidas numa lista única
+  `dimensions_mm:[80,60,5]` (+ chave extra `primitive:"box"` e
+  `origin_mm:[0,0,0]` como CANTO), não `width_mm`/`depth_mm`/`height_mm`.
+  Step falhava com `... precisam ser positivos`. **Fix:** aceitar
+  `dimensions_mm`/`size_mm`/`dimensions`/`size` como lista [w,d,h]; tratar
+  `origin_mm` como canto inferior (senão `center_mm` centraliza). Isso também
+  alinha a semântica: o LLM põe o furo em `[40,30]` = centro de uma placa
+  0..80×0..60 ancorada no canto.
+- **extrude_profile cut** (step 5) e **export_stl** (step 7) falharam em
+  CASCATA — sem body (add_box falhou), o cut não tinha alvo e o STL achou o
+  design vazio. Devem resolver sozinhos com o add_box corrigido; se o cut
+  coincidente (5mm através de 5mm) falhar, próximo passo é honrar `through_all`.
+
+Teste: `test_schema_drift_add_box_dimensions_list`.
+
+### Schema drift sintaxe de expressão (placa parametrizada, 20/05) — branch `fix/fusion-param-expression-syntax`
+
+Trace `mt_019e46942241` (prompt "placa 80x60mm espessura 5mm com furo
+central de 10mm, tudo parametrizado"). O LLM produziu plano paramétrico de
+13 steps mas a maioria falhou no parsing de args com 3 drifts novos — todos
+de **sintaxe de expressão paramétrica do Fusion**:
+
+- **set_parameter**: o LLM emite o valor em `value_mm` (ou `value`/`value_cm`/
+  `value_deg`) em vez de `expression` (ex: `{name:"plate_width", value_mm:80}`).
+  Steps davam `name e expression são obrigatórios`. **Fix:** no caminho
+  singular, aceitar `value_mm`/`value`/... como alias de `expression`, com a
+  unidade inferida do sufixo do alias.
+- **chaves dimensionais sem sufixo**: `add_rectangle` recebia `width`/`height`,
+  `add_circle` recebia `radius`/`diameter`, `extrude_profile` recebia
+  `distance` (sem `_mm`). **Fix:** normalização no topo de cada função mapeia
+  o alias sem sufixo para a chave canônica `_mm` (cobre valor + amarração G1.2).
+- **`=` líder (sintaxe da barra de parâmetros do Fusion)**: o LLM manda
+  `"=plate_width"`, `"=thickness"`, `"=hole_diameter/2"`. **Fix:** `_eval_param`,
+  `_param_value_input` e `_param_name_or_none` removem o `=` líder antes de
+  resolver — nome puro vira vínculo paramétrico (G1.1/G1.2), expressão composta
+  é bakeada.
+
+Observabilidade funcionou de novo: o 1º trace (`mt_019e469343b9`) caiu por
+erro de rede da OpenAI (`Server disconnected`) e fez fallback heurístico
+corretamente; o 2º obteve plano LLM e expôs exatamente estes drifts.
+
+Teste: `test_schema_drift_param_expression_syntax`.
+
+### Schema drift G5 (teste real da bola, 20/05) — branch `fix/fusion-schema-drift-arc-line-sketch`
+
+Trace `mt_019e45f8c20e_0bbd73d75b34eacc` (bola via revolve manual) expôs
+4 drifts LLM↔adapter (todos no parsing de args, antes da API do Fusion):
+
+- **create_sketch** não aceitava `sketch` como nome → o LLM usava
+  `sketch: "profile_sketch"` em todos os steps, o nome virava default
+  `TF_Sketch`, e os steps seguintes davam `sketch_not_found` (drift de
+  identidade). **Fix mais crítico**: aceitar `sketch` como alias do nome.
+- **add_arc** só aceitava `center+start_mm+sweep_deg`; o LLM manda forma
+  POLAR (`center+radius_mm+start_angle_deg+end_angle_deg`). Aceita os dois.
+- **add_line** só aceitava `points_mm[]`; o LLM manda `start_mm+end_mm`
+  para uma linha única. Aceita os dois.
+- **revolve_profile** aceitava só `operation`; o LLM manda `result`. Alias.
+
+Também: nudge no prompt do planner para **preferir primitivas diretas**
+(`add_sphere`/`add_box`/`add_cylinder`/`add_cone`) em formas básicas, e
+aviso de que o meio-perfil do revolve não pode cruzar o eixo (o LLM tinha
+feito um semicírculo completo cruzando o eixo — sólido inválido).
+
+Teste: `test_schema_drift_arc_line_sketch_revolve_aliases`.
+
+### Onda 9 — G1.2 (seguro) + hole v2 — branch `feat/fusion-g1.2-sketch-params`
+
+- **G1.2 (parametrização de sketch):** `add_rectangle` (single) e `add_circle`
+  agora amarram width/height/diameter/radius ao parâmetro quando o arg é uma
+  referência pura a userParameter (helper `_param_name_or_none`). **Padrão
+  seguro:** a geometria é desenhada primeiro (bakeada no valor resolvido) e
+  a `sketchDimension` é adicionada DEPOIS em `try/except` — se a API falhar
+  ou over-constrain, o try/except mantém a geometria bakeada (zero regressão
+  no extrude). Resposta marca `[parametrico]` quando o vínculo foi criado.
+  Grid de retângulos e primitivas (box/cylinder) seguem bakeados por ora.
+- **G3 hole v2:** `fusion.hole` aceita `type=counterbore` +
+  `counterbore_diameter_mm`/`counterbore_depth_mm` (recesso cilíndrico para
+  cabeça de parafuso, via 2º cut). countersink (cônico) fica para futuro
+  (exige revolve/chamfer da borda).
+- **Validar com Fusion real:** a API `sketchDimensions.addDiameterDimension/
+  addRadialDimension/addDistanceDimension` e o counterbore. Como tudo é
+  guarded, o pior caso é "não parametrizou" (não quebra).
+
+### Onda 9 restante (G2.2 + G2.3 + G3 parcial + G4 decisão) — branch `feat/fusion-gaps-onda9-rest`
+
+- **G2.2:** `fusion.query_geometry` (read-only) lista bodies/faces/arestas
+  com índice + metadata; fillet/chamfer aceitam `edge_ids`, shell aceita
+  `face_ids`. O LLM pode consultar e mirar por índice (preciso) em vez de
+  adivinhar selectors.
+- **G2.3:** `result_name`/`output_name` nos body-creators (rename pós-criação
+  centralizado no `_dispatch` via `_maybe_rename_last_body`) → handle estável
+  para pattern/mirror/fillet. Mitiga o drift de identidade.
+- **G3 parcial:** `add_ellipse`, `add_slot` (sketch primitives), `split_body`
+  (divisão por plano construtivo/offset). Restante do long-tail sob demanda.
+- **G1.2 ADIADO** (com critério): mexe em add_rectangle/add_circle que toda
+  modelagem composta usa; sketch dimensions não-testadas arriscam
+  over-constraint regredindo o extrude. Fazer com Fusion real no loop.
+- **G4 BLOQUEADO por decisão:** `g4-assemblies-decision.md` — opções A
+  (single-body, recomendada) / B (componentes leves) / C (assemblies
+  completo). Muda data model + UI; aguarda o dono.
+
+Total: **50 tools** (era 24 no v1). Validação real das tools novas (G2.2/G3
++ G1.1/G2.1/G5) pendente — observabilidade mostra divergência de API.
+
+### Onda 9 parcial (G1.1 + G2.1 + G5) — branch `feat/fusion-gaps-g1-g2-g5`
+
+Da spec `adapter-gaps-roadmap.md`, entregues as 3 fases de maior alavanca:
+
+- **G1.1 (parametrização real):** helper `_param_value_input(arg, design)`
+  — se `arg` é nome de parâmetro existente, usa `createByString` (cria
+  VÍNCULO; mudar o param depois atualiza a geometria); senão `createByReal`
+  (bakeado). Aplicado em extrude/fillet/chamfer/shell. Resolve a limitação
+  conceitual #1 (modelo era não-editável-por-parâmetro) nas distâncias de
+  feature. **Pendente G1.2**: amarrar dimensões de SKETCH (rectangle/circle)
+  aos params — mais complexo (precisa sketchDimensions).
+- **G2.1 (selectors finos):** arestas `longest`/`shortest`; faces
+  `planar`/`cylindrical`/`largest`/`+x`..`-z` (por normal). Soma aos
+  top/bottom/vertical/horizontal da Onda C. **Pendente**: `near=[x,y,z]`
+  (vai com G2.2 query_geometry).
+- **G5 (robustez por versão):** `chamferFeatures` e `moveFeatures` agora
+  tentam a API antiga (`createInput`) e caem para a nova (`createInput2`
+  + `chamferEdgeSets`/`defineAsFreeMove`) via try/except — cobre versões
+  diferentes do Fusion sem o usuário precisar reportar.
+
+Teste: `test_g1_g2_g5_scripts_compile`. **Pendente da Onda 9:** G1.2,
+G2.2 (`query_geometry` + `near`), G2.3 (feature refs estáveis), G3
+(long-tail de features), G4 (assemblies — **precisa decisão de escopo**).
+
+### Schema drift 2 (2o teste da bola, 20/05) — branch `fix/fusion-pattern-shell-aliases`
+
+MARCO: `add_sphere` funcionou, esfera materializou pela 1a vez (8/9 steps
+OK, STL exportado). Mas o resultado foi esfera SÓLIDA com 1 dente de
+pentágono, não bola de futebol. Trace `mt_019e4623c801` expôs:
+
+- **pattern_circular fez 1x**: o LLM manda `occurrences`/`angle_deg`, o
+  tool lia só `count`/`total_angle_deg` → count defaultava 1 (no-op).
+  Fix: aceitar `occurrences`/`quantity`/`instances` + `angle_deg`.
+- **shell_body**: o LLM manda `faces`/`body_name`, o tool lia
+  `open_faces`/`body_ref`. Fix: aceitar `faces` (+ "all"→"none" enclosed)
+  e `body_name`. Esfera fechada ainda falha no shell (limitação do Fusion
+  para sólido sem face plana — esperado).
+- **body_name alias** adicionado nos 10 call sites de `_find_body`.
+
+**Limitação conceitual (não-bug):** o LLM modela "soccer ball" como
+pentágono plano + cut + pattern num plano — geometricamente ingênuo. Um
+icosaedro truncado real precisa de matemática esférica de posicionamento
+de 32 painéis, que o LLM não faz. Nenhum fix de adapter resolve isso;
+seria prompt/estratégia de modelagem ou uma tool dedicada de alto nível.
+
+Teste: `test_pattern_shell_accept_llm_aliases`.
+
+### Onda 8D-F — pattern/mirror/combine + loft/sweep/plane/spline + move/scale/delete
+
+Branch `feat/fusion-onda-def` (encadeada sobre C→B→A). 11 tools.
+Total agora: **47 tools** (era 24 no v1).
+
+- **D (replicação/combinação):** `pattern_rectangular`,
+  `pattern_circular`, `mirror_feature` (mutative; operam sobre bodies
+  via `_find_body`), `combine_bodies` (**high_risk** — boolean entre
+  bodies existentes, aprovação obrigatória).
+- **E (sweeps/construção):** `loft_profiles` (2+ sketches),
+  `sweep_profile` (profile + path via `createPath`),
+  `add_construction_plane` (offset; additive), `add_spline` (additive).
+- **F (modificação direta):** `move_body` (translação via Matrix3D),
+  `scale_body` (uniforme em torno da origem), `delete_body`
+  (**destructive** — `removeFeatures`, aprovação obrigatória).
+
+**APIs sensíveis a versão a validar com Fusion real** (a observabilidade
+mostra divergência): `rectangularPatternFeatures.createInput` (assinatura
++ `PatternDistanceType`), `circularPatternFeatures` quantity/totalAngle,
+`createPath` no sweep, `moveFeatures.createInput`/`scaleFeatures.createInput`
+(deprecadas em favor de `createInput2` em versões novas).
+
+### Onda 8C — fillet/chamfer/shell/hole + selectors semânticos
+
+Branch `feat/fusion-features-onda-c` (encadeada sobre B → A). 4 tools
+`mutative` + 3 helpers de seleção em `fusion_mcp_scripts.py`:
+
+- `_find_body(design, ref)` — body por nome/índice/último.
+- `_select_edges(body, selector)` — selectors SEMÂNTICOS
+  (`all`/`top`/`bottom`/`vertical`/`horizontal`) resolvidos por heurística
+  geométrica de Z (o LLM não conhece edge tokens do Fusion).
+- `_select_faces(body, selector)` — `top`/`bottom`/`none` para shell.
+- `fusion.fillet_edges` / `fusion.chamfer_edges` — arredonda/chanfra.
+- `fusion.shell_body` — oca (open_faces top/bottom/none).
+- `fusion.hole` — MVP pragmático: circle + cut-extrude na face superior
+  (NÃO usa holeFeatures, que exige point/face refs precisos). Limitação:
+  assume face superior planar.
+
+**Pontos frágeis a validar no Fusion real** (a observabilidade vai
+mostrar se a API divergir): selectors de aresta em geometria curva,
+`chamferFeatures.createInput`+`setToEqualDistance` (varia por versão),
+direção do cut em `hole`. Total agora: 36 tools (era 24 no v1).
+
+### Onda 8A — add_polygon/add_line/add_arc/revolve_profile + fix do prompt
+
+Spec: `specs/modeling-3d-fusion/adapter-tools-mvp.md`. Branch
+`feat/fusion-revolve-polygon`. Entregue:
+
+- **4 tools novas** em `fusion_mcp_scripts.py` (template + dispatch + tupla)
+  + registry + planner toolset: `fusion.add_polygon` (N lados),
+  `fusion.add_line` (polilinha fechável), `fusion.add_arc`,
+  `fusion.revolve_profile` (esferas/cones/vasos). Todas reusam
+  `_eval_param`/`_eval_pair` (suporte a expressão paramétrica).
+- **Fix do prompt do planner** (causa raiz do `no_profile`): system prompt
+  agora explicita que `create_sketch` cria sketch VAZIO e exige uma tool de
+  geometria antes de extrude/revolve; proíbe geometria em campos de texto
+  (`notes`/`description`); orienta revolve para esfera e polygon para
+  pentágono/hexágono.
+- **Quick fixes de schema drift**: `add_circle` aceita
+  `circle_diameter_mm`/`radius_mm`/`center_mm`; `extrude_profile` mapeia
+  `operation` desconhecida (ex: `join_or_new_body`) para `new_body` com
+  warning no message em vez de abortar.
+- **Testes**: `test_onda_a_tools_are_registered_and_compile`,
+  `test_add_circle_accepts_aliases`, atualizado
+  `test_planner_toolset_matches_allowlist` (24 → 28 tools).
+- **Pendente**: validação manual com Fusion real (esfera por revolve,
+  hexágono por polygon). Próximas ondas (B-F) na spec.
 
 Verificação ao fim da Onda 4 (local, Windows):
 

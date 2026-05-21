@@ -601,6 +601,478 @@ def test_fusion_script_template_compiles_for_every_tool() -> None:
             ) from exc
 
 
+def test_onda_a_tools_are_registered_and_compile() -> None:
+    """Onda A: as 4 tools novas (polygon, line, arc, revolve) estão na
+    allowlist do adapter, no registry, e geram scripts Python válidos com
+    args realistas (incluindo expressões paramétricas e listas de pontos).
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+    from app.modeling.tool_registry import FUSION_TOOLS
+
+    onda_a = [
+        "fusion.add_polygon",
+        "fusion.add_line",
+        "fusion.add_arc",
+        "fusion.revolve_profile",
+    ]
+    for tool in onda_a:
+        assert tool in FUSION_SCRIPT_TOOLS, f"{tool} ausente em FUSION_SCRIPT_TOOLS"
+        assert tool in FUSION_TOOLS, f"{tool} ausente no tool_registry"
+
+    cases = {
+        "fusion.add_polygon": {"sketch": "s", "sides": 6, "radius_mm": 25, "center_mm": [0, 0]},
+        "fusion.add_line": {"sketch": "s", "points_mm": [[0, 0], [10, 0], [10, 10]], "closed": True},
+        "fusion.add_arc": {"sketch": "s", "center_mm": [0, 0], "start_mm": [10, 0], "sweep_deg": 180},
+        "fusion.revolve_profile": {"sketch": "s", "axis": "y", "angle_deg": 360},
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)  # levanta SyntaxError se o template quebrou
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
+def test_onda_b_primitives_are_registered_and_compile() -> None:
+    """Onda B: as 4 primitivas diretas (box, cylinder, sphere, cone) estão
+    na allowlist do adapter, no registry, e geram scripts Python válidos.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+    from app.modeling.tool_registry import FUSION_TOOLS
+
+    cases = {
+        "fusion.add_box": {"width_mm": 40, "depth_mm": 20, "height_mm": 10},
+        "fusion.add_cylinder": {"diameter_mm": 30, "height_mm": 50},
+        "fusion.add_sphere": {"diameter_mm": 50},
+        "fusion.add_cone": {"base_diameter_mm": 40, "top_diameter_mm": 0, "height_mm": 60},
+    }
+    for tool, args in cases.items():
+        assert tool in FUSION_SCRIPT_TOOLS, f"{tool} ausente em FUSION_SCRIPT_TOOLS"
+        assert tool in FUSION_TOOLS, f"{tool} ausente no tool_registry"
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
+def test_onda_c_features_are_registered_and_compile() -> None:
+    """Onda C: fillet/chamfer/shell/hole estão na allowlist, no registry
+    (categoria mutative) e geram scripts Python válidos.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+    from app.modeling.tool_registry import TOOL_REGISTRY, ToolCategory
+
+    cases = {
+        "fusion.fillet_edges": {"radius_mm": 2, "edge_selector": "top"},
+        "fusion.chamfer_edges": {"distance_mm": 1, "edge_selector": "all"},
+        "fusion.shell_body": {"thickness_mm": 2, "open_faces": "top"},
+        "fusion.hole": {"diameter_mm": 5, "position_mm": [0, 0]},
+    }
+    for tool, args in cases.items():
+        assert tool in FUSION_SCRIPT_TOOLS, f"{tool} ausente em FUSION_SCRIPT_TOOLS"
+        assert TOOL_REGISTRY[tool].category == ToolCategory.mutative
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
+def test_onda_def_tools_are_registered_and_compile() -> None:
+    """Ondas D-F: replicação, sweeps, modificação direta. Verifica allowlist,
+    categorias de risco corretas (combine=high_risk, delete=destructive) e
+    que os scripts compilam com args realistas.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+    from app.modeling.tool_registry import TOOL_REGISTRY, ToolCategory
+
+    cases = {
+        # Onda D
+        "fusion.pattern_rectangular": (
+            {"count_x": 3, "spacing_x_mm": 20, "count_y": 2, "spacing_y_mm": 15},
+            ToolCategory.mutative,
+        ),
+        "fusion.pattern_circular": (
+            {"count": 6, "axis": "z", "total_angle_deg": 360},
+            ToolCategory.mutative,
+        ),
+        "fusion.mirror_feature": ({"plane": "yz"}, ToolCategory.mutative),
+        "fusion.combine_bodies": (
+            {"target_ref": "Body1", "tool_refs": ["Body2"], "operation": "cut"},
+            ToolCategory.high_risk,
+        ),
+        # Onda E
+        "fusion.loft_profiles": (
+            {"profiles": ["s1", "s2"], "operation": "new_body"},
+            ToolCategory.mutative,
+        ),
+        "fusion.sweep_profile": (
+            {"profile": "prof", "path": "path", "operation": "new_body"},
+            ToolCategory.mutative,
+        ),
+        "fusion.add_construction_plane": (
+            {"base": "xy", "offset_mm": 10},
+            ToolCategory.additive,
+        ),
+        "fusion.add_spline": (
+            {"sketch": "s", "points_mm": [[0, 0], [10, 5], [20, 0]]},
+            ToolCategory.additive,
+        ),
+        # Onda F
+        "fusion.move_body": (
+            {"body_ref": "Body1", "translation_mm": [10, 0, 5]},
+            ToolCategory.mutative,
+        ),
+        "fusion.scale_body": ({"body_ref": "Body1", "factor": 2.0}, ToolCategory.mutative),
+        "fusion.delete_body": ({"body_ref": "Body1"}, ToolCategory.destructive),
+    }
+    for tool, (args, expected_category) in cases.items():
+        assert tool in FUSION_SCRIPT_TOOLS, f"{tool} ausente em FUSION_SCRIPT_TOOLS"
+        assert TOOL_REGISTRY[tool].category == expected_category, (
+            f"{tool} deveria ser {expected_category}"
+        )
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
+def test_schema_drift_arc_line_sketch_revolve_aliases() -> None:
+    """Schema drift do teste real da bola (20/05): create_sketch aceita
+    'sketch' como nome; add_arc aceita forma polar (center+radius+angles);
+    add_line aceita start_mm+end_mm; revolve aceita 'result'. Os scripts
+    precisam compilar com essas formas.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        "fusion.create_sketch": {"plane": "XY", "sketch": "profile_sketch"},
+        "fusion.add_arc": {
+            "sketch": "profile_sketch",
+            "center_mm": [0, 0],
+            "radius_mm": 110,
+            "start_angle_deg": 0,
+            "end_angle_deg": 180,
+        },
+        "fusion.add_line": {
+            "sketch": "profile_sketch",
+            "start_mm": [-110, 0],
+            "end_mm": [110, 0],
+            "closed": True,
+        },
+        "fusion.revolve_profile": {
+            "sketch": "profile_sketch",
+            "angle_deg": 360,
+            "result": "new_body",
+        },
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
+def test_pattern_shell_accept_llm_aliases() -> None:
+    """Schema drift do 2o teste da bola (20/05): pattern_circular aceita
+    occurrences/quantity + angle_deg; shell_body aceita faces + body_name;
+    tools de body aceitam body_name. Scripts precisam compilar.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        "fusion.pattern_circular": {
+            "body_name": "Body1",
+            "axis": "Z",
+            "angle_deg": 360,
+            "occurrences": 12,
+        },
+        "fusion.pattern_rectangular": {
+            "body_name": "Body1",
+            "occurrences_x": 3,
+            "spacing_x_mm": 20,
+            "occurrences_y": 2,
+            "spacing_y_mm": 15,
+        },
+        "fusion.shell_body": {"body_name": "Body1", "faces": "all", "thickness_mm": 2.5},
+        "fusion.fillet_edges": {"body_name": "Body1", "radius_mm": 2},
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
+def test_g1_2_and_hole_v2_scripts_compile() -> None:
+    """G1.2 (sketch dims paramétricas guarded em rectangle/circle) e G3
+    hole v2 (counterbore). Scripts compilam com args param e counterbore.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        # G1.2: dimensão amarrada a parâmetro
+        "fusion.add_rectangle": {"sketch": "s", "width_mm": "box_w_mm", "height_mm": "box_h_mm"},
+        "fusion.add_circle": {"sketch": "s", "diameter_mm": "bore_mm"},
+        # G3: hole counterbore
+        "fusion.hole": {
+            "diameter_mm": 5,
+            "position_mm": [0, 0],
+            "type": "counterbore",
+            "counterbore_diameter_mm": 10,
+            "counterbore_depth_mm": 3,
+        },
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
+def test_onda9_rest_scripts_compile() -> None:
+    """Onda 9 restante: query_geometry (G2.2), edge_ids/face_ids,
+    result_name (G2.3), add_ellipse/add_slot/split_body (G3). Compilam.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+    from app.modeling.tool_registry import TOOL_REGISTRY, ToolCategory
+
+    cases = {
+        "fusion.query_geometry": ({"limit": 30}, ToolCategory.read_only),
+        "fusion.add_ellipse": ({"sketch": "s", "major_mm": 40, "minor_mm": 20}, ToolCategory.additive),
+        "fusion.add_slot": (
+            {"sketch": "s", "length_mm": 40, "width_mm": 10},
+            ToolCategory.additive,
+        ),
+        "fusion.split_body": ({"body_name": "Body1", "plane": "xy"}, ToolCategory.mutative),
+        # G2.2 index-based selection + G2.3 result_name
+        "fusion.fillet_edges": ({"body_name": "Body1", "radius_mm": 2, "edge_ids": [0, 3]}, None),
+        "fusion.extrude_profile": (
+            {"sketch": "s", "distance_mm": 10, "result_name": "Tower"},
+            None,
+        ),
+    }
+    for tool, (args, category) in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+        if category is not None:
+            assert TOOL_REGISTRY[tool].category == category
+
+
+def test_g1_g2_g5_scripts_compile() -> None:
+    """G1.1 (parametrização), G2.1 (selectors finos), G5 (fallback de API):
+    os scripts precisam compilar com args que exercitam os novos caminhos —
+    distâncias como nome de parâmetro, selectors de orientação/tamanho.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        # G1.1: distancia como referencia a parametro (vinculo)
+        "fusion.extrude_profile": {"sketch": "s", "distance_mm": "height_mm"},
+        "fusion.fillet_edges": {"radius_mm": "edge_radius_mm", "edge_selector": "longest"},
+        "fusion.chamfer_edges": {"distance_mm": 2, "edge_selector": "top"},
+        "fusion.shell_body": {"thickness_mm": "wall_mm", "open_faces": "+z"},
+        # G2.1: selectors finos
+        "fusion.hole": {"diameter_mm": 5, "position_mm": [0, 0]},
+        # G5: move/scale com fallback de versao
+        "fusion.move_body": {"body_name": "Body1", "translation_mm": [10, 0, 5]},
+        "fusion.scale_body": {"body_name": "Body1", "factor": 2},
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
+def test_add_circle_accepts_aliases() -> None:
+    """Quick fix: add_circle aceita circle_diameter_mm e radius_mm além de
+    diameter_mm. Verifica que o script compila com cada alias.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    for args in (
+        {"sketch": "s", "diameter_mm": 20},
+        {"sketch": "s", "circle_diameter_mm": 20},
+        {"sketch": "s", "radius_mm": 10},
+    ):
+        script = build_autodesk_fusion_script(tool_name="fusion.add_circle", arguments=args)
+        ast.parse(script)
+
+
+def test_schema_drift_param_expression_syntax() -> None:
+    """Drift do trace placa-parametrizada (mt_019e46942241): o LLM emite
+    valores em ``value_mm`` no set_parameter, chaves dimensionais sem sufixo
+    (width/height/radius/distance) e sintaxe de expressao do Fusion com "="
+    lider (=plate_width, =thickness, =hole_diameter/2). Os scripts devem
+    compilar com cada um desses formatos.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        # set_parameter com value_mm em vez de expression
+        "fusion.set_parameter": {"name": "plate_width", "value_mm": 80},
+        # add_rectangle com chaves sem sufixo + =param
+        "fusion.add_rectangle": {
+            "width": "=plate_width",
+            "height": "=plate_height",
+            "centered": True,
+        },
+        # extrude_profile com distance sem sufixo + =param
+        "fusion.extrude_profile": {"sketch": "s", "distance": "=thickness"},
+        # add_circle com radius sem sufixo + =expressao composta
+        "fusion.add_circle": {"sketch": "s", "radius": "=hole_diameter/2"},
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
+def test_schema_drift_add_box_dimensions_list() -> None:
+    """Drift do trace placa (mt_019e46cf2726): o LLM manda as 3 medidas do
+    box numa lista unica (dimensions_mm=[w,d,h]) com chave extra ``primitive``
+    e ``origin_mm`` como canto, em vez de width_mm/depth_mm/height_mm. O
+    script deve compilar com esse formato.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    for args in (
+        {
+            "name": "PlateBody",
+            "origin_mm": [0, 0, 0],
+            "primitive": "box",
+            "dimensions_mm": [80, 60, 5],
+        },
+        {"size_mm": [10, 20, 30]},
+        {"width_mm": 10, "depth_mm": 20, "height_mm": 30},
+    ):
+        script = build_autodesk_fusion_script(tool_name="fusion.add_box", arguments=args)
+        ast.parse(script)
+        assert 'TOOL_NAME = "fusion.add_box"' in script
+
+
+def test_schema_drift_param_suffix_convention() -> None:
+    """Drift do trace placa (mt_019e46d6dc46): o LLM expressa vinculos
+    parametricos com o sufixo ``_param`` carregando o nome do parametro
+    (width_param/height_param/distance_param/diameter_param). O dispatch
+    normaliza <base>_param -> <base>_mm; os scripts devem compilar e o helper
+    _normalize_param_suffix deve estar presente no template.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        "fusion.add_rectangle": {
+            "sketch": "s",
+            "centered": True,
+            "width_param": "plate_length",
+            "height_param": "plate_width",
+        },
+        "fusion.extrude_profile": {
+            "sketch": "s",
+            "operation": "new_body",
+            "distance_param": "plate_thickness",
+        },
+        "fusion.add_circle": {
+            "sketch": "s",
+            "center_mm": [0, 0],
+            "diameter_param": "hole_diameter",
+        },
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+        assert "_normalize_param_suffix" in script
+
+
+def test_hole_uses_circle_profile_selector() -> None:
+    """Bug do teste real da placa (mt_019e46e06f3b): o sketch do furo criado
+    SOBRE a face da peca gera 2 profiles (disco + anel); pegar item(0) podia
+    pegar o anel e o CUT consumia a peca, deixando so o plug. O hole deve usar
+    o seletor por area do circulo (_profile_for_circle), nao profiles.item(0).
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.hole",
+        arguments={"diameter_mm": 10, "position_mm": [0, 0], "through": True},
+    )
+    ast.parse(script)
+    assert "_profile_for_circle" in script
+    # o caminho do furo nao deve mais cair no profiles.item(0) cego dentro do
+    # createInput do cut (o helper substitui a selecao).
+    assert "_profile_for_circle(sketch, diameter_mm / 20.0)" in script
+
+
+def test_open_design_reuses_active_design() -> None:
+    """P3: open_design deve REUSAR o design ativo por padrão (não recriar um
+    Untitled e zerar o modelo); só cria novo com new_document/reset/force_new.
+    Validação de runtime depende do Fusion real; aqui garantimos que o script
+    compila e contém a lógica de reuso/force_new.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    for args in ({}, {"new_document": True}, {"reset": True}):
+        script = build_autodesk_fusion_script(
+            tool_name="fusion.open_design", arguments=args
+        )
+        ast.parse(script)
+        assert 'TOOL_NAME = "fusion.open_design"' in script
+    # A lógica de reuso e de force_new precisa estar presente no template.
+    assert "force_new" in script
+    assert "activeProduct" in script
+    assert '"reused"' in script
+
+
 def test_unwrap_inner_fusion_result_captures_traceback() -> None:
     """Traceback do inner result vai parar em host_details para debug."""
 

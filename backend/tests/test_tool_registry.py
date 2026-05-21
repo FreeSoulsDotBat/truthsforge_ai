@@ -109,10 +109,15 @@ def test_planner_toolset_excludes_run_script_tools() -> None:
     assert "fusion.run_script" not in PLANNER_TOOLSET
 
 
-def test_planner_toolset_matches_v1_allowlist() -> None:
-    """The visible-to-planner allowlist is exactly the 24 tools v1 exposed."""
+def test_planner_toolset_matches_allowlist() -> None:
+    """A allowlist visível ao planner = base v1 (24 tools) + Onda A.
 
-    expected_v1 = {
+    Onda A (spec adapter-tools-mvp.md) adicionou 4 tools de geometria/feature
+    ao Fusion: add_polygon, add_line, add_arc, revolve_profile. Ao adicionar
+    novas ondas (B-F), inclua as tools aqui.
+    """
+
+    expected = {
         "blender.create_mesh_primitive",
         "blender.apply_bevel",
         "blender.apply_boolean",
@@ -137,8 +142,42 @@ def test_planner_toolset_matches_v1_allowlist() -> None:
         "fusion.export_3mf",
         "fusion.validate_dimensions",
         "fusion.validate_printability",
+        # Onda A
+        "fusion.add_polygon",
+        "fusion.add_line",
+        "fusion.add_arc",
+        "fusion.revolve_profile",
+        # Onda B
+        "fusion.add_box",
+        "fusion.add_cylinder",
+        "fusion.add_sphere",
+        "fusion.add_cone",
+        # Onda C
+        "fusion.fillet_edges",
+        "fusion.chamfer_edges",
+        "fusion.shell_body",
+        "fusion.hole",
+        # Onda D
+        "fusion.pattern_rectangular",
+        "fusion.pattern_circular",
+        "fusion.mirror_feature",
+        "fusion.combine_bodies",
+        # Onda E
+        "fusion.loft_profiles",
+        "fusion.sweep_profile",
+        "fusion.add_construction_plane",
+        "fusion.add_spline",
+        # Onda F
+        "fusion.move_body",
+        "fusion.scale_body",
+        "fusion.delete_body",
+        # Onda 9 (G2.2 / G3)
+        "fusion.query_geometry",
+        "fusion.add_ellipse",
+        "fusion.add_slot",
+        "fusion.split_body",
     }
-    assert set(PLANNER_TOOLSET) == expected_v1
+    assert set(PLANNER_TOOLSET) == expected
 
 
 def test_blender_tools_lists_every_blender_descriptor_except_run_script() -> None:
@@ -158,7 +197,7 @@ def test_fusion_tools_lists_every_fusion_descriptor_except_run_script() -> None:
     assert fusion_entries == set(FUSION_TOOLS) | {"fusion.run_script"}
 
 
-def test_read_only_set_matches_v1() -> None:
+def test_read_only_set_matches_allowlist() -> None:
     expected = {
         "blender.measure_object",
         "blender.validate_mesh",
@@ -166,17 +205,21 @@ def test_read_only_set_matches_v1() -> None:
         "fusion.validate_dimensions",
         "fusion.validate_printability",
         "project_store.list_snapshots",
+        # G2.2: inspeção de geometria para seleção por índice.
+        "fusion.query_geometry",
     }
     assert set(READ_ONLY_TOOL_NAMES) == expected
 
 
-def test_high_risk_set_matches_v1() -> None:
+def test_high_risk_set_matches_allowlist() -> None:
     expected = {
         "blender.apply_boolean",
         "blender.repair_non_manifold",
         "blender.run_script",
         "fusion.run_script",
         "project_store.restore_snapshot",
+        # Onda D: boolean entre corpos existentes é high risk.
+        "fusion.combine_bodies",
     }
     assert set(HIGH_RISK_TOOL_NAMES) == expected
 

@@ -8,11 +8,14 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.core.contracts import (
+    ChatModelingStage,
     ModelingApprovalRequest,
     ModelingCapabilities,
     ModelingExecutionResult,
     ModelingModelVersion,
     ModelingPlan,
+    ModelingPlanEdit,
+    ModelingPlanStatus,
     ModelingPrintabilityReport,
     ModelingPrintabilityRequest,
     ModelingSession,
@@ -26,9 +29,14 @@ from app.core.contracts import (
     ModelingTraceEventCreate,
     ModelingTraceLevel,
     ModelingTraceSource,
+    now_utc,
 )
 from app.modeling.observability import _truncate_payload, get_tracer
-from app.modeling.service import get_modeling_service
+from app.modeling.service import (
+    ModelingInvalidEditTool,
+    ModelingPlanNotEditable,
+    get_modeling_service,
+)
 from app.storage.store import get_store
 
 router = APIRouter()
@@ -100,12 +108,63 @@ def approve_plan(plan_id: str, payload: ModelingApprovalRequest) -> ModelingPlan
         raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
 
 
+@router.patch("/plans/{plan_id}", response_model=ModelingPlan)
+def edit_plan(plan_id: str, payload: ModelingPlanEdit) -> ModelingPlan:
+    """P4: edita um plano antes da aprovação (etapas/rationale)."""
+
+    try:
+        return _service().edit_plan(plan_id, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
+    except ModelingPlanNotEditable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ModelingInvalidEditTool as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/plans/{plan_id}/execute", response_model=ModelingExecutionResult)
 def execute_plan(plan_id: str) -> ModelingExecutionResult:
     try:
-        return _service().execute_plan(plan_id)
+        result = _service().execute_plan(plan_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
+    _advance_chat_to_editing_after_execute(result)
+    return result
+
+
+def _advance_chat_to_editing_after_execute(result: ModelingExecutionResult) -> None:
+    """P3: após uma execução concluída via card, avança o chat 3D para
+    ``editing`` para que o próximo turno seja tratado como edição (e não como
+    novo plano primário). Sem isso o chat ficava preso em ``planning`` e
+    follow-ups recriavam o modelo. Best-effort: nunca quebra a execução.
+    """
+
+    plan = getattr(result, "plan", None)
+    if plan is None or plan.status != ModelingPlanStatus.completed:
+        return
+    conversation_id = plan.conversation_id
+    if not conversation_id:
+        return
+    store = get_store()
+    if not hasattr(store, "get_chat_session") or not hasattr(store, "upsert_chat_session"):
+        return
+    try:
+        session = store.get_chat_session(conversation_id)
+    except Exception:
+        return
+    if session is None or not session.is_modeling_3d:
+        return
+    if session.modeling_stage == ChatModelingStage.editing:
+        return
+    store.upsert_chat_session(
+        session.model_copy(
+            update={
+                "modeling_stage": ChatModelingStage.editing,
+                "modeling_plan_id": plan.id,
+                "updated_at": now_utc(),
+            }
+        )
+    )
 
 
 # NOTE: ``POST /steps/{step_id}/approve`` was removed in Onda 2.11

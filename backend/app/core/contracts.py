@@ -398,6 +398,10 @@ class ChatSession(BaseModel):
     modeling_software_preference: ModelingSoftware | None = None
     modeling_stage: ChatModelingStage | None = None
     modeling_plan_id: str | None = None
+    # P3 (chat-flow-redesign): "modo fluido" opt-in por chat. Quando True,
+    # edições aditivas (sem high-risk) auto-executam sem parar no card; o
+    # plano primário e ações destrutivas/high-risk SEMPRE pedem aprovação.
+    modeling_fluid_mode: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
@@ -509,6 +513,9 @@ class ChatModeling3DContext(BaseModel):
     enabled: bool = False
     mode: ModelingExecutionMode = ModelingExecutionMode.safe_auto
     software_override: ModelingSoftware | None = None
+    # P3: opt-in por chat. ``None`` = não alterar a preferência atual da
+    # sessão; True/False atualiza o ``modeling_fluid_mode`` da ChatSession.
+    fluid_mode: bool | None = None
 
     @model_validator(mode="after")
     def normalize_software_override(self) -> ChatModeling3DContext:
@@ -887,6 +894,54 @@ class ModelingPlanCreate(BaseModel):
             self.software_override = None
         self.knowledge_base_ids = list(dict.fromkeys(self.knowledge_base_ids))
         return self
+
+
+class ModelingDiscoveryAssessment(BaseModel):
+    """Resultado da descoberta (P2 do chat-flow-redesign).
+
+    Antes de propor o plano, o agente avalia se o pedido do usuário está
+    claro o suficiente. Quando ``ready_to_plan`` é ``False`` o backend faz
+    as ``questions`` ao usuário e NÃO cria plano (chat segue em
+    ``discovery``). Quando ``True``, ``refined_brief`` é uma descrição
+    completa em linguagem natural usada como entrada do planner.
+    """
+
+    ready_to_plan: bool = True
+    confidence: float = Field(default=0.7, ge=0, le=1)
+    questions: list[str] = Field(default_factory=list)
+    refined_brief: str = ""
+    rationale: str = ""
+    # P3 — edição vs modelo novo. Só é significativo quando já existe um
+    # modelo na conversa. ``edit`` = alterar o modelo atual (default),
+    # ``new_model`` = começar do zero, ``ambiguous`` = backend pergunta.
+    intent: Literal["edit", "new_model", "ambiguous"] = "new_model"
+    source: ModelingPlannerSource = ModelingPlannerSource.heuristic
+
+
+class ModelingPlanEditStep(BaseModel):
+    """Etapa desejada pelo usuário ao editar um plano (P4).
+
+    O cliente envia a lista COMPLETA de etapas na ordem desejada — isso
+    cobre editar um passo, reordenar, remover e adicionar de uma vez. O
+    ``seq`` é derivado da posição; ``id`` é preservado quando informado
+    (mantém a identidade/saídas da etapa).
+    """
+
+    id: str | None = None
+    title: str
+    tool_name: str
+    risk_level: ModelingRiskLevel = ModelingRiskLevel.low
+    input_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelingPlanEdit(BaseModel):
+    """Edição de um plano antes da aprovação (P4 do chat-flow-redesign).
+
+    Só é aceita enquanto o plano está em ``draft``/``waiting_approval``.
+    """
+
+    steps: list[ModelingPlanEditStep] | None = Field(default=None, min_length=1)
+    rationale: str | None = None
 
 
 class ModelingApprovalRequest(BaseModel):
