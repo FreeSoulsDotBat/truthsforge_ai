@@ -258,4 +258,27 @@ e destrutivas continuam parando no card.
   edita passo e chama onEditPlan; bloqueia em JSON inválido). 70 testes web +
   contratos backend verdes; typecheck do front limpo.
 
-### Status geral: P1 ✅ · P2 ✅ · P3 ✅ · P4 ✅ — redesenho do processo COMPLETO.
+### P5 — Planner de edição ciente do modelo atual ✅ ENTREGUE (2026-05-20)
+
+Objetivo: melhorar a QUALIDADE do delta de edição (gap registrado na P3). O
+backend não fala com o Fusion ao vivo na hora de planejar, então em vez de
+chamar `query_geometry` síncrono usamos o que já temos persistido.
+
+- `build_edit_context_block(parent_plan)` (planner.py) monta um bloco
+  `<modelo-atual>` com: (a) o **histórico de construção** do plano-pai
+  (etapas + args) e (b) **métricas dos corpos** extraídas das saídas das
+  etapas executadas (`validate_dimensions`/`validate_printability`/
+  `query_geometry` — chaves `bodies`/`metrics`). Instrui o LLM a gerar SÓ o
+  delta, referenciar corpos/sketches por nome e NÃO recriar a base / abrir
+  documento novo.
+- `create_llm_plan(_async)` e `_build_messages` aceitam `edit_context`;
+  `ModelingPlannerService._resolve_edit_context` busca o plano-pai
+  (`parent_plan_id`) e injeta o bloco quando `kind=edit`. Span
+  `planner.llm_request` marca `edit_context=true`.
+- Testes: `test_build_edit_context_block_*` em `test_planner_llm.py`.
+- **Limitação:** ainda é o estado CONHECIDO (do histórico/saídas), não uma
+  leitura ao vivo do Fusion. Para edições sobre um modelo aberto manualmente
+  pelo usuário (sem histórico no backend), o contexto fica vazio — evolução
+  futura: persistir um snapshot de `query_geometry` após cada execução.
+
+### Status geral: P1 ✅ · P2 ✅ · P3 ✅ · P4 ✅ · P5 ✅ — processo + edição cientes.

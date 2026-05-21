@@ -46,6 +46,7 @@ from app.core.contracts import (
     ModelingDiscoveryAssessment,
     ModelingPlan,
     ModelingPlanCreate,
+    ModelingPlanKind,
     ModelingPlannerSource,
     ModelingTraceLevel,
     ModelingTraceSource,
@@ -64,6 +65,7 @@ from app.modeling.discovery import assess_request_async as assess_discovery_asyn
 from app.modeling.discovery import heuristic_assessment
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner import (
+    build_edit_context_block,
     create_heuristic_plan,
     create_llm_plan,
     create_llm_plan_async,
@@ -265,6 +267,21 @@ class ModelingPlannerService:
         )
         return plan
 
+    def _resolve_edit_context(self, payload: ModelingPlanCreate) -> str | None:
+        """P5: para planos de edição, monta o contexto do modelo atual a partir
+        do plano-pai (histórico + métricas de corpos). Retorna None quando não
+        é edição ou o pai não está disponível."""
+
+        if payload.kind != ModelingPlanKind.edit or not payload.parent_plan_id:
+            return None
+        if not hasattr(self.store, "get_modeling_plan"):
+            return None
+        try:
+            parent = self.store.get_modeling_plan(payload.parent_plan_id)
+        except Exception:
+            return None
+        return build_edit_context_block(parent)
+
     def _build_plan(
         self, payload: ModelingPlanCreate
     ) -> tuple[ModelingPlan, ModelingPlannerSource, str | None]:
@@ -277,6 +294,7 @@ class ModelingPlannerService:
             )
         try:
             knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
+            edit_context = self._resolve_edit_context(payload)
             with self._tracer.record_span(
                 "planner.llm_request",
                 source=ModelingTraceSource.backend,
@@ -287,8 +305,15 @@ class ModelingPlannerService:
                     gateway=self.gateway,
                     model=model,
                     knowledge_bases=knowledge_bases,
+                    edit_context=edit_context,
                 )
-                span.attach({"step_count": len(plan.steps), "kind": plan.kind.value})
+                span.attach(
+                    {
+                        "step_count": len(plan.steps),
+                        "kind": plan.kind.value,
+                        "edit_context": bool(edit_context),
+                    }
+                )
             return plan, ModelingPlannerSource.llm, None
         except Exception as exc:  # noqa: BLE001 - fallback is intentional
             classified = self._classify_and_record_llm_error(exc, model)
@@ -310,6 +335,7 @@ class ModelingPlannerService:
             )
         try:
             knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
+            edit_context = self._resolve_edit_context(payload)
             with self._tracer.record_span(
                 "planner.llm_request",
                 source=ModelingTraceSource.backend,
@@ -320,8 +346,15 @@ class ModelingPlannerService:
                     gateway=self.gateway,
                     model=model,
                     knowledge_bases=knowledge_bases,
+                    edit_context=edit_context,
                 )
-                span.attach({"step_count": len(plan.steps), "kind": plan.kind.value})
+                span.attach(
+                    {
+                        "step_count": len(plan.steps),
+                        "kind": plan.kind.value,
+                        "edit_context": bool(edit_context),
+                    }
+                )
             return plan, ModelingPlannerSource.llm, None
         except Exception as exc:  # noqa: BLE001 - fallback is intentional
             classified = self._classify_and_record_llm_error(exc, model)

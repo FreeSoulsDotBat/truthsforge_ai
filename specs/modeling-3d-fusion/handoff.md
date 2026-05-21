@@ -58,9 +58,18 @@ ambíguo (P3 corrige `open_design` que recria `Untitled`).
   adicionar, valida JSON). Testes backend `test_edit_plan_*` + front
   `ModelingPlanCard.test.tsx`.
 
-**Redesenho do processo 3D COMPLETO (P1–P4).** Próximos passos: validar P3
-(edição/open_design) no Fusion real via fix-by-trace; o planner consumir
-`query_geometry` (G2.2) no fluxo de edição para gerar deltas corretos.
+- **P5 ENTREGUE** (mesma branch): planner de edição ciente do modelo atual.
+  `build_edit_context_block` injeta no prompt do planner (quando `kind=edit`)
+  o histórico de construção do plano-pai + métricas de corpos extraídas das
+  saídas executadas; instrui a gerar só o delta e não recriar a base.
+  `_resolve_edit_context` busca o pai por `parent_plan_id`. Testes
+  `test_build_edit_context_block_*`. **Limitação:** usa estado CONHECIDO (não
+  leitura ao vivo do Fusion); evolução futura é persistir snapshot de
+  `query_geometry` após cada execução.
+
+**Redesenho do processo 3D COMPLETO (P1–P5).** Próximo passo principal:
+validar tudo no Fusion real via fix-by-trace — em especial P3 (edição/
+open_design) e a qualidade dos deltas com o contexto da P5.
 
 | Onda                                                 | Status               | PR                   | Commits-chave                         |
 | ---------------------------------------------------- | -------------------- | -------------------- | ------------------------------------- |
