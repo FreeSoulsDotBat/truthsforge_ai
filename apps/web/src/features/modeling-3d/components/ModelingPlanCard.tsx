@@ -1,9 +1,45 @@
-import { AlertTriangle, Box, CheckCircle2, Loader2, RotateCcw, X, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  Box,
+  CheckCircle2,
+  Loader2,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Trash2,
+  X,
+  XCircle
+} from "lucide-react";
 import { useId, useMemo, useState } from "react";
 
 import { Badge } from "../../../components/ui/Badge";
 import { cn } from "../../../lib/utils";
-import type { ModelingPlan, ModelingPlanStep, ModelingRiskLevel } from "../types";
+import type {
+  ModelingPlan,
+  ModelingPlanEdit,
+  ModelingPlanStep,
+  ModelingRiskLevel
+} from "../types";
+
+interface DraftStep {
+  id: string | null;
+  title: string;
+  tool_name: string;
+  risk_level: ModelingRiskLevel;
+  inputText: string;
+}
+
+function toDraftSteps(steps: ModelingPlanStep[]): DraftStep[] {
+  return steps.map((step) => ({
+    id: step.id,
+    title: step.title,
+    tool_name: step.tool_name,
+    risk_level: step.risk_level,
+    inputText: JSON.stringify(step.input_json ?? {}, null, 2)
+  }));
+}
 
 const CARD_BUTTON_BASE =
   "inline-flex h-7 items-center justify-center gap-1 rounded-md border px-2.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-50";
@@ -47,6 +83,8 @@ export interface ModelingPlanCardProps {
   onRetry?: () => Promise<void> | void;
   /** Reopen the plan for editing/discovery (Onda 4.6 — "Revisar plano"). */
   onRevise?: () => Promise<void> | void;
+  /** P4: edita o plano antes da aprovação (etapas/rationale). */
+  onEditPlan?: (payload: ModelingPlanEdit) => Promise<void> | void;
   /** ``true`` while a network call started by this card is in flight. */
   isBusy?: boolean;
 }
@@ -105,14 +143,18 @@ export function ModelingPlanCard({
   onReject,
   onRetry,
   onRevise,
+  onEditPlan,
   isBusy = false
 }: ModelingPlanCardProps) {
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [draftSteps, setDraftSteps] = useState<DraftStep[]>([]);
+  const [editError, setEditError] = useState<string | null>(null);
   const rejectInputId = useId();
   const highRisk = useMemo(() => highRiskSteps(plan.steps), [plan.steps]);
   const summary = (plan.rationale || plan.prompt || "").trim();
-  const showApprovalButtons = isApprovable(plan) && !!(onApprove || onReject);
+  const showApprovalButtons = isApprovable(plan) && !!(onApprove || onReject || onEditPlan);
   const showExecutingBlock = isExecuting(plan);
   const showCompletedBlock = isCompleted(plan);
   const showFailedBlock = isFailed(plan);
@@ -130,6 +172,71 @@ export function ModelingPlanCard({
     await onReject(reason);
     setShowRejectForm(false);
     setRejectReason("");
+  }
+
+  function startEditing() {
+    setDraftSteps(toDraftSteps(plan.steps));
+    setEditError(null);
+    setEditing(true);
+  }
+
+  function updateDraft(index: number, patch: Partial<DraftStep>) {
+    setDraftSteps((current) =>
+      current.map((step, i) => (i === index ? { ...step, ...patch } : step))
+    );
+  }
+
+  function moveDraft(index: number, delta: number) {
+    setDraftSteps((current) => {
+      const target = index + delta;
+      if (target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  function removeDraft(index: number) {
+    setDraftSteps((current) => current.filter((_, i) => i !== index));
+  }
+
+  function addDraft() {
+    setDraftSteps((current) => [
+      ...current,
+      { id: null, title: "Nova etapa", tool_name: "", risk_level: "low", inputText: "{}" }
+    ]);
+  }
+
+  async function handleSaveEdit() {
+    if (!onEditPlan || isBusy) return;
+    if (draftSteps.length === 0) {
+      setEditError("O plano precisa de ao menos uma etapa.");
+      return;
+    }
+    const steps = [];
+    for (const [index, draft] of draftSteps.entries()) {
+      if (!draft.tool_name.trim()) {
+        setEditError(`Etapa ${index + 1}: informe o tool_name.`);
+        return;
+      }
+      let inputJson: Record<string, unknown>;
+      try {
+        inputJson = draft.inputText.trim() ? JSON.parse(draft.inputText) : {};
+      } catch {
+        setEditError(`Etapa ${index + 1}: JSON inválido no campo de argumentos.`);
+        return;
+      }
+      steps.push({
+        id: draft.id,
+        title: draft.title.trim() || `Etapa ${index + 1}`,
+        tool_name: draft.tool_name.trim(),
+        risk_level: draft.risk_level,
+        input_json: inputJson
+      });
+    }
+    setEditError(null);
+    await onEditPlan({ steps });
+    setEditing(false);
   }
 
   return (
@@ -207,6 +314,127 @@ export function ModelingPlanCard({
         )}
       </ol>
 
+      {editing && (
+        <div
+          className="mt-3 rounded border border-forge-amber/40 bg-[#0e0f0e] p-2"
+          data-testid="modeling-plan-editor"
+        >
+          <p className="mb-2 text-[11px] text-forge-muted">
+            Edite as etapas (título, tool, risco e argumentos JSON). Reordene,
+            remova ou adicione. Salvar mantém o plano aguardando sua aprovação.
+          </p>
+          <ol className="space-y-2">
+            {draftSteps.map((draft, index) => (
+              <li key={index} className="rounded border border-forge-line p-2">
+                <div className="flex items-center gap-1">
+                  <span className="text-forge-muted">{index + 1}.</span>
+                  <input
+                    aria-label={`Título da etapa ${index + 1}`}
+                    className="flex-1 rounded border border-forge-line bg-[#161716] px-1.5 py-1 text-forge-text"
+                    value={draft.title}
+                    onChange={(e) => updateDraft(index, { title: e.target.value })}
+                    disabled={isBusy}
+                  />
+                  <button
+                    type="button"
+                    className={cn(CARD_BUTTON_BASE, CARD_BUTTON_VARIANTS.ghost)}
+                    onClick={() => moveDraft(index, -1)}
+                    disabled={isBusy || index === 0}
+                    aria-label={`Mover etapa ${index + 1} para cima`}
+                  >
+                    <ArrowUp size={12} aria-hidden />
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(CARD_BUTTON_BASE, CARD_BUTTON_VARIANTS.ghost)}
+                    onClick={() => moveDraft(index, 1)}
+                    disabled={isBusy || index === draftSteps.length - 1}
+                    aria-label={`Mover etapa ${index + 1} para baixo`}
+                  >
+                    <ArrowDown size={12} aria-hidden />
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(CARD_BUTTON_BASE, CARD_BUTTON_VARIANTS.danger)}
+                    onClick={() => removeDraft(index)}
+                    disabled={isBusy}
+                    aria-label={`Remover etapa ${index + 1}`}
+                  >
+                    <Trash2 size={12} aria-hidden />
+                  </button>
+                </div>
+                <div className="mt-1 flex gap-1">
+                  <input
+                    aria-label={`Tool da etapa ${index + 1}`}
+                    className="flex-1 rounded border border-forge-line bg-[#161716] px-1.5 py-1 font-mono text-[11px] text-forge-text"
+                    value={draft.tool_name}
+                    onChange={(e) => updateDraft(index, { tool_name: e.target.value })}
+                    placeholder="ex.: fusion.add_box"
+                    disabled={isBusy}
+                  />
+                  <select
+                    aria-label={`Risco da etapa ${index + 1}`}
+                    className="rounded border border-forge-line bg-[#161716] px-1 py-1 text-forge-text"
+                    value={draft.risk_level}
+                    onChange={(e) =>
+                      updateDraft(index, { risk_level: e.target.value as ModelingRiskLevel })
+                    }
+                    disabled={isBusy}
+                  >
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                  </select>
+                </div>
+                <textarea
+                  aria-label={`Argumentos JSON da etapa ${index + 1}`}
+                  className="mt-1 w-full resize-y rounded border border-forge-line bg-[#161716] p-1.5 font-mono text-[11px] text-forge-text"
+                  rows={2}
+                  value={draft.inputText}
+                  onChange={(e) => updateDraft(index, { inputText: e.target.value })}
+                  disabled={isBusy}
+                />
+              </li>
+            ))}
+          </ol>
+          {editError && (
+            <p className="mt-2 text-forge-red" data-testid="modeling-plan-edit-error">
+              {editError}
+            </p>
+          )}
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={cn(CARD_BUTTON_BASE, CARD_BUTTON_VARIANTS.ghost)}
+              onClick={addDraft}
+              disabled={isBusy}
+            >
+              <Plus size={12} aria-hidden /> Adicionar etapa
+            </button>
+            <button
+              type="button"
+              className={cn(CARD_BUTTON_BASE, CARD_BUTTON_VARIANTS.primary)}
+              onClick={handleSaveEdit}
+              disabled={isBusy}
+              data-testid="modeling-plan-edit-save"
+            >
+              Salvar edição
+            </button>
+            <button
+              type="button"
+              className={cn(CARD_BUTTON_BASE, CARD_BUTTON_VARIANTS.ghost)}
+              onClick={() => {
+                setEditing(false);
+                setEditError(null);
+              }}
+              disabled={isBusy}
+            >
+              <X size={12} aria-hidden /> Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
       {showApprovalButtons && (
         <div className="mt-3 flex flex-col gap-2">
           <div className="flex flex-wrap gap-2">
@@ -230,6 +458,17 @@ export function ModelingPlanCard({
                 data-testid="modeling-plan-reject-toggle"
               >
                 Rejeitar
+              </button>
+            )}
+            {onEditPlan && !editing && (
+              <button
+                type="button"
+                className={cn(CARD_BUTTON_BASE, CARD_BUTTON_VARIANTS.ghost)}
+                onClick={startEditing}
+                disabled={isBusy}
+                data-testid="modeling-plan-edit-toggle"
+              >
+                <Pencil size={12} aria-hidden /> Editar plano
               </button>
             )}
           </div>

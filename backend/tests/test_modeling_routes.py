@@ -441,6 +441,102 @@ def test_execute_advances_chat_to_editing(monkeypatch) -> None:
     assert refreshed.modeling_plan_id == plan["id"]
 
 
+def _waiting_plan(store, *, status=None):
+    from app.core.contracts import (
+        ModelingPlan,
+        ModelingPlanStatus,
+        ModelingPlanStep,
+        ModelingRiskLevel,
+    )
+
+    plan = ModelingPlan(
+        prompt="cubo de teste",
+        software_choice=ModelingSoftware.blender,
+        status=status or ModelingPlanStatus.waiting_approval,
+        steps=[
+            ModelingPlanStep(
+                seq=1,
+                title="Criar cubo",
+                software=ModelingSoftware.blender,
+                tool_name="blender.create_mesh_primitive",
+                risk_level=ModelingRiskLevel.medium,
+                input_json={"primitive": "cube"},
+            )
+        ],
+    )
+    store.upsert_modeling_plan(plan)
+    return plan
+
+
+def test_edit_plan_replaces_steps() -> None:
+    """P4: PATCH /plans/{id} substitui as etapas (editar passo/plano todo),
+    valida tool_name, reordena seq e mantém o plano editável (card)."""
+
+    store = get_store()
+    plan = _waiting_plan(store)
+    original_step_id = plan.steps[0].id
+
+    client = TestClient(app)
+    resp = client.patch(
+        f"/api/3d/plans/{plan.id}",
+        json={
+            "steps": [
+                {
+                    "id": original_step_id,
+                    "title": "Criar cubo 30mm",
+                    "tool_name": "blender.create_mesh_primitive",
+                    "risk_level": "medium",
+                    "input_json": {"primitive": "cube", "size_mm": 30},
+                },
+                {
+                    "title": "Exportar STL",
+                    "tool_name": "blender.export_stl",
+                    "risk_level": "low",
+                    "input_json": {"target": "preview.stl"},
+                },
+            ],
+            "rationale": "plano enxuto editado pelo usuário",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["steps"]) == 2
+    assert body["steps"][0]["id"] == original_step_id
+    assert body["steps"][0]["seq"] == 1
+    assert body["steps"][0]["input_json"]["size_mm"] == 30
+    assert body["steps"][1]["seq"] == 2
+    assert body["rationale"] == "plano enxuto editado pelo usuário"
+    assert body["status"] in {"draft", "waiting_approval"}
+
+
+def test_edit_plan_rejects_unknown_tool() -> None:
+    """P4: editar com um tool fora da allowlist do planner é 422."""
+
+    store = get_store()
+    plan = _waiting_plan(store)
+    client = TestClient(app)
+    resp = client.patch(
+        f"/api/3d/plans/{plan.id}",
+        json={"steps": [{"title": "x", "tool_name": "blender.run_script", "input_json": {}}]},
+    )
+    assert resp.status_code == 422
+
+
+def test_edit_plan_blocked_after_approval() -> None:
+    """P4: plano já aprovado/executado não é editável (409)."""
+
+    from app.core.contracts import ModelingPlanStatus
+
+    store = get_store()
+    plan = _waiting_plan(store, status=ModelingPlanStatus.completed)
+    client = TestClient(app)
+    resp = client.patch(
+        f"/api/3d/plans/{plan.id}",
+        json={"steps": [{"title": "x", "tool_name": "blender.export_stl", "input_json": {}}]},
+    )
+    assert resp.status_code == 409
+
+
 def test_modeling_snapshot_records_manifest() -> None:
     client = TestClient(app)
     response = client.post(

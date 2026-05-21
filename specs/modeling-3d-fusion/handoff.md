@@ -49,7 +49,18 @@ ambíguo (P3 corrige `open_design` que recria `Untitled`).
   pendente:** qualidade do delta de edição (precisa do estado do modelo via
   G2.2) e comportamento de documento do `open_design` — iterar via
   fix-by-trace no Fusion.
-- **P4 pendente** (editar o plano antes de aprovar: PATCH /plans/{id} + UI).
+- **P4 ENTREGUE** (mesma branch): `PATCH /api/3d/plans/{id}`
+  (`ModelingService.edit_plan`) edita o plano enquanto draft/waiting_approval
+  — envia a lista completa de etapas (editar/reordenar/remover/adicionar),
+  valida tool_name contra a allowlist (422), re-aplica policy e mantém
+  waiting_approval; 409 após aprovação. Frontend: `editPlan` no api+hook +
+  editor inline no `ModelingPlanCard` (título/tool/risco/JSON, mover, remover,
+  adicionar, valida JSON). Testes backend `test_edit_plan_*` + front
+  `ModelingPlanCard.test.tsx`.
+
+**Redesenho do processo 3D COMPLETO (P1–P4).** Próximos passos: validar P3
+(edição/open_design) no Fusion real via fix-by-trace; o planner consumir
+`query_geometry` (G2.2) no fluxo de edição para gerar deltas corretos.
 
 | Onda                                                 | Status               | PR                   | Commits-chave                         |
 | ---------------------------------------------------- | -------------------- | -------------------- | ------------------------------------- |

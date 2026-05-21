@@ -239,4 +239,23 @@ e destrutivas continuam parando no card.
   fix-by-trace no Fusion real. open_design reuse precisa de validação no
   Fusion (comportamento de documento ativo).
 
-### Status geral: P1 ✅ · P2 ✅ · P3 ✅ · P4 (editar plano) pendente.
+### P4 — Editar o plano antes de aprovar ✅ ENTREGUE (2026-05-20)
+
+- **Backend:** `PATCH /api/3d/plans/{id}` (`ModelingService.edit_plan`) edita um
+  plano enquanto `draft`/`waiting_approval`. O cliente envia a lista COMPLETA
+  de etapas (cobre editar um passo, reordenar, remover, adicionar). Valida
+  cada `tool_name` contra a allowlist do planner (422 se fora), reordena
+  `seq`, preserva a identidade da etapa quando o `id` é informado, re-aplica a
+  policy de segurança e mantém o plano em `waiting_approval` (gate P1). 409 se
+  o plano já foi aprovado/executado; 404 se não existe. Contratos
+  `ModelingPlanEdit`/`ModelingPlanEditStep`. Audit `modeling.plan_edited`.
+- **Frontend:** `modeling3dApi.editPlan` + `useModelingPlanActions.edit` +
+  botão "Editar plano" no `ModelingPlanCard` com editor inline (título, tool,
+  risco, argumentos JSON por etapa; mover ↑/↓, remover, adicionar; valida o
+  JSON antes de salvar). Ligado via `app-chat` → `App.tsx`.
+- Testes: backend (`test_edit_plan_*` — substitui, rejeita tool fora da
+  allowlist, bloqueia após aprovação); frontend (`ModelingPlanCard.test.tsx` —
+  edita passo e chama onEditPlan; bloqueia em JSON inválido). 70 testes web +
+  contratos backend verdes; typecheck do front limpo.
+
+### Status geral: P1 ✅ · P2 ✅ · P3 ✅ · P4 ✅ — redesenho do processo COMPLETO.

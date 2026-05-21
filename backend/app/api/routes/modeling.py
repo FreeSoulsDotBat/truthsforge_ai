@@ -14,6 +14,7 @@ from app.core.contracts import (
     ModelingExecutionResult,
     ModelingModelVersion,
     ModelingPlan,
+    ModelingPlanEdit,
     ModelingPlanStatus,
     ModelingPrintabilityReport,
     ModelingPrintabilityRequest,
@@ -31,7 +32,11 @@ from app.core.contracts import (
     now_utc,
 )
 from app.modeling.observability import _truncate_payload, get_tracer
-from app.modeling.service import get_modeling_service
+from app.modeling.service import (
+    ModelingInvalidEditTool,
+    ModelingPlanNotEditable,
+    get_modeling_service,
+)
 from app.storage.store import get_store
 
 router = APIRouter()
@@ -101,6 +106,20 @@ def approve_plan(plan_id: str, payload: ModelingApprovalRequest) -> ModelingPlan
         return _service().approve_plan(plan_id, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
+
+
+@router.patch("/plans/{plan_id}", response_model=ModelingPlan)
+def edit_plan(plan_id: str, payload: ModelingPlanEdit) -> ModelingPlan:
+    """P4: edita um plano antes da aprovação (etapas/rationale)."""
+
+    try:
+        return _service().edit_plan(plan_id, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
+    except ModelingPlanNotEditable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ModelingInvalidEditTool as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/plans/{plan_id}/execute", response_model=ModelingExecutionResult)

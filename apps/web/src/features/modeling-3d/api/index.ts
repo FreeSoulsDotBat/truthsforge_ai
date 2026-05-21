@@ -6,6 +6,7 @@ import type {
   ModelingExecutionResult,
   ModelingModelVersion,
   ModelingPlan,
+  ModelingPlanEdit,
   ModelingPrintabilityReport,
   ModelingSession,
   ModelingSnapshot,
@@ -57,6 +58,16 @@ export const modeling3dApi = {
     apiRequest<ModelingPlan>(`/api/3d/plans/${planId}/approve`, {
       method: "POST",
       body: JSON.stringify({ decision: "reject", reason })
+    }),
+  /**
+   * P4: edita um plano antes da aprovação. Envia a lista COMPLETA de etapas
+   * (cobre editar um passo, reordenar, remover e adicionar). Só aceito
+   * enquanto o plano está em draft/waiting_approval.
+   */
+  editPlan: (planId: string, payload: ModelingPlanEdit) =>
+    apiRequest<ModelingPlan>(`/api/3d/plans/${planId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
     }),
   /**
    * Trigger plan execution. Today this is still a separate call after

@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 
 import { modeling3dApi } from "../api";
-import type { ModelingExecutionResult, ModelingPlan } from "../types";
+import type { ModelingExecutionResult, ModelingPlan, ModelingPlanEdit } from "../types";
 
 /**
  * Hook that drives the in-chat approval/execution UX for the
@@ -40,6 +40,8 @@ export interface UseModelingPlanActionsResult {
   reject: (planId: string, reason: string) => Promise<ModelingPlan | null>;
   retry: (planId: string) => Promise<ModelingExecutionResult | null>;
   revise: (planId: string, reason?: string) => Promise<ModelingPlan | null>;
+  /** P4: edita o plano antes da aprovação (etapas/rationale). */
+  edit: (planId: string, payload: ModelingPlanEdit) => Promise<ModelingPlan | null>;
   reset: () => void;
 }
 
@@ -115,6 +117,17 @@ export function useModelingPlanActions(): UseModelingPlanActionsResult {
     [wrap]
   );
 
+  const edit = useCallback(
+    async (planId: string, payload: ModelingPlanEdit) =>
+      wrap(async () => {
+        const edited = await modeling3dApi.editPlan(planId, payload);
+        setLastPlan(edited);
+        setLastExecution(null);
+        return edited;
+      }),
+    [wrap]
+  );
+
   const reset = useCallback(() => {
     setBusy(false);
     setError(null);
@@ -122,5 +135,5 @@ export function useModelingPlanActions(): UseModelingPlanActionsResult {
     setLastExecution(null);
   }, []);
 
-  return { busy, error, lastPlan, lastExecution, approve, reject, retry, revise, reset };
+  return { busy, error, lastPlan, lastExecution, approve, reject, retry, revise, edit, reset };
 }

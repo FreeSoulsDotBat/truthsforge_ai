@@ -918,6 +918,32 @@ class ModelingDiscoveryAssessment(BaseModel):
     source: ModelingPlannerSource = ModelingPlannerSource.heuristic
 
 
+class ModelingPlanEditStep(BaseModel):
+    """Etapa desejada pelo usuário ao editar um plano (P4).
+
+    O cliente envia a lista COMPLETA de etapas na ordem desejada — isso
+    cobre editar um passo, reordenar, remover e adicionar de uma vez. O
+    ``seq`` é derivado da posição; ``id`` é preservado quando informado
+    (mantém a identidade/saídas da etapa).
+    """
+
+    id: str | None = None
+    title: str
+    tool_name: str
+    risk_level: ModelingRiskLevel = ModelingRiskLevel.low
+    input_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelingPlanEdit(BaseModel):
+    """Edição de um plano antes da aprovação (P4 do chat-flow-redesign).
+
+    Só é aceita enquanto o plano está em ``draft``/``waiting_approval``.
+    """
+
+    steps: list[ModelingPlanEditStep] | None = Field(default=None, min_length=1)
+    rationale: str | None = None
+
+
 class ModelingApprovalRequest(BaseModel):
     decision: ModelingApprovalDecision
     reason: str = ""
