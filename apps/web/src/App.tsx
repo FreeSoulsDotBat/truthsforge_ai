@@ -1,4 +1,4 @@
-import { Check, ChevronRight, EllipsisVertical, LoaderCircle, Menu, Send, Wifi, X } from "lucide-react";
+import { LoaderCircle, Menu, Send, Wifi, X } from "lucide-react";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -15,6 +15,7 @@ import type { DashboardView, LoadState, ProviderCatalogState } from "./app/ui-st
 import { ChatMessageList } from "./features/chat/components/ChatMessageList";
 import { ChatRightPanel } from "./features/chat/components/ChatRightPanel";
 import { ExecutionMenu } from "./features/chat/components/ExecutionMenu";
+import { ShortcutMenu } from "./features/chat/components/ShortcutMenu";
 import { ContextChip, DuplicateFileModal } from "./components/app-panels";
 import { AppSidebar } from "./components/AppSidebar";
 import { Badge } from "./components/ui/Badge";
@@ -2451,124 +2452,38 @@ function App() {
                             onAttachFile={() => fileInputRef.current?.click()}
                           />
 
-                          <div className="relative" ref={shortcutMenuRef}>
-                            <Button
-                              className="h-8 w-8 px-0"
-                              onClick={() => {
-                                if (shortcutMenuOpen) {
-                                  setShortcutMenuOpen(false);
-                                  setShortcutSubmenu(null);
-                                } else {
-                                  setShortcutMenuOpen(true);
-                                  setShortcutSubmenu("agent");
-                                }
-                              }}
-                              aria-label="Menu rápido"
-                              title="Menu rápido"
-                            >
-                              <EllipsisVertical size={15} />
-                            </Button>
-                            {shortcutMenuOpen && (
-                              <div
-                                className="absolute right-0 z-50 w-[460px] rounded-md border border-forge-line bg-[#111313] p-1 shadow-2xl"
-                                style={{ top: "auto", bottom: "calc(100% + 4px)" }}
-                              >
-                                <div className="grid grid-cols-[170px_minmax(0,1fr)]">
-                                  <div className="space-y-1 pr-1">
-                                    <button
-                                      type="button"
-                                      className={[
-                                        "flex h-8 w-full items-center justify-between rounded px-2 text-xs transition",
-                                        shortcutSubmenu === "agent"
-                                          ? "bg-[#1b1f22] text-forge-text"
-                                          : "text-forge-muted hover:bg-[#1b1f22] hover:text-forge-text"
-                                      ].join(" ")}
-                                      onClick={() => setShortcutSubmenu("agent")}
-                                    >
-                                      <span>Agente</span>
-                                      <ChevronRight size={13} />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className={[
-                                        "flex h-8 w-full items-center justify-between rounded px-2 text-xs transition",
-                                        shortcutSubmenu === "scope"
-                                          ? "bg-[#1b1f22] text-forge-text"
-                                          : "text-forge-muted hover:bg-[#1b1f22] hover:text-forge-text"
-                                      ].join(" ")}
-                                      onClick={() => setShortcutSubmenu("scope")}
-                                    >
-                                      <span>Projeto</span>
-                                      <ChevronRight size={13} />
-                                    </button>
-                                  </div>
-
-                                  <div className="scrollbar-slim max-h-[55vh] overflow-y-auto border-l border-forge-line pl-2">
-                                    {shortcutSubmenu === "agent" && (
-                                      <div className="space-y-1">
-                                        {agents
-                                          .filter((agent) => agent.enabled)
-                                          .map((agent) => (
-                                            <button
-                                              key={agent.id}
-                                              type="button"
-                                              className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
-                                              onClick={() => {
-                                                setActiveAgentId(agent.id);
-                                                setShortcutMenuOpen(false);
-                                                setShortcutSubmenu(null);
-                                              }}
-                                            >
-                                              <span className="truncate">{agent.name}</span>
-                                              {activeAgent?.id === agent.id && (
-                                                <Check size={13} className="text-forge-amber" />
-                                              )}
-                                            </button>
-                                          ))}
-                                      </div>
-                                    )}
-
-                                    {shortcutSubmenu === "scope" && (
-                                      <div className="space-y-1">
-                                        {availableContextProjects.map((project) => {
-                                          const active = normalizedContextProjectIds[0] === project.id;
-                                          return (
-                                            <button
-                                              key={project.id}
-                                              type="button"
-                                              className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
-                                              onClick={() => {
-                                                setChatProjectId(project.id);
-                                                setChatContextProjectIds([project.id]);
-                                                setChatContextKnowledgeBaseIds(
-                                                  project.context.knowledge_base_ids ?? []
-                                                );
-                                                setShortcutMenuOpen(false);
-                                                setShortcutSubmenu(null);
-                                              }}
-                                            >
-                                              <span className="truncate">{projectDisplayName(project)}</span>
-                                              {active && <Check size={13} className="text-forge-amber" />}
-                                            </button>
-                                          );
-                                        })}
-                                        <div className="px-2 pt-1 text-[11px] text-forge-muted">
-                                          A conversa usa um projeto por vez. As pastas citadas com @ filtram a busca.
-                                        </div>
-                                        <button
-                                          type="button"
-                                          className="mt-1 flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
-                                          onClick={() => setContextDocsModalOpen(true)}
-                                        >
-                                          <span>Editar bases de conhecimento atreladas</span>
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                          <ShortcutMenu
+                            menuRef={shortcutMenuRef}
+                            open={shortcutMenuOpen}
+                            submenu={shortcutSubmenu}
+                            onToggleOpen={() => {
+                              if (shortcutMenuOpen) {
+                                setShortcutMenuOpen(false);
+                                setShortcutSubmenu(null);
+                              } else {
+                                setShortcutMenuOpen(true);
+                                setShortcutSubmenu("agent");
+                              }
+                            }}
+                            onSelectSubmenu={setShortcutSubmenu}
+                            agents={agents}
+                            activeAgent={activeAgent}
+                            availableContextProjects={availableContextProjects}
+                            activeProjectId={normalizedContextProjectIds[0]}
+                            onSelectAgent={(agentId) => {
+                              setActiveAgentId(agentId);
+                              setShortcutMenuOpen(false);
+                              setShortcutSubmenu(null);
+                            }}
+                            onSelectProject={(project) => {
+                              setChatProjectId(project.id);
+                              setChatContextProjectIds([project.id]);
+                              setChatContextKnowledgeBaseIds(project.context.knowledge_base_ids ?? []);
+                              setShortcutMenuOpen(false);
+                              setShortcutSubmenu(null);
+                            }}
+                            onEditKnowledgeBases={() => setContextDocsModalOpen(true)}
+                          />
                         </div>
                       </div>
 
