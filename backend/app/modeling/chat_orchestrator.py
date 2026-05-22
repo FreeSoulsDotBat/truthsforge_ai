@@ -113,12 +113,8 @@ class ModelingChatOrchestrator:
             return chat
         if chat.modeling_stage is not None:
             return chat
-        next_stage = transition(
-            chat.modeling_stage, ChatModelingEvent.CHAT_CREATED_AS_MODELING_3D
-        )
-        updated = chat.model_copy(
-            update={"modeling_stage": next_stage, "updated_at": now_utc()}
-        )
+        next_stage = transition(chat.modeling_stage, ChatModelingEvent.CHAT_CREATED_AS_MODELING_3D)
+        updated = chat.model_copy(update={"modeling_stage": next_stage, "updated_at": now_utc()})
         self.store.upsert_chat_session(updated)
         self._audit(
             "modeling.chat.discovery_started",
@@ -140,12 +136,8 @@ class ModelingChatOrchestrator:
         """
 
         self._require_modeling_chat(chat)
-        next_stage = transition(
-            chat.modeling_stage, ChatModelingEvent.CLARIFICATION_ASKED
-        )
-        updated = chat.model_copy(
-            update={"modeling_stage": next_stage, "updated_at": now_utc()}
-        )
+        next_stage = transition(chat.modeling_stage, ChatModelingEvent.CLARIFICATION_ASKED)
+        updated = chat.model_copy(update={"modeling_stage": next_stage, "updated_at": now_utc()})
         self.store.upsert_chat_session(updated)
         self._audit(
             "modeling.chat.clarification_asked",
@@ -189,9 +181,7 @@ class ModelingChatOrchestrator:
             }
         )
         plan = self.planner.create_plan(primary_payload)
-        next_stage = transition(
-            chat.modeling_stage, ChatModelingEvent.PLAN_PROPOSED
-        )
+        next_stage = transition(chat.modeling_stage, ChatModelingEvent.PLAN_PROPOSED)
         updated = chat.model_copy(
             update={
                 "modeling_stage": next_stage,
@@ -304,6 +294,158 @@ class ModelingChatOrchestrator:
         self._tracer.close_trace()
         return chat, execution.plan, execution
 
+    # ------------------------------------------------------------------
+    # split approve / execute (chat-card two-call flow)
+    # ------------------------------------------------------------------
+    #
+    # ``approve_plan`` above runs approval + execution in one shot — the
+    # shape the agent-facing tools want. The in-chat card, however, keeps
+    # the historical two-call contract (``POST /plans/{id}/approve`` then
+    # ``POST /plans/{id}/execute`` driven by ``useModelingPlanActions``).
+    # The two methods below split the same state machine so the live HTTP
+    # routes can drive the orchestrator without changing the frontend.
+
+    def approve_plan_only(
+        self,
+        chat: ChatSession,
+        plan_id: str,
+        *,
+        payload: ModelingApprovalRequest | None = None,
+    ) -> tuple[ChatSession, ModelingPlan]:
+        """Approve the plan record and advance the chat WITHOUT executing.
+
+        Stage-aware so the same endpoint serves both gates: a primary plan
+        in ``planning`` advances to ``approved`` (``PLAN_APPROVED``); a
+        high-risk edit in ``editing`` records ``EDIT_HIGH_RISK_APPROVED``
+        and stays in ``editing``. Execution is deferred to
+        :meth:`execute_plan`.
+        """
+
+        self._require_modeling_chat(chat)
+        approval = payload or ModelingApprovalRequest(
+            decision=ModelingApprovalDecision.approve, reason=""
+        )
+        if approval.decision != ModelingApprovalDecision.approve:
+            raise ValueError(
+                "approve_plan_only only accepts approve decisions; use reject() for rejections."
+            )
+        plan = self._get_plan_or_raise(plan_id)
+        approved_plan = self._approve_plan_record(plan, approval)
+        if chat.modeling_stage is ChatModelingStage.editing:
+            chat = self._set_stage(
+                chat,
+                ChatModelingEvent.EDIT_HIGH_RISK_APPROVED,
+                audit="modeling.chat.edit_high_risk_approved",
+                extra={"plan_id": plan_id},
+            )
+        else:
+            chat = self._set_stage(
+                chat,
+                ChatModelingEvent.PLAN_APPROVED,
+                audit="modeling.chat.plan_approved",
+                extra={"plan_id": plan_id},
+            )
+        return chat, approved_plan
+
+    def execute_plan(
+        self, chat: ChatSession, plan_id: str
+    ) -> tuple[ChatSession, ModelingPlan, ModelingExecutionResult]:
+        """Execute an already-approved plan and land the chat in ``editing``.
+
+        Counterpart of :meth:`approve_plan_only`. Stage-aware: a primary
+        plan in ``approved`` runs ``approved → executing → editing``; an
+        edit or a retry already in ``editing`` just runs the executor and
+        stays in ``editing`` (no transition). The executor still skips any
+        step whose ``approval_required`` was not cleared, so high-risk
+        steps never run without an explicit approval.
+        """
+
+        self._require_modeling_chat(chat)
+        self._tracer.start_trace(
+            session_id=chat.id,
+            project_id=chat.project_id,
+            plan_id=plan_id,
+        )
+        self._tracer.record(
+            "executor.plan_approved",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.info,
+            message="Plano aprovado pelo usuário; iniciando execução",
+            payload={"plan_id": plan_id},
+        )
+
+        plan = self._get_plan_or_raise(plan_id)
+        # ADR-013 gate: never execute a plan the user hasn't approved. Guards
+        # the split two-call flow against a direct ``execute`` that skips
+        # ``approve_plan_only``. ``completed`` is allowed so a retry in
+        # ``editing`` can re-run. See AGENTS.md "Preserve human-in-the-loop".
+        if plan.status not in (ModelingPlanStatus.approved, ModelingPlanStatus.completed):
+            raise ValueError(
+                f"Plano {plan_id!r} não está aprovado (status={plan.status.value!r}); "
+                "aprove antes de executar."
+            )
+        if chat.modeling_stage is ChatModelingStage.approved:
+            chat = self._set_stage(
+                chat,
+                ChatModelingEvent.EXECUTION_STARTED,
+                audit="modeling.chat.execution_started",
+                extra={"plan_id": plan_id},
+            )
+
+        execution = self.executor.execute_plan(plan)
+
+        if chat.modeling_stage is ChatModelingStage.executing:
+            outcome_event = (
+                ChatModelingEvent.EXECUTION_FAILED
+                if execution.plan.status == ModelingPlanStatus.failed
+                else ChatModelingEvent.EXECUTION_COMPLETED
+            )
+            chat = self._set_stage(
+                chat,
+                outcome_event,
+                audit=f"modeling.chat.{outcome_event.value}",
+                extra={
+                    "plan_id": plan_id,
+                    "executed_step_ids": execution.executed_step_ids,
+                    "blocked_step_ids": execution.blocked_step_ids,
+                },
+            )
+
+        self._tracer.record(
+            "executor.plan_finished",
+            source=ModelingTraceSource.backend,
+            level=(
+                ModelingTraceLevel.error
+                if execution.plan.status == ModelingPlanStatus.failed
+                else ModelingTraceLevel.info
+            ),
+            message=f"Execução finalizada com status {execution.plan.status.value}",
+            payload={
+                "plan_id": plan_id,
+                "status": execution.plan.status.value,
+                "executed_step_ids": execution.executed_step_ids,
+                "blocked_step_ids": execution.blocked_step_ids,
+                "tool_call_ids": execution.tool_call_ids,
+            },
+        )
+        self._tracer.flush(current_trace_id())
+        self._tracer.close_trace()
+        return chat, execution.plan, execution
+
+    def reject(
+        self, chat: ChatSession, plan_id: str, *, reason: str = ""
+    ) -> tuple[ChatSession, ModelingPlan]:
+        """Reject a plan from the card, dispatching by stage.
+
+        A high-risk edit pending in ``editing`` routes to
+        :meth:`reject_edit_plan`; everything else to :meth:`reject_plan`.
+        """
+
+        self._require_modeling_chat(chat)
+        if chat.modeling_stage is ChatModelingStage.editing:
+            return self.reject_edit_plan(chat, plan_id, reason=reason)
+        return self.reject_plan(chat, plan_id, reason=reason)
+
     def reject_plan(
         self,
         chat: ChatSession,
@@ -320,14 +462,10 @@ class ModelingChatOrchestrator:
 
         self._require_modeling_chat(chat)
         plan = self._get_plan_or_raise(plan_id)
-        rejection = ModelingApprovalRequest(
-            decision=ModelingApprovalDecision.reject, reason=reason
-        )
+        rejection = ModelingApprovalRequest(decision=ModelingApprovalDecision.reject, reason=reason)
         rejected = self._approve_plan_record(plan, rejection)
 
-        next_stage = transition(
-            chat.modeling_stage, ChatModelingEvent.PLAN_REJECTED
-        )
+        next_stage = transition(chat.modeling_stage, ChatModelingEvent.PLAN_REJECTED)
         updated = chat.model_copy(
             update={
                 "modeling_stage": next_stage,
@@ -384,9 +522,7 @@ class ModelingChatOrchestrator:
                 audit="modeling.chat.edit_high_risk_requested",
                 extra={"plan_id": plan.id},
             )
-            return EditPlanOutcome(
-                chat=updated, plan=plan, execution=None, requires_approval=True
-            )
+            return EditPlanOutcome(chat=updated, plan=plan, execution=None, requires_approval=True)
 
         # Auto-approve every step that the planner left as
         # ``waiting_approval`` (only a non-high-risk plan can reach this
@@ -449,9 +585,7 @@ class ModelingChatOrchestrator:
         plan = self._get_plan_or_raise(plan_id)
         rejected = self._approve_plan_record(
             plan,
-            ModelingApprovalRequest(
-                decision=ModelingApprovalDecision.reject, reason=reason
-            ),
+            ModelingApprovalRequest(decision=ModelingApprovalDecision.reject, reason=reason),
         )
         updated = self._set_stage(
             chat,
@@ -471,9 +605,7 @@ class ModelingChatOrchestrator:
         if not chat.is_modeling_3d:
             return chat
         next_stage = transition(chat.modeling_stage, ChatModelingEvent.CHAT_ARCHIVED)
-        updated = chat.model_copy(
-            update={"modeling_stage": next_stage, "updated_at": now_utc()}
-        )
+        updated = chat.model_copy(update={"modeling_stage": next_stage, "updated_at": now_utc()})
         self.store.upsert_chat_session(updated)
         self._audit("modeling.chat.archived", chat_id=updated.id)
         return updated
@@ -565,9 +697,7 @@ class ModelingChatOrchestrator:
         extra: dict[str, Any] | None = None,
     ) -> ChatSession:
         next_stage = transition(chat.modeling_stage, event)
-        updated = chat.model_copy(
-            update={"modeling_stage": next_stage, "updated_at": now_utc()}
-        )
+        updated = chat.model_copy(update={"modeling_stage": next_stage, "updated_at": now_utc()})
         self.store.upsert_chat_session(updated)
         metadata = {"chat_id": updated.id, "stage": next_stage.value}
         if extra:
@@ -621,10 +751,38 @@ class InvalidEditStage(ValueError):
 
     def __init__(self, stage: ChatModelingStage | None) -> None:
         stage_str = stage.value if stage is not None else "<none>"
-        super().__init__(
-            f"propose_edit_plan requires modeling_stage='editing', got {stage_str!r}."
-        )
+        super().__init__(f"propose_edit_plan requires modeling_stage='editing', got {stage_str!r}.")
         self.stage = stage
+
+
+def get_modeling_orchestrator(store: Any) -> ModelingChatOrchestrator:
+    """Compose the orchestrator with the same collaborators as
+    :class:`app.modeling.service.ModelingService`.
+
+    Used by the live HTTP routes (chat-stream gate + ``/plans/{id}/approve``
+    + ``/plans/{id}/execute``) so the chat-first state machine and the
+    ``modeling.chat.*`` audit trail are driven from one place instead of
+    being bypassed (see architecture-map finding "código morto no caminho
+    live"). Imports are local to avoid import cycles with ``service.py``.
+    """
+
+    from app.llm_gateway.gateway import LLMGateway
+    from app.modeling.artifacts import ModelingArtifactService
+    from app.modeling.mcp_client import LocalMCPClient
+    from app.modeling.snapshot_service import ModelingSnapshotService
+
+    gateway = LLMGateway()
+    mcp_client = LocalMCPClient()
+    snapshots = ModelingSnapshotService(store=store)
+    artifacts = ModelingArtifactService(store=store)
+    planner = ModelingPlannerService(store=store, gateway=gateway)
+    executor = ModelingExecutorService(
+        store=store,
+        mcp_client=mcp_client,
+        snapshots=snapshots,
+        artifacts=artifacts,
+    )
+    return ModelingChatOrchestrator(store=store, planner=planner, executor=executor)
 
 
 __all__ = [
@@ -632,4 +790,5 @@ __all__ = [
     "InvalidEditStage",
     "ModelingChatOrchestrator",
     "NotAModelingChat",
+    "get_modeling_orchestrator",
 ]

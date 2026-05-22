@@ -91,37 +91,14 @@ class LLMProvider(ABC):
         )
 
 
-class DevLLMProvider(LLMProvider):
-    provider = ProviderName.openai
-
-    async def stream_chat(
-        self,
-        model: ModelConfig,
-        messages: list[dict[str, str]],
-        reasoning_summary: Literal["off", "auto"] = "off",
-    ) -> AsyncIterator[ProviderStreamEvent]:
-        last_message = messages[-1]["content"] if messages else ""
-        if reasoning_summary == "auto":
-            yield reasoning_summary_event("Resumo oficial indisponível no provider dev.")
-        for token in f"JUDITE dev recebeu: {last_message}".split(" "):
-            yield token_event(token + " ")
-
-    async def generate_structured(
-        self,
-        model: ModelConfig,
-        messages: list[dict[str, str]],
-        schema_name: str,
-        schema: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Return a marker dict so callers know to use their heuristic fallback.
-
-        We do not synthesize a fake plan here because that would mask real
-        failures during development. The contract is: dev provider declares
-        the call unavailable; the caller chooses the fallback strategy.
-        """
-        raise ProviderConfigurationError(
-            "Saída estruturada não disponível no provider dev; usando fallback heurístico."
-        )
+# NOTE: there is a single dev/offline fallback in the codebase —
+# ``app.judite.orchestrator.judite_dev_response`` — used by the chat stream
+# when a real provider is misconfigured and ``settings.allow_dev_llm`` is on.
+# A second, orphaned ``DevLLMProvider`` used to live here but was never
+# registered in :class:`app.llm_gateway.gateway.LLMGateway` (which only wires
+# openai/anthropic/google), so it was dead code duplicating the same intent.
+# It was removed (architecture-map finding "fallback duplo de dev"); keep the
+# dev fallback consolidated in ``judite_dev_response``.
 
 
 class BaseRemoteProvider(LLMProvider):

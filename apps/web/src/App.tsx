@@ -1,56 +1,28 @@
-import {
-  Activity,
-  Bot,
-  Check,
-  ChevronRight,
-  Database,
-  EllipsisVertical,
-  ExternalLink,
-  FileText,
-  FolderTree,
-  Gauge,
-  KeyRound,
-  Library,
-  LoaderCircle,
-  Menu,
-  MessageSquare,
-  Plus,
-  Send,
-  Server,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
-  Users,
-  Wifi,
-  X
-} from "lucide-react";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useShallow } from "zustand/react/shallow";
 
+import { useAppDataBootstrap } from "./app/hooks/use-app-data-bootstrap";
+import { useDocumentDraft } from "./app/hooks/use-document-draft";
+import { useProviderSettings } from "./app/hooks/use-provider-settings";
 import { useChatScopeSync } from "./app/hooks/use-chat-scope-sync";
 import { useKnowledgeScopeSync, type ProjectsStatus } from "./app/hooks/use-knowledge-scope-sync";
 import { useOutsidePointerClose } from "./app/hooks/use-outside-pointer-close";
-import { infraLinks, quickActions } from "./app/constants";
+import { quickActions } from "./app/constants";
 import { appDataQueryKey, fetchAppDataSnapshot } from "./app/queries/app-data";
 import { useAppStore } from "./app/store";
-import type { LoadState, ProviderCatalogState } from "./app/ui-state";
-import { MessageBubble } from "./components/app-chat";
-import {
-  ContextChip,
-  DashboardNavButton,
-  DuplicateFileModal,
-  EmptyPanel,
-  ExecutionMenuItem,
-  InfoRow,
-  Metric,
-  PanelButton,
-  PanelStack,
-  PanelTitle
-} from "./components/app-panels";
-import { Badge } from "./components/ui/Badge";
-import { Button } from "./components/ui/Button";
+import type { DashboardView, LoadState } from "./app/ui-state";
+import { AppHeader } from "./components/AppHeader";
+import { ChatComposerInput } from "./features/chat/components/ChatComposerInput";
+import { ChatMessageList } from "./features/chat/components/ChatMessageList";
+import { ChatRightPanel } from "./features/chat/components/ChatRightPanel";
+import { ComposerAttachments } from "./features/chat/components/ComposerAttachments";
+import { ComposerContextChips } from "./features/chat/components/ComposerContextChips";
+import { ExecutionMenu } from "./features/chat/components/ExecutionMenu";
+import { ShortcutMenu } from "./features/chat/components/ShortcutMenu";
+import { DuplicateFileModal } from "./components/app-panels";
+import { AppSidebar } from "./components/AppSidebar";
 import { api, ChatStreamHttpError, streamChat } from "./lib/api";
 import {
   agentRequiredFieldsComplete,
@@ -59,7 +31,6 @@ import {
   normalizeLLMConfig
 } from "./features/agents/agent-domain";
 import {
-  type ChatMessageAttachment,
   initialAssistantStatus,
   normalizeRequiredChatTitle,
   localAssistantMessage,
@@ -69,10 +40,25 @@ import {
   withReasoningSummary,
   withRuntimeStatus
 } from "./features/chat/chat-domain";
+import {
+  CONTEXT_MODAL_SEEN_PROJECTS_STORAGE_KEY,
+  DOCUMENT_SNAPSHOT_PAGE_SIZE,
+  createChatAttachmentPreview,
+  createDefaultKnowledgeBaseDraft,
+  findMentionMatch,
+  loadSeenContextModalProjectIds,
+  mergeUniqueMessages,
+  normalizeMentionPart,
+  nowIso,
+  optimisticId,
+  sessionHasEmptyDraft,
+  sha256BrowserFile,
+  type MentionOption,
+  type SessionLazyMeta
+} from "./features/chat/chat-helpers";
 import { ChatTitleRequiredDialog } from "./features/chat/components/ChatTitleRequiredDialog";
 import { useChatTitleGate } from "./features/chat/hooks/useChatTitleGate";
 import {
-  fileContentUrl,
   platformFileLabel,
   type DuplicateFileDestination,
   type PendingDuplicateFile
@@ -90,19 +76,12 @@ import {
   KnowledgeDashboard,
   ProjectsDashboard
 } from "./features/dashboard/dashboard-sections";
-import {
-  ChatModeling3DBadge,
-  EnableModeling3DDialog,
-  ModelingDiagnosticsModal
-} from "./features/modeling-3d/components";
+import { EnableModeling3DDialog, ModelingDiagnosticsModal } from "./features/modeling-3d/components";
 import { isModeling3DChat } from "./features/modeling-3d/chat-domain";
 import { modeling3dApi } from "./features/modeling-3d";
 import { useModeling3dChat, useModelingPlanActions } from "./features/modeling-3d/hooks";
 import type { ModelingPlanCardActions } from "./components/app-chat";
 import { useModeling3DStore } from "./features/modeling-3d/store";
-import { Modeling3DSettingsSection } from "./features/modeling-3d/settings";
-import { HistorySection } from "./features/sidebar/history-section";
-import { ProjectExplorerSection } from "./features/sidebar/project-explorer-section";
 import { csvToList, delay, sortSessionsByNewest } from "./shared/utils/common";
 import type {
   Agent,
@@ -118,7 +97,6 @@ import type {
   KnowledgeBase,
   KnowledgeBaseDocument,
   KnowledgeBaseUpsert,
-  DocumentSearchResult,
   ModelConfig,
   ModelingPlan,
   ModelingPlanEdit,
@@ -128,122 +106,10 @@ import type {
   ProjectFolder,
   ProjectRecord,
   ProjectUpsert,
-  ProviderModel,
-  ProviderName,
   ProviderSecretStatus,
   Prompt,
   ServerStatus
 } from "./types/api";
-
-type SessionLazyMeta = {
-  hasMore: boolean;
-  loadingOlder: boolean;
-};
-
-type MentionMatch = {
-  start: number;
-  end: number;
-  query: string;
-};
-
-type MentionOption = {
-  key: string;
-  label: string;
-  token: string;
-};
-
-const CONTEXT_MODAL_SEEN_PROJECTS_STORAGE_KEY = "truths_forge.context_modal_seen_projects.v1";
-const FRONTEND_DUPLICATE_HASH_LIMIT_BYTES = 100 * 1024 * 1024;
-const DOCUMENT_SNAPSHOT_PAGE_SIZE = 80;
-
-function normalizeMentionPart(value: string): string {
-  return value.trim().replace(/ /g, "_");
-}
-
-function loadSeenContextModalProjectIds(): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(CONTEXT_MODAL_SEEN_PROJECTS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
-  } catch {
-    return [];
-  }
-}
-
-function findMentionMatch(input: string, cursor: number): MentionMatch | null {
-  const boundedCursor = Math.max(0, Math.min(cursor, input.length));
-  const beforeCursor = input.slice(0, boundedCursor);
-  const atIndex = beforeCursor.lastIndexOf("@");
-  if (atIndex < 0) return null;
-  if (atIndex > 0 && /[\w./-]/.test(beforeCursor[atIndex - 1] ?? "")) {
-    return null;
-  }
-  const mentionRaw = beforeCursor.slice(atIndex + 1);
-  if (/[^A-Za-z0-9_./-]/.test(mentionRaw)) return null;
-  return {
-    start: atIndex,
-    end: boundedCursor,
-    query: mentionRaw.toLowerCase()
-  };
-}
-
-function mergeUniqueMessages(older: ChatMessage[], newer: ChatMessage[]): ChatMessage[] {
-  const seen = new Set<string>();
-  const merged: ChatMessage[] = [];
-  for (const message of [...older, ...newer]) {
-    if (seen.has(message.id)) continue;
-    seen.add(message.id);
-    merged.push(message);
-  }
-  return merged;
-}
-
-function sessionHasEmptyDraft(session: ChatSession): boolean {
-  const metadata = session.metadata as Record<string, unknown> | undefined;
-  if (metadata?.is_empty_draft === true) return true;
-  if ((session.messages?.length ?? 0) > 0) return false;
-  const normalizedTitle = session.title.trim().toLowerCase();
-  return normalizedTitle === "novo chat" || normalizedTitle === "new chat";
-}
-
-function createChatAttachmentPreview(platformFile: PlatformFile): ChatMessageAttachment {
-  return {
-    id: platformFile.id,
-    file_id: platformFile.id,
-    filename: platformFile.filename,
-    original_filename: platformFile.original_filename,
-    content_type: platformFile.content_type,
-    size_bytes: platformFile.size_bytes,
-    url: fileContentUrl(platformFile.id)
-  };
-}
-
-async function sha256BrowserFile(file: File): Promise<string | null> {
-  if (!globalThis.crypto?.subtle || file.size > FRONTEND_DUPLICATE_HASH_LIMIT_BYTES) {
-    return null;
-  }
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function createDefaultKnowledgeBaseDraft(): KnowledgeBaseUpsert {
-  return {
-    name: "",
-    description: "",
-    scope: "",
-    color: "#f0b84d",
-    tags: [],
-    max_documents_per_query: 8,
-    max_chunks_per_document: 3,
-    enabled: true,
-    metadata: {}
-  };
-}
 
 function App() {
   const CHAT_MESSAGE_PAGE_SIZE = 80;
@@ -264,9 +130,6 @@ function App() {
     imageModelId,
     reasoningSummary,
     multiAgentMode,
-    shortcutMenuOpen,
-    shortcutSubmenu,
-    executionMenuOpen,
     mobileMenuOpen,
     setActiveView,
     setActivePanel,
@@ -306,9 +169,6 @@ function App() {
       imageModelId: state.imageModelId,
       reasoningSummary: state.reasoningSummary,
       multiAgentMode: state.multiAgentMode,
-      shortcutMenuOpen: state.shortcutMenuOpen,
-      shortcutSubmenu: state.shortcutSubmenu,
-      executionMenuOpen: state.executionMenuOpen,
       mobileMenuOpen: state.mobileMenuOpen,
       setActiveView: state.setActiveView,
       setActivePanel: state.setActivePanel,
@@ -345,7 +205,6 @@ function App() {
   const setModelingDiagnosticsOpen = useModeling3DStore((state) => state.setDiagnosticsOpen);
   const modelingEnableDialogOpen = useModeling3DStore((state) => state.enableDialogOpen);
   const setModelingEnableDialogOpen = useModeling3DStore((state) => state.setEnableDialogOpen);
-  const [loadState, setLoadState] = useState<LoadState>("idle");
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [models, setModels] = useState<ModelConfig[]>([]);
@@ -367,20 +226,21 @@ function App() {
   const [agentEditorKey, setAgentEditorKey] = useState(0);
   const [draft, setDraft] = useState("");
   const [draftCursor, setDraftCursor] = useState(0);
-  const [activeMention, setActiveMention] = useState<MentionMatch | null>(null);
-  const [providerDrafts, setProviderDrafts] = useState<Record<string, string>>({});
-  const [providerEditMode, setProviderEditMode] = useState<Record<string, boolean>>({});
-  const [providerCatalogs, setProviderCatalogs] = useState<Partial<Record<ProviderName, ProviderModel[]>>>({});
-  const [providerCatalogState, setProviderCatalogState] = useState<Partial<Record<ProviderName, ProviderCatalogState>>>(
-    {}
-  );
-  const [providerCatalogErrors, setProviderCatalogErrors] = useState<Partial<Record<ProviderName, string>>>({});
-  const [documentTitle, setDocumentTitle] = useState("");
-  const [documentContent, setDocumentContent] = useState("");
-  const [documentTags, setDocumentTags] = useState("");
-  const [documentPinned, setDocumentPinned] = useState(false);
-  const [documentQuery, setDocumentQuery] = useState("");
-  const [documentResults, setDocumentResults] = useState<DocumentSearchResult[]>([]);
+  const {
+    documentTitle,
+    setDocumentTitle,
+    documentContent,
+    setDocumentContent,
+    documentTags,
+    setDocumentTags,
+    documentPinned,
+    setDocumentPinned,
+    documentQuery,
+    setDocumentQuery,
+    documentResults,
+    setDocumentResults,
+    resetDraft: resetDocumentDraft
+  } = useDocumentDraft();
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState<string | null>(null);
   const [knowledgeBaseDraft, setKnowledgeBaseDraft] = useState<KnowledgeBaseUpsert>(() =>
     createDefaultKnowledgeBaseDraft()
@@ -432,6 +292,33 @@ function App() {
   const refreshAppDataQuery = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: appDataQueryKey });
   }, [queryClient]);
+
+  const {
+    providerDrafts,
+    setProviderDrafts,
+    providerEditMode,
+    setProviderEditMode,
+    providerCatalogs,
+    providerCatalogState,
+    providerCatalogErrors,
+    saveProviderKey,
+    clearProviderKey,
+    loadProviderModels
+  } = useProviderSettings({
+    onProviderStatus: (provider, status) =>
+      setProviderStatuses((current) => current.map((item) => (item.provider === provider ? status : item))),
+    refresh: () => void refreshAppDataQuery()
+  });
+
+  // Derived during render (no effect): mirrors the bootstrap query status so the
+  // React Compiler's `set-state-in-effect` rule has nothing to flag here.
+  const loadState: LoadState = appDataQuery.isPending
+    ? "loading"
+    : appDataQuery.isError
+      ? "offline"
+      : appDataQuery.data
+        ? "ready"
+        : "idle";
 
   const mergeSessionSummaries = useCallback((summaries: ChatSession[]) => {
     setSessions((current) => {
@@ -523,112 +410,39 @@ function App() {
     chatStickToBottomRef.current = remaining <= 120;
   }, []);
 
-  useEffect(() => {
-    if (appDataQuery.isPending) {
-      setLoadState("loading");
-      return;
-    }
-    if (appDataQuery.isError) {
-      setLoadState("offline");
-      return;
-    }
-    if (appDataQuery.data) {
-      setLoadState("ready");
-    }
-  }, [appDataQuery.data, appDataQuery.isError, appDataQuery.isPending]);
-
-  useEffect(() => {
-    const data = appDataQuery.data;
-    if (!data) return;
-    const {
-      serverStatus,
-      chatSessions,
-      modelList,
-      agentList,
-      promptList,
-      documentList,
-      knowledgeBaseList,
-      knowledgeBaseDocumentList,
-      fileList,
-      fileIndexingStatus: nextFileIndexingStatus,
-      projectList,
-      folderList,
-      auditList,
-      policy,
-      usage,
-      providerList
-    } = data;
-    const sortedChatSessions = sortSessionsByNewest(chatSessions);
-    setStatus(serverStatus);
-    mergeSessionSummaries(sortedChatSessions);
-    setModels(modelList);
-    setAgents(agentList);
-    setPrompts(promptList);
-    setDocuments(documentList);
-    setKnowledgeBases(knowledgeBaseList);
-    setKnowledgeBaseDocuments(knowledgeBaseDocumentList);
-    setPlatformFiles(fileList);
-    setFileIndexingStatus(nextFileIndexingStatus);
-    setProjects(sortProjectsForUi(projectList));
-    setProjectFolders(sortFoldersForUi(folderList));
-    setAuditEvents(auditList);
-    setCostPolicy(policy);
-    setCostUsage(usage);
-    setProviderStatuses(providerList);
-    setActiveSessionId((current) =>
-      current && sortedChatSessions.some((session) => session.id === current)
-        ? current
-        : (sortedChatSessions[0]?.id ?? null)
-    );
-    setActiveAgentId((current) =>
-      current && agentList.some((agent) => agent.id === current)
-        ? current
-        : (agentList.find((agent) => agent.name === "JUDITE")?.id ?? agentList[0]?.id ?? null)
-    );
-    setSupportAgentIds((current) => current.filter((agentId) => agentList.some((agent) => agent.id === agentId)));
-    const generalProjectId = projectList.find((project) => project.is_general)?.id ?? projectList[0]?.id ?? null;
-    setSelectedKnowledgeProjectId((current) =>
-      current && projectList.some((project) => project.id === current) ? current : generalProjectId
-    );
-    setSelectedKnowledgeFolderId((current) =>
-      current && folderList.some((folder) => folder.id === current) ? current : null
-    );
-    setSelectedKnowledgeBaseId((current) =>
-      current && knowledgeBaseList.some((knowledgeBase) => knowledgeBase.id === current)
-        ? current
-        : (knowledgeBaseList[0]?.id ?? null)
-    );
-    const validPersistedProjectId =
-      chatProjectId && projectList.some((project) => project.id === chatProjectId) ? chatProjectId : null;
-    const selectedSessionForScope =
-      sortedChatSessions.find((session) => session.id === (activeSessionId ?? sortedChatSessions[0]?.id ?? "")) ?? null;
-    const sessionProjectId =
-      selectedSessionForScope?.project_id &&
-      projectList.some((project) => project.id === selectedSessionForScope.project_id)
-        ? selectedSessionForScope.project_id
-        : null;
-    const resolvedChatProjectId = validPersistedProjectId ?? sessionProjectId ?? null;
-    setChatProjectId(resolvedChatProjectId);
-    setChatProjectScopeMode((current) => {
-      if (!resolvedChatProjectId) return "global_only";
-      return current === "project_only" || current === "project_plus_global" ? current : "project_only";
-    });
-    setFolderDraftParentId((current) =>
-      current && folderList.some((folder) => folder.id === current) ? current : null
-    );
-  }, [
+  // Distributes the bootstrap snapshot into state and keeps the active
+  // selections valid. See `useAppDataBootstrap` for why the local mirrors are
+  // reconciled during render while the store selections are deferred.
+  useAppDataBootstrap({
+    snapshot: appDataQuery.data,
     activeSessionId,
-    appDataQuery.data,
     chatProjectId,
     mergeSessionSummaries,
-    setActiveAgentId,
+    setStatus,
+    setModels,
+    setAgents,
+    setPrompts,
+    setDocuments,
+    setKnowledgeBases,
+    setKnowledgeBaseDocuments,
+    setPlatformFiles,
+    setFileIndexingStatus,
+    setProjects,
+    setProjectFolders,
+    setAuditEvents,
+    setCostPolicy,
+    setCostUsage,
+    setProviderStatuses,
+    setSelectedKnowledgeBaseId,
+    setFolderDraftParentId,
     setActiveSessionId,
-    setChatProjectId,
-    setChatProjectScopeMode,
-    setSelectedKnowledgeFolderId,
+    setActiveAgentId,
+    setSupportAgentIds,
     setSelectedKnowledgeProjectId,
-    setSupportAgentIds
-  ]);
+    setSelectedKnowledgeFolderId,
+    setChatProjectId,
+    setChatProjectScopeMode
+  });
 
   useEffect(() => {
     if (loadState !== "ready") return;
@@ -698,7 +512,7 @@ function App() {
               ...metadata,
               title_source: "manual"
             },
-            updated_at: new Date().toISOString()
+            updated_at: nowIso()
           };
         })
       )
@@ -986,6 +800,8 @@ function App() {
     .filter((documentId, index, list) => list.indexOf(documentId) === index)
     .filter((documentId) => availableContextDocuments.some((document) => document.id === documentId))
     .slice(0, 20);
+  // Pure derivation from the draft + cursor (was a `setActiveMention` effect).
+  const activeMention = useMemo(() => findMentionMatch(draft, draftCursor), [draft, draftCursor]);
   const mentionSuggestions = useMemo(() => {
     if (!activeMention) return [];
     if (!activeMention.query) return mentionOptions.slice(0, 8);
@@ -1046,29 +862,37 @@ function App() {
     setProjectsStatus
   });
 
+  // `reasoningSummary` lives in the zustand store, so it can't be set during
+  // render; the guard stays in an effect but defers the write to a microtask to
+  // keep the `set-state-in-effect` rule satisfied.
   useEffect(() => {
     if (reasoningSummary && reasoningSummaryUnavailable) {
-      setReasoningSummary(false);
+      queueMicrotask(() => setReasoningSummary(false));
     }
   }, [reasoningSummary, reasoningSummaryUnavailable, setReasoningSummary]);
 
-  useEffect(() => {
-    if (!selectedKnowledgeBase) {
-      setKnowledgeBaseDraft(createDefaultKnowledgeBaseDraft());
-      return;
-    }
-    setKnowledgeBaseDraft({
-      name: selectedKnowledgeBase.name,
-      description: selectedKnowledgeBase.description,
-      scope: selectedKnowledgeBase.scope,
-      color: selectedKnowledgeBase.color,
-      tags: selectedKnowledgeBase.tags,
-      max_documents_per_query: selectedKnowledgeBase.max_documents_per_query,
-      max_chunks_per_document: selectedKnowledgeBase.max_chunks_per_document,
-      enabled: selectedKnowledgeBase.enabled,
-      metadata: selectedKnowledgeBase.metadata
-    });
-  }, [selectedKnowledgeBase]);
+  // `knowledgeBaseDraft` is local state reset whenever the selected base changes.
+  // Reconciled during render (guarded on the selected-base reference) instead of
+  // in an effect.
+  const [knowledgeBaseDraftSource, setKnowledgeBaseDraftSource] = useState<KnowledgeBase | null>(null);
+  if (selectedKnowledgeBase !== knowledgeBaseDraftSource) {
+    setKnowledgeBaseDraftSource(selectedKnowledgeBase);
+    setKnowledgeBaseDraft(
+      selectedKnowledgeBase
+        ? {
+            name: selectedKnowledgeBase.name,
+            description: selectedKnowledgeBase.description,
+            scope: selectedKnowledgeBase.scope,
+            color: selectedKnowledgeBase.color,
+            tags: selectedKnowledgeBase.tags,
+            max_documents_per_query: selectedKnowledgeBase.max_documents_per_query,
+            max_chunks_per_document: selectedKnowledgeBase.max_chunks_per_document,
+            enabled: selectedKnowledgeBase.enabled,
+            metadata: selectedKnowledgeBase.metadata
+          }
+        : createDefaultKnowledgeBaseDraft()
+    );
+  }
 
   useEffect(() => {
     const knownDocumentIds = new Set(documents.map((document) => document.id));
@@ -1088,21 +912,23 @@ function App() {
     };
   }, [documents, selectedKnowledgeBaseItemIdList]);
 
+  // `imageModelId` is store state, so its validity reconcile stays in an effect
+  // with deferred (microtask) writes rather than running during render.
   useEffect(() => {
     if (!imageCapableModels.length) {
-      if (imageModelId !== null) setImageModelId(null);
+      if (imageModelId !== null) queueMicrotask(() => setImageModelId(null));
       return;
     }
     if (imageModelId && imageCapableModels.some((model) => model.id === imageModelId)) {
       return;
     }
-    setImageModelId(defaultImageModel?.id ?? imageCapableModels[0]?.id ?? null);
+    const nextImageModelId = defaultImageModel?.id ?? imageCapableModels[0]?.id ?? null;
+    queueMicrotask(() => setImageModelId(nextImageModelId));
   }, [defaultImageModel, imageCapableModels, imageModelId, setImageModelId]);
 
-  useEffect(() => {
-    setActiveMention(findMentionMatch(draft, draftCursor));
-  }, [draft, draftCursor]);
-
+  // The cursor restore is a genuine DOM effect (focus must run after render); the
+  // `draftCursor` mirror is deferred to an animation frame so it isn't a
+  // synchronous `setState` in the effect body.
   useEffect(() => {
     const pendingCursor = pendingCursorRef.current;
     const input = draftInputRef.current;
@@ -1110,7 +936,8 @@ function App() {
     pendingCursorRef.current = null;
     input.focus();
     input.setSelectionRange(pendingCursor, pendingCursor);
-    setDraftCursor(pendingCursor);
+    const frame = requestAnimationFrame(() => setDraftCursor(pendingCursor));
+    return () => cancelAnimationFrame(frame);
   }, [draft]);
 
   useOutsidePointerClose({
@@ -1125,17 +952,23 @@ function App() {
     }
   });
 
-  useEffect(() => {
-    if (!activeSession) return;
-    const fallbackProjectId = activeSession.project_id ?? generalProjectId;
-    const incomingProjectIds =
-      activeSession.context_project_ids.length > 0 ? activeSession.context_project_ids : [fallbackProjectId];
-    const incomingDocumentIds = activeSession.context_document_ids ?? [];
-    const incomingKnowledgeBaseIds = activeSession.context_knowledge_base_ids ?? [];
-    setChatContextProjectIds(incomingProjectIds.slice(0, 1));
-    setChatContextDocumentIds(incomingDocumentIds.slice(0, 20));
-    setChatContextKnowledgeBaseIds(incomingKnowledgeBaseIds);
-  }, [activeSession, generalProjectId]);
+  // Load the active session's saved context into local state when the session
+  // (or the general-project fallback) changes. Reconciled during render and
+  // guarded on the session *id* (not its object reference) so streaming message
+  // updates no longer re-clobber the user's in-session context picks.
+  const [chatContextSourceKey, setChatContextSourceKey] = useState<string | null>(null);
+  if (activeSession) {
+    const nextContextSourceKey = `${activeSession.id}|${generalProjectId}`;
+    if (nextContextSourceKey !== chatContextSourceKey) {
+      setChatContextSourceKey(nextContextSourceKey);
+      const fallbackProjectId = activeSession.project_id ?? generalProjectId;
+      const incomingProjectIds =
+        activeSession.context_project_ids.length > 0 ? activeSession.context_project_ids : [fallbackProjectId];
+      setChatContextProjectIds(incomingProjectIds.slice(0, 1));
+      setChatContextDocumentIds((activeSession.context_document_ids ?? []).slice(0, 20));
+      setChatContextKnowledgeBaseIds(activeSession.context_knowledge_base_ids ?? []);
+    }
+  }
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1146,16 +979,17 @@ function App() {
     }
   }, [contextModalSeenProjectIds]);
 
-  useEffect(() => {
-    if (activeView !== "chat") return;
-    if (!normalizedContextProjectIds.length) return;
-    if (contextDocsModalOpen) return;
+  // Auto-open the context modal once per project the user hasn't acknowledged.
+  // Local state only, so it runs during render; self-converges once the modal is
+  // open and the projects are marked seen.
+  if (activeView === "chat" && normalizedContextProjectIds.length > 0 && !contextDocsModalOpen) {
     const seenSet = new Set(contextModalSeenProjectIds);
     const unseenProjectIds = normalizedContextProjectIds.filter((projectId) => !seenSet.has(projectId));
-    if (!unseenProjectIds.length) return;
-    setContextModalSeenProjectIds((current) => Array.from(new Set([...current, ...unseenProjectIds])));
-    setContextDocsModalOpen(true);
-  }, [activeView, contextDocsModalOpen, contextModalSeenProjectIds, normalizedContextProjectIds]);
+    if (unseenProjectIds.length > 0) {
+      setContextModalSeenProjectIds((current) => Array.from(new Set([...current, ...unseenProjectIds])));
+      setContextDocsModalOpen(true);
+    }
+  }
 
   const insertFolderMention = useCallback(
     (option: MentionOption) => {
@@ -1167,10 +1001,35 @@ function App() {
       const nextCursor = prefix.length + mentionText.length + 1;
       pendingCursorRef.current = nextCursor;
       setDraft(nextDraft);
-      setActiveMention(null);
+      // `activeMention` is now derived from draft+cursor; completing the mention
+      // (trailing space) makes it recompute to null, so no manual reset is needed.
     },
     [activeMention, draft]
   );
+
+  function handleSelectView(view: DashboardView) {
+    if (view === "agents") {
+      if (!editingAgentId) editAgent(activeAgent ?? null);
+      setActiveView("agents");
+      return;
+    }
+    setActiveView(view);
+    setMobileMenuOpen(false);
+  }
+
+  function handleSelectSidebarSession(sessionId: string) {
+    setActiveSessionId(sessionId);
+    setActiveView("chat");
+    setMobileMenuOpen(false);
+  }
+
+  function handleQuickAction(action: string) {
+    if (action.includes("agentes")) {
+      editAgent(activeAgent ?? null);
+      return;
+    }
+    setDraft(action);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1247,7 +1106,7 @@ function App() {
       const attachedPreviews = attachedPreviewFiles.map((platformFile) => createChatAttachmentPreview(platformFile));
 
       optimisticUser = {
-        id: `user_${Date.now()}`,
+        id: optimisticId("user"),
         session_id: sessionId ?? "pending",
         role: "user",
         content: message,
@@ -1257,7 +1116,7 @@ function App() {
           attached_file_ids: uploadedFileIds,
           attached_files: attachedPreviews
         },
-        created_at: new Date().toISOString()
+        created_at: nowIso()
       };
       optimisticAssistant = localAssistantMessage(
         sessionId ?? "pending",
@@ -1317,12 +1176,12 @@ function App() {
             const resolvedUserMessage: ChatMessage = optimisticUser
               ? { ...optimisticUser, session_id: meta.session_id }
               : {
-                  id: `user_${Date.now()}`,
+                  id: optimisticId("user"),
                   session_id: meta.session_id,
                   role: "user",
                   content: message,
                   model_id: activeAgentModelLabel,
-                  created_at: new Date().toISOString()
+                  created_at: nowIso()
                 };
             const resolvedAssistantMessage: ChatMessage = optimisticAssistant
               ? { ...optimisticAssistant, id: meta.message_id, session_id: meta.session_id }
@@ -1354,8 +1213,8 @@ function App() {
                     ...(streamTitle ? { title_source: "manual" } : {}),
                     ...(modeling3dPayload.enabled ? { modeling_3d: modeling3dPayload } : {})
                   },
-                  created_at: new Date().toISOString(),
-                  updated_at: new Date().toISOString(),
+                  created_at: nowIso(),
+                  updated_at: nowIso(),
                   messages: [resolvedUserMessage, resolvedAssistantMessage]
                 },
                 ...current
@@ -1515,7 +1374,7 @@ function App() {
             )
           ).then((results) => {
             const notes = results.map((entry, index) => {
-              const baseId = `m3d_note_${Date.now()}_${index}`;
+              const baseId = `${optimisticId("m3d_note")}_${index}`;
               if (entry.ok) {
                 return {
                   id: baseId,
@@ -1527,7 +1386,7 @@ function App() {
                     response_mode: "modeling_3d_attachment_analysis",
                     attachment_analysis: entry.analysis
                   } as Record<string, unknown>,
-                  created_at: new Date().toISOString()
+                  created_at: nowIso()
                 };
               }
               return {
@@ -1537,7 +1396,7 @@ function App() {
                 content: `Não consegui analisar o anexo (${entry.fileId}): ${entry.error}`,
                 model_id: null,
                 metadata: { response_mode: "modeling_3d_attachment_analysis_error" } as Record<string, unknown>,
-                created_at: new Date().toISOString()
+                created_at: nowIso()
               };
             });
             if (!notes.length) return;
@@ -1571,12 +1430,12 @@ function App() {
       const fallbackOptimisticUser =
         optimisticUser ??
         ({
-          id: `user_${Date.now()}`,
+          id: optimisticId("user"),
           session_id: sessionId ?? "pending",
           role: "user",
           content: message,
           model_id: activeAgentModelLabel,
-          created_at: new Date().toISOString()
+          created_at: nowIso()
         } as ChatMessage);
       const fallbackOptimisticAssistant =
         optimisticAssistant ??
@@ -1599,7 +1458,7 @@ function App() {
           })
         );
       } else {
-        const localSessionId = `local_error_${Date.now()}`;
+        const localSessionId = optimisticId("local_error");
         setActiveSessionId(localSessionId);
         setSessions((current) =>
           sortSessionsByNewest([
@@ -1622,8 +1481,8 @@ function App() {
                 is_empty_draft: false,
                 ...(modeling3dPayload.enabled ? { modeling_3d: modeling3dPayload } : {})
               },
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
+              created_at: nowIso(),
+              updated_at: nowIso(),
               messages: [
                 { ...fallbackOptimisticUser, session_id: localSessionId },
                 { ...failedAssistant, session_id: localSessionId }
@@ -1638,40 +1497,6 @@ function App() {
         setModeling3dEnabled(false);
       }
       setIsStreaming(false);
-    }
-  }
-
-  async function saveProviderKey(provider: ProviderName) {
-    const apiKey = providerDrafts[provider]?.trim();
-    if (!apiKey) return;
-    const status = await api.saveProviderKey(provider, apiKey);
-    setProviderStatuses((current) => current.map((item) => (item.provider === provider ? status : item)));
-    setProviderDrafts((current) => ({ ...current, [provider]: "" }));
-    setProviderEditMode((current) => ({ ...current, [provider]: false }));
-    void refreshAppDataQuery();
-  }
-
-  async function clearProviderKey(provider: ProviderName) {
-    const status = await api.deleteProviderKey(provider);
-    setProviderStatuses((current) => current.map((item) => (item.provider === provider ? status : item)));
-    setProviderDrafts((current) => ({ ...current, [provider]: "" }));
-    setProviderEditMode((current) => ({ ...current, [provider]: false }));
-    void refreshAppDataQuery();
-  }
-
-  async function loadProviderModels(provider: ProviderName) {
-    setProviderCatalogState((current) => ({ ...current, [provider]: "loading" }));
-    setProviderCatalogErrors((current) => ({ ...current, [provider]: "" }));
-    try {
-      const providerModels = await api.providerModels(provider);
-      setProviderCatalogs((current) => ({ ...current, [provider]: providerModels }));
-      setProviderCatalogState((current) => ({ ...current, [provider]: "ready" }));
-    } catch (error) {
-      setProviderCatalogState((current) => ({ ...current, [provider]: "error" }));
-      setProviderCatalogErrors((current) => ({
-        ...current,
-        [provider]: error instanceof Error ? error.message : "Falha ao listar modelos"
-      }));
     }
   }
 
@@ -1843,10 +1668,7 @@ function App() {
         setKnowledgeBaseDocuments((current) => [item, ...current.filter((currentItem) => currentItem.id !== item.id)]);
       }
       setDocuments((current) => [document, ...current.filter((item) => item.id !== document.id)]);
-      setDocumentTitle("");
-      setDocumentContent("");
-      setDocumentTags("");
-      setDocumentPinned(false);
+      resetDocumentDraft();
       void refreshAppDataQuery();
     } finally {
       setIsIndexingDocument(false);
@@ -2408,532 +2230,133 @@ function App() {
         />
       )}
 
-      <aside
-        className={[
-          "fixed inset-y-0 left-0 z-30 w-[286px] border-r border-forge-line bg-[#101111] transition-transform md:static md:translate-x-0",
-          mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
-        ].join(" ")}
-      >
-        <div className="flex h-16 items-center justify-between border-b border-forge-line px-4">
-          <div>
-            <p className="text-sm text-forge-muted">Truth's Forge AI</p>
-            <h1 className="flex items-center gap-2 text-lg font-semibold">
-              <Sparkles size={18} className="text-forge-amber" />
-              JUDITE
-            </h1>
-          </div>
-          <Button
-            className="h-9 w-9 px-0 md:hidden"
-            onClick={() => setMobileMenuOpen(false)}
-            aria-label="Fechar menu"
-            title="Fechar menu"
-          >
-            <X size={18} />
-          </Button>
-        </div>
-
-        <div className="scrollbar-slim h-[calc(100vh-64px)] space-y-4 overflow-y-auto p-4 pb-8">
-          <Button
-            className="w-full justify-start border-forge-amber/50 bg-[#171717] text-forge-text hover:border-forge-amber hover:bg-[#211d16]"
-            onClick={() => void startNewChat()}
-            disabled={isCreatingNewChat}
-            aria-label="Novo chat"
-            title="Novo chat"
-          >
-            {isCreatingNewChat ? <LoaderCircle size={15} className="animate-spin" /> : <MessageSquare size={15} />}
-            {isCreatingNewChat ? "Criando..." : "Novo chat"}
-          </Button>
-
-          <div className="flex flex-col gap-1 rounded-md border border-forge-line bg-[#0e0f0e] p-1">
-            <DashboardNavButton
-              active={activeView === "chat"}
-              icon={<MessageSquare size={15} />}
-              label="Chat"
-              onClick={() => {
-                setActiveView("chat");
-                setMobileMenuOpen(false);
-              }}
-            />
-            <DashboardNavButton
-              active={activeView === "agents"}
-              icon={<Users size={15} />}
-              label="Agentes"
-              onClick={() => {
-                if (!editingAgentId) editAgent(activeAgent ?? null);
-                setActiveView("agents");
-              }}
-            />
-            <DashboardNavButton
-              active={activeView === "projects"}
-              icon={<FolderTree size={15} />}
-              label="Projetos"
-              onClick={() => {
-                setActiveView("projects");
-                setMobileMenuOpen(false);
-              }}
-            />
-            <DashboardNavButton
-              active={activeView === "knowledge"}
-              icon={<Database size={15} />}
-              label="Bases"
-              onClick={() => {
-                setActiveView("knowledge");
-                setMobileMenuOpen(false);
-              }}
-            />
-            <DashboardNavButton
-              active={activeView === "files"}
-              icon={<FileText size={15} />}
-              label="Arquivos"
-              onClick={() => {
-                setActiveView("files");
-                setMobileMenuOpen(false);
-              }}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <Metric label="Chats" value={sessions.length} />
-            <Metric label="Prompts" value={prompts.length} />
-          </div>
-
-          <ProjectExplorerSection
-            projects={nonGeneralProjects}
-            folders={projectFolders}
-            sessions={projectExplorerSessions}
-            activeSessionId={activeSessionId}
-            collapsed={projectExplorerCollapsed}
-            expandedKeys={projectExplorerExpanded}
-            onToggleCollapsed={() => setProjectExplorerCollapsed((current) => !current)}
-            onToggleExpanded={(key) =>
-              setProjectExplorerExpanded((current) => ({ ...current, [key]: !(current[key] ?? true) }))
-            }
-            onSelectSession={(sessionId) => {
-              setActiveSessionId(sessionId);
-              setActiveView("chat");
-              setMobileMenuOpen(false);
-            }}
-            onCreateChat={(projectId, folderId) => void createChatInProject(projectId, folderId)}
-            onCreateFolder={(projectId, parentId) => void createFolderFromExplorer(projectId, parentId)}
-            onDeleteFolder={(folderId) => void deleteFolderFromExplorer(folderId)}
-            onMoveSession={(sessionId, projectId, folderId) =>
-              void moveSessionInExplorer(sessionId, projectId, folderId)
-            }
-            renderSessionBadge={(session) => (isModeling3DChat(session) ? <ChatModeling3DBadge compact /> : null)}
-          />
-
-          <HistorySection
-            sessions={generalHistorySessions}
-            activeSessionId={activeSessionId}
-            collapsed={historyCollapsed}
-            deletingSessionId={deletingSessionId}
-            disabled={isStreaming}
-            onToggleCollapsed={() => setHistoryCollapsed((current) => !current)}
-            onSelectSession={(sessionId) => {
-              setActiveSessionId(sessionId);
-              setActiveView("chat");
-              setMobileMenuOpen(false);
-            }}
-            onDeleteSession={(session) => void deleteChatSession(session)}
-            renderSessionBadge={(session) => (isModeling3DChat(session) ? <ChatModeling3DBadge compact /> : null)}
-          />
-        </div>
-      </aside>
+      <AppSidebar
+        mobileMenuOpen={mobileMenuOpen}
+        onCloseMobile={() => setMobileMenuOpen(false)}
+        onNewChat={() => void startNewChat()}
+        isCreatingNewChat={isCreatingNewChat}
+        activeView={activeView}
+        onSelectView={handleSelectView}
+        sessionsCount={sessions.length}
+        promptsCount={prompts.length}
+        projects={nonGeneralProjects}
+        folders={projectFolders}
+        explorerSessions={projectExplorerSessions}
+        historySessions={generalHistorySessions}
+        activeSessionId={activeSessionId}
+        projectExplorerCollapsed={projectExplorerCollapsed}
+        projectExplorerExpanded={projectExplorerExpanded}
+        onToggleProjectExplorerCollapsed={() => setProjectExplorerCollapsed((current) => !current)}
+        onToggleProjectExplorerExpanded={(key) =>
+          setProjectExplorerExpanded((current) => ({ ...current, [key]: !(current[key] ?? true) }))
+        }
+        historyCollapsed={historyCollapsed}
+        deletingSessionId={deletingSessionId}
+        historyDisabled={isStreaming}
+        onToggleHistoryCollapsed={() => setHistoryCollapsed((current) => !current)}
+        onSelectSession={handleSelectSidebarSession}
+        onCreateChat={(projectId, folderId) => void createChatInProject(projectId, folderId)}
+        onCreateFolder={(projectId, parentId) => void createFolderFromExplorer(projectId, parentId)}
+        onDeleteFolder={(folderId) => void deleteFolderFromExplorer(folderId)}
+        onMoveSession={(sessionId, projectId, folderId) => void moveSessionInExplorer(sessionId, projectId, folderId)}
+        onDeleteSession={(session) => void deleteChatSession(session)}
+      />
 
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 items-center justify-between border-b border-forge-line bg-[#0c0d0f]/95 px-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <Button
-              className="h-9 w-9 px-0 md:hidden"
-              onClick={() => setMobileMenuOpen(true)}
-              aria-label="Abrir menu"
-              title="Abrir menu"
-            >
-              <Menu size={18} />
-            </Button>
-            <div className="min-w-0">
-              <h2 className="flex min-w-0 items-center gap-2 truncate text-base font-semibold">
-                {activeSessionIsModeling3D && <ChatModeling3DBadge />}
-                <span className="truncate">
-                  {activeView === "chat"
-                    ? (activeSession?.title ?? "Novo chat com JUDITE")
-                    : activeView === "agents"
-                      ? "Dashboard de agentes"
-                      : activeView === "projects"
-                        ? "Projetos e contexto"
-                        : activeView === "knowledge"
-                          ? "Bases de conhecimento"
-                          : "Arquivos da plataforma"}
-                </span>
-              </h2>
-              <p className="truncate text-xs text-forge-muted">
-                {activeView === "chat"
-                  ? (activeAgent?.description ?? "Orquestração local-first")
-                  : activeView === "agents"
-                    ? "JUDITE, especialistas e configuração de LLM por agente"
-                    : activeView === "projects"
-                      ? "Estruture projetos, pastas e escopo de recuperação"
-                      : activeView === "knowledge"
-                        ? "Coleções curadas para RAG e agentes"
-                        : "Uploads, imports e arquivos gerados"}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge className="hidden max-w-[260px] truncate md:inline-flex">{activeAgentModelLabel}</Badge>
-            <Badge
-              className={
-                loadState === "ready" ? "border-forge-green text-forge-green" : "border-forge-red text-forge-red"
-              }
-            >
-              <Wifi size={13} />
-              {loadState === "ready" ? "Online" : "Offline"}
-            </Badge>
-          </div>
-        </header>
+        <AppHeader
+          activeView={activeView}
+          isModeling3D={activeSessionIsModeling3D}
+          chatTitle={activeSession?.title ?? "Novo chat com JUDITE"}
+          chatSubtitle={activeAgent?.description ?? "Orquestração local-first"}
+          agentModelLabel={activeAgentModelLabel}
+          online={loadState === "ready"}
+          onOpenMobileMenu={() => setMobileMenuOpen(true)}
+        />
 
         <div className="flex min-h-0 flex-1">
           {activeView === "chat" ? (
             <>
               <section className="flex min-w-0 flex-1 flex-col">
-                <div
-                  ref={chatScrollRef}
+                <ChatMessageList
+                  activeSession={activeSession}
+                  activeSessionLazy={activeSessionLazy}
+                  platformFilesById={platformFilesById}
+                  isModeling3D={activeSessionIsModeling3D}
+                  modelingPlanActions={modelingPlanActions}
+                  scrollRef={chatScrollRef}
+                  loadOlderRef={chatLoadOlderRef}
                   onScroll={handleChatScroll}
-                  className="scrollbar-slim min-h-0 flex-1 overflow-y-auto px-4 py-5"
-                >
-                  <div className="mx-auto flex max-w-3xl flex-col gap-4">
-                    {!!activeSession?.messages.length && activeSessionLazy?.hasMore && (
-                      <div
-                        ref={chatLoadOlderRef}
-                        className="flex h-7 items-center justify-center text-xs text-forge-muted"
-                      >
-                        {activeSessionLazy.loadingOlder ? (
-                          <span className="inline-flex items-center gap-2">
-                            <LoaderCircle size={14} className="animate-spin" />
-                            Carregando mensagens antigas...
-                          </span>
-                        ) : (
-                          "Role para cima para carregar mais"
-                        )}
-                      </div>
-                    )}
-                    {(activeSession?.messages.length ? activeSession.messages : []).map((message) => (
-                      <MessageBubble
-                        key={message.id}
-                        message={message}
-                        platformFilesById={platformFilesById}
-                        modelingPlanActions={activeSessionIsModeling3D ? modelingPlanActions : undefined}
-                      />
-                    ))}
-
-                    {!activeSession?.messages.length && (
-                      <div className="mx-auto mt-12 w-full max-w-2xl">
-                        <div className="mb-6 text-center">
-                          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-md border border-forge-line bg-[#171716]">
-                            <Bot size={28} className="text-forge-amber" />
-                          </div>
-                          <h3 className="text-xl font-semibold">Como posso ajudar agora?</h3>
-                          <p className="mt-2 text-sm leading-6 text-forge-muted">
-                            Escolha um ponto de partida ou escreva direto para a JUDITE.
-                          </p>
-                        </div>
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          {quickActions.map((action) => (
-                            <button
-                              key={action}
-                              className="min-h-12 rounded-md border border-forge-line bg-[#141615] px-3 py-2 text-left text-sm text-forge-text transition hover:border-forge-amber/60 hover:bg-[#1b1d1b]"
-                              onClick={() => {
-                                if (action.includes("agentes")) {
-                                  editAgent(activeAgent ?? null);
-                                  return;
-                                }
-                                setDraft(action);
-                              }}
-                            >
-                              {action}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                  quickActions={quickActions}
+                  onQuickAction={handleQuickAction}
+                />
 
                 <form onSubmit={handleSubmit} className="border-t border-forge-line bg-[#0c0d0f] p-3">
                   <div className="mx-auto max-w-3xl rounded-md border border-forge-line bg-[#171716] p-2">
                     <div className="mb-2 space-y-2 border-b border-forge-line pb-2">
                       <div className="flex items-start justify-between gap-3">
-                        <div className="flex min-w-0 flex-1 flex-wrap gap-2">
-                          <ContextChip label="Agente" value={activeAgent?.name ?? "Sem agente"} />
-                          <ContextChip label="Projeto" value={`${contextProjectsLabel} · ${scopeModeLabel}`} />
-                          <ContextChip label="Bases" value={selectedContextDocsLabel} />
-                          <ContextChip
-                            label="Execução"
-                            value={executionLabels.length ? executionLabels.join(", ") : "padrão"}
-                          />
-                          {deepResearch && (
-                            <label className="inline-flex h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted">
-                              <span>Chamadas</span>
-                              <input
-                                type="number"
-                                min={1}
-                                max={100}
-                                value={deepResearchMaxToolCalls}
-                                onChange={(event) =>
-                                  setDeepResearchMaxToolCalls(
-                                    Math.max(1, Math.min(100, Number(event.target.value) || 1))
-                                  )
-                                }
-                                className="h-6 w-14 rounded border border-forge-line bg-[#080908] px-2 text-forge-text"
-                                aria-label="Limite de chamadas de ferramenta"
-                                title="Limite de chamadas de ferramenta"
-                              />
-                            </label>
-                          )}
-                          {responseMode === "image" && (
-                            <label className="inline-flex h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted">
-                              <span>Modelo imagem</span>
-                              <select
-                                value={effectiveImageModel?.id ?? ""}
-                                onChange={(event) => setImageModelId(event.target.value || null)}
-                                className="h-6 min-w-44 rounded border border-forge-line bg-[#080908] px-2 text-forge-text"
-                                aria-label="Modelo de geração de imagem"
-                                title="Modelo de geração de imagem"
-                              >
-                                {!imageCapableModels.length && <option value="">Sem modelos de imagem</option>}
-                                {imageCapableModels.map((model) => (
-                                  <option key={model.id} value={model.id}>
-                                    {model.display_name}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          )}
-                          {activeSessionIsModeling3D && (
-                            <Button
-                              className="h-8 px-2 text-xs"
-                              onClick={() => setModelingDiagnosticsOpen(true)}
-                              aria-label="Abrir diagnóstico MCP 3D"
-                              title="Abrir diagnóstico MCP 3D"
-                            >
-                              Diagnóstico 3D
-                            </Button>
-                          )}
-                        </div>
+                        <ComposerContextChips
+                          agentName={activeAgent?.name ?? "Sem agente"}
+                          projectLabel={`${contextProjectsLabel} · ${scopeModeLabel}`}
+                          knowledgeBasesLabel={selectedContextDocsLabel}
+                          executionLabel={executionLabels.length ? executionLabels.join(", ") : "padrão"}
+                          selectedImageModelId={effectiveImageModel?.id ?? ""}
+                          imageCapableModels={imageCapableModels}
+                          showDiagnostics={activeSessionIsModeling3D}
+                          onOpenDiagnostics={() => setModelingDiagnosticsOpen(true)}
+                        />
 
                         <div className="flex items-center gap-1">
-                          <div className="relative" ref={executionMenuRef}>
-                            <Button
-                              className="h-8 w-8 px-0"
-                              onClick={() => setExecutionMenuOpen((current) => !current)}
-                              aria-label="Menu de execução"
-                              title="Menu de execução"
-                            >
-                              <Plus size={15} />
-                            </Button>
-                            {executionMenuOpen && (
-                              <div
-                                className="scrollbar-slim absolute right-0 z-50 max-h-[55vh] w-72 overflow-y-auto rounded-md border border-forge-line bg-[#111313] p-1 shadow-2xl"
-                                style={{ top: "auto", bottom: "calc(100% + 4px)" }}
-                              >
-                                <ExecutionMenuItem
-                                  label="MCP 3D"
-                                  active={modeling3dEnabled}
-                                  title="Usa o chat para criar plano estruturado Blender/Fusion via MCP."
-                                  onClick={() => {
-                                    setModelingEnableDialogOpen(true);
-                                    setResponseMode("text");
-                                    setDeepResearch(false);
-                                    setReasoningSummary(false);
-                                    setMultiAgentMode(false);
-                                  }}
-                                />
-                                <ExecutionMenuItem
-                                  label="Raciocínio longo"
-                                  active={reasoningOverride === "long"}
-                                  onClick={() =>
-                                    setReasoningOverride((current) => (current === "long" ? "default" : "long"))
-                                  }
-                                />
-                                <ExecutionMenuItem
-                                  label="Resumo oficial"
-                                  active={reasoningSummary}
-                                  disabled={reasoningSummaryUnavailable}
-                                  title={
-                                    reasoningSummaryUnavailable
-                                      ? "Disponível apenas para chat texto com modelo OpenAI."
-                                      : "Solicita reasoning.summary=auto."
-                                  }
-                                  onClick={() => setReasoningSummary((current) => !current)}
-                                />
-                                <ExecutionMenuItem
-                                  label="Pesquisa OpenAI"
-                                  active={deepResearch}
-                                  onClick={() => {
-                                    setDeepResearch((current) => !current);
-                                    setResponseMode("text");
-                                    setReasoningSummary(false);
-                                    if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
-                                  }}
-                                />
-                                <ExecutionMenuItem
-                                  label="Imagem"
-                                  active={responseMode === "image"}
-                                  onClick={() => {
-                                    setResponseMode((current) => (current === "image" ? "text" : "image"));
-                                    setDeepResearch(false);
-                                    setReasoningSummary(false);
-                                    if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
-                                  }}
-                                />
-                                <ExecutionMenuItem
-                                  label="Multiagente"
-                                  active={multiAgentMode}
-                                  onClick={() => {
-                                    setMultiAgentMode((current) => !current);
-                                    if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
-                                  }}
-                                />
-                                <button
-                                  type="button"
-                                  className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
-                                  onClick={() => setContextDocsModalOpen(true)}
-                                >
-                                  <span>Editar bases de conhecimento atreladas</span>
-                                </button>
-                                <div className="mx-1 my-1 border-t border-forge-line" />
-                                <button
-                                  type="button"
-                                  className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
-                                  onClick={() => fileInputRef.current?.click()}
-                                >
-                                  <span className="flex items-center gap-2">
-                                    <FileText size={14} />
-                                    Anexar arquivo
-                                  </span>
-                                </button>
-                              </div>
-                            )}
-                          </div>
+                          <ExecutionMenu
+                            menuRef={executionMenuRef}
+                            modeling3dEnabled={modeling3dEnabled}
+                            reasoningSummaryUnavailable={reasoningSummaryUnavailable}
+                            onEnableModeling3d={() => {
+                              setModelingEnableDialogOpen(true);
+                              setResponseMode("text");
+                              setDeepResearch(false);
+                              setReasoningSummary(false);
+                              setMultiAgentMode(false);
+                            }}
+                            onToggleDeepResearch={() => {
+                              setDeepResearch((current) => !current);
+                              setResponseMode("text");
+                              setReasoningSummary(false);
+                              if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
+                            }}
+                            onToggleImageMode={() => {
+                              setResponseMode((current) => (current === "image" ? "text" : "image"));
+                              setDeepResearch(false);
+                              setReasoningSummary(false);
+                              if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
+                            }}
+                            onToggleMultiAgent={() => {
+                              setMultiAgentMode((current) => !current);
+                              if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
+                            }}
+                            onEditKnowledgeBases={() => setContextDocsModalOpen(true)}
+                            onAttachFile={() => fileInputRef.current?.click()}
+                          />
 
-                          <div className="relative" ref={shortcutMenuRef}>
-                            <Button
-                              className="h-8 w-8 px-0"
-                              onClick={() => {
-                                if (shortcutMenuOpen) {
-                                  setShortcutMenuOpen(false);
-                                  setShortcutSubmenu(null);
-                                } else {
-                                  setShortcutMenuOpen(true);
-                                  setShortcutSubmenu("agent");
-                                }
-                              }}
-                              aria-label="Menu rápido"
-                              title="Menu rápido"
-                            >
-                              <EllipsisVertical size={15} />
-                            </Button>
-                            {shortcutMenuOpen && (
-                              <div
-                                className="absolute right-0 z-50 w-[460px] rounded-md border border-forge-line bg-[#111313] p-1 shadow-2xl"
-                                style={{ top: "auto", bottom: "calc(100% + 4px)" }}
-                              >
-                                <div className="grid grid-cols-[170px_minmax(0,1fr)]">
-                                  <div className="space-y-1 pr-1">
-                                    <button
-                                      type="button"
-                                      className={[
-                                        "flex h-8 w-full items-center justify-between rounded px-2 text-xs transition",
-                                        shortcutSubmenu === "agent"
-                                          ? "bg-[#1b1f22] text-forge-text"
-                                          : "text-forge-muted hover:bg-[#1b1f22] hover:text-forge-text"
-                                      ].join(" ")}
-                                      onClick={() => setShortcutSubmenu("agent")}
-                                    >
-                                      <span>Agente</span>
-                                      <ChevronRight size={13} />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className={[
-                                        "flex h-8 w-full items-center justify-between rounded px-2 text-xs transition",
-                                        shortcutSubmenu === "scope"
-                                          ? "bg-[#1b1f22] text-forge-text"
-                                          : "text-forge-muted hover:bg-[#1b1f22] hover:text-forge-text"
-                                      ].join(" ")}
-                                      onClick={() => setShortcutSubmenu("scope")}
-                                    >
-                                      <span>Projeto</span>
-                                      <ChevronRight size={13} />
-                                    </button>
-                                  </div>
-
-                                  <div className="scrollbar-slim max-h-[55vh] overflow-y-auto border-l border-forge-line pl-2">
-                                    {shortcutSubmenu === "agent" && (
-                                      <div className="space-y-1">
-                                        {agents
-                                          .filter((agent) => agent.enabled)
-                                          .map((agent) => (
-                                            <button
-                                              key={agent.id}
-                                              type="button"
-                                              className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
-                                              onClick={() => {
-                                                setActiveAgentId(agent.id);
-                                                setShortcutMenuOpen(false);
-                                                setShortcutSubmenu(null);
-                                              }}
-                                            >
-                                              <span className="truncate">{agent.name}</span>
-                                              {activeAgent?.id === agent.id && (
-                                                <Check size={13} className="text-forge-amber" />
-                                              )}
-                                            </button>
-                                          ))}
-                                      </div>
-                                    )}
-
-                                    {shortcutSubmenu === "scope" && (
-                                      <div className="space-y-1">
-                                        {availableContextProjects.map((project) => {
-                                          const active = normalizedContextProjectIds[0] === project.id;
-                                          return (
-                                            <button
-                                              key={project.id}
-                                              type="button"
-                                              className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
-                                              onClick={() => {
-                                                setChatProjectId(project.id);
-                                                setChatContextProjectIds([project.id]);
-                                                setChatContextKnowledgeBaseIds(
-                                                  project.context.knowledge_base_ids ?? []
-                                                );
-                                                setShortcutMenuOpen(false);
-                                                setShortcutSubmenu(null);
-                                              }}
-                                            >
-                                              <span className="truncate">{projectDisplayName(project)}</span>
-                                              {active && <Check size={13} className="text-forge-amber" />}
-                                            </button>
-                                          );
-                                        })}
-                                        <div className="px-2 pt-1 text-[11px] text-forge-muted">
-                                          A conversa usa um projeto por vez. As pastas citadas com @ filtram a busca.
-                                        </div>
-                                        <button
-                                          type="button"
-                                          className="mt-1 flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
-                                          onClick={() => setContextDocsModalOpen(true)}
-                                        >
-                                          <span>Editar bases de conhecimento atreladas</span>
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                          <ShortcutMenu
+                            menuRef={shortcutMenuRef}
+                            agents={agents}
+                            activeAgent={activeAgent}
+                            availableContextProjects={availableContextProjects}
+                            activeProjectId={normalizedContextProjectIds[0]}
+                            onSelectAgent={(agentId) => {
+                              setActiveAgentId(agentId);
+                              setShortcutMenuOpen(false);
+                              setShortcutSubmenu(null);
+                            }}
+                            onSelectProject={(project) => {
+                              setChatProjectId(project.id);
+                              setChatContextProjectIds([project.id]);
+                              setChatContextKnowledgeBaseIds(project.context.knowledge_base_ids ?? []);
+                              setShortcutMenuOpen(false);
+                              setShortcutSubmenu(null);
+                            }}
+                            onEditKnowledgeBases={() => setContextDocsModalOpen(true)}
+                          />
                         </div>
                       </div>
 
@@ -2955,345 +2378,75 @@ function App() {
                         }}
                       />
                     </div>
-                    {(attachedFiles.length > 0 ||
-                      attachedPlatformFileIds.length > 0 ||
-                      attachedDocumentIds.length > 0) && (
-                      <div className="mb-2 flex flex-wrap gap-2 text-xs text-forge-muted">
-                        {attachedFiles.map((file, index) => (
-                          <button
-                            key={`${file.name}:${file.size}:${index}`}
-                            type="button"
-                            className="inline-flex h-7 items-center gap-1 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted transition hover:text-forge-text"
-                            onClick={() =>
-                              setAttachedFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))
-                            }
-                            title={`Remover ${file.name}`}
-                          >
-                            <span className="max-w-40 truncate">{file.name}</span>
-                            <X size={12} />
-                          </button>
-                        ))}
-                        {attachedPlatformFileIds.map((fileId) => {
-                          const platformFile = platformFiles.find((item) => item.id === fileId);
-                          return (
-                            <button
-                              key={fileId}
-                              type="button"
-                              className="inline-flex h-7 items-center gap-1 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted transition hover:text-forge-text"
-                              onClick={() =>
-                                setAttachedPlatformFileIds((current) => current.filter((itemId) => itemId !== fileId))
-                              }
-                              title={`Remover ${platformFile ? platformFileLabel(platformFile) : "arquivo"}`}
-                            >
-                              <span className="max-w-40 truncate">
-                                {platformFile ? platformFileLabel(platformFile) : "arquivo"}
-                              </span>
-                              <X size={12} />
-                            </button>
-                          );
-                        })}
-                        {attachedDocumentIds.map((documentId) => (
-                          <button
-                            key={documentId}
-                            type="button"
-                            className="inline-flex h-7 items-center gap-1 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted transition hover:text-forge-text"
-                            onClick={() =>
-                              setAttachedDocumentIds((current) => current.filter((itemId) => itemId !== documentId))
-                            }
-                            title={`Remover ${documents.find((document) => document.id === documentId)?.title ?? "contexto"}`}
-                          >
-                            <span className="max-w-40 truncate">
-                              {documents.find((document) => document.id === documentId)?.title ?? "contexto"}
-                            </span>
-                            <X size={12} />
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {activeMention && mentionSuggestions.length > 0 && (
-                      <div className="mb-2 rounded-md border border-forge-line bg-[#0f1011] p-1">
-                        <div className="px-2 pb-1 pt-0.5 text-[11px] text-forge-muted">Pastas de contexto</div>
-                        <div className="max-h-36 space-y-1 overflow-y-auto pr-1">
-                          {mentionSuggestions.map((option) => (
-                            <button
-                              key={option.key}
-                              type="button"
-                              className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
-                              onClick={() => insertFolderMention(option)}
-                            >
-                              <span className="truncate">{option.label}</span>
-                              <span className="ml-2 shrink-0 text-[10px] text-forge-amber">@</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    <div className="flex items-end gap-2">
-                      <textarea
-                        ref={draftInputRef}
-                        value={draft}
-                        onChange={(event) => {
-                          setDraft(event.target.value);
-                          setDraftCursor(event.target.selectionStart ?? event.target.value.length);
-                        }}
-                        onClick={(event) => setDraftCursor((event.target as HTMLTextAreaElement).selectionStart ?? 0)}
-                        onKeyUp={(event) => setDraftCursor((event.target as HTMLTextAreaElement).selectionStart ?? 0)}
-                        rows={1}
-                        placeholder={
-                          loadState === "offline"
-                            ? "Servidor indisponível"
-                            : modeling3dEnabled
-                              ? "Descreva o modelo 3D para Blender/Fusion via MCP"
-                              : "Mensagem para JUDITE"
-                        }
-                        disabled={loadState === "offline"}
-                        className="max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-forge-text placeholder:text-forge-muted focus:outline-none"
-                      />
-                      <span title={sendButtonTitle}>
-                        <Button
-                          type="submit"
-                          className="h-10 w-10 px-0"
-                          disabled={sendDisabled}
-                          aria-label="Enviar"
-                          title={sendButtonTitle}
-                        >
-                          {isStreaming ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
-                        </Button>
-                      </span>
-                    </div>
+                    <ComposerAttachments
+                      attachedFiles={attachedFiles}
+                      attachedPlatformFileIds={attachedPlatformFileIds}
+                      attachedDocumentIds={attachedDocumentIds}
+                      platformFiles={platformFiles}
+                      documents={documents}
+                      onRemoveFile={(index) =>
+                        setAttachedFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                      }
+                      onRemovePlatformFile={(fileId) =>
+                        setAttachedPlatformFileIds((current) => current.filter((itemId) => itemId !== fileId))
+                      }
+                      onRemoveDocument={(documentId) =>
+                        setAttachedDocumentIds((current) => current.filter((itemId) => itemId !== documentId))
+                      }
+                    />
+                    <ChatComposerInput
+                      showMentions={Boolean(activeMention)}
+                      mentionSuggestions={mentionSuggestions}
+                      onInsertMention={insertFolderMention}
+                      draftInputRef={draftInputRef}
+                      draft={draft}
+                      onChangeDraft={(value, cursor) => {
+                        setDraft(value);
+                        setDraftCursor(cursor);
+                      }}
+                      onMoveCursor={setDraftCursor}
+                      offline={loadState === "offline"}
+                      modeling3dEnabled={modeling3dEnabled}
+                      sendButtonTitle={sendButtonTitle}
+                      sendDisabled={sendDisabled}
+                      isStreaming={isStreaming}
+                    />
                   </div>
                 </form>
               </section>
 
-              <aside className="hidden w-[360px] shrink-0 border-l border-forge-line bg-[#101111] p-4 lg:block">
-                <div className="mb-4 grid grid-cols-5 gap-1 rounded-md border border-forge-line bg-[#0e0f0e] p-1">
-                  <PanelButton
-                    label="Contexto"
-                    active={activePanel === "contexto"}
-                    icon={<Activity size={15} />}
-                    onClick={() => setActivePanel("contexto")}
-                  />
-                  <PanelButton
-                    label="Infra"
-                    active={activePanel === "infra"}
-                    icon={<Server size={15} />}
-                    onClick={() => setActivePanel("infra")}
-                  />
-                  <PanelButton
-                    label="Auditoria"
-                    active={activePanel === "auditoria"}
-                    icon={<ShieldCheck size={15} />}
-                    onClick={() => setActivePanel("auditoria")}
-                  />
-                  <PanelButton
-                    label="Prompts"
-                    active={activePanel === "prompts"}
-                    icon={<Library size={15} />}
-                    onClick={() => setActivePanel("prompts")}
-                  />
-                  <PanelButton
-                    label="Configurações"
-                    active={activePanel === "config"}
-                    icon={<Settings2 size={15} />}
-                    onClick={() => setActivePanel("config")}
-                  />
-                </div>
-
-                {activePanel === "contexto" && (
-                  <PanelStack>
-                    <PanelTitle icon={<Activity size={18} />} title="Contexto" />
-                    <InfoRow label="API" value={api.baseUrl} />
-                    <InfoRow label="Vetores" value={status?.vector_store ?? "qdrant"} />
-                    <InfoRow label="Mobile" value={status?.mobile_access ?? "Tailscale/WireGuard"} />
-                    <PanelTitle icon={<Gauge size={18} />} title="Custos" />
-                    <InfoRow label="Mês" value={costUsage?.month ?? "-"} />
-                    <InfoRow label="Gasto" value={`R$ ${(costUsage?.estimated_spend_brl ?? 0).toFixed(4)}`} />
-                    <InfoRow
-                      label="Livre"
-                      value={`R$ ${(costUsage?.remaining_budget_brl ?? costPolicy?.monthly_budget_brl ?? 200).toFixed(2)}`}
-                    />
-                    <PanelTitle icon={<Database size={18} />} title="Base" />
-                    <InfoRow label="Agentes" value={String(agents.length)} />
-                    <InfoRow label="Prompts" value={String(prompts.length)} />
-                    <InfoRow label="Documentos" value={String(documents.length)} />
-                    <PanelTitle icon={<FileText size={18} />} title="RAG" />
-                    <input
-                      value={documentTitle}
-                      onChange={(event) => setDocumentTitle(event.target.value)}
-                      placeholder="Título"
-                      className="h-9 rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
-                    />
-                    <textarea
-                      value={documentContent}
-                      onChange={(event) => setDocumentContent(event.target.value)}
-                      placeholder="Texto ou Markdown"
-                      rows={5}
-                      className="min-h-28 resize-none rounded-md border border-forge-line bg-[#0e0f0e] px-3 py-2 text-sm text-forge-text"
-                    />
-                    <Button
-                      className="h-9 w-full"
-                      onClick={() => void indexTextDocument()}
-                      disabled={!documentContent.trim() || isIndexingDocument}
-                    >
-                      Indexar texto
-                    </Button>
-                    <div className="flex gap-2">
-                      <input
-                        value={documentQuery}
-                        onChange={(event) => setDocumentQuery(event.target.value)}
-                        placeholder="Buscar contexto"
-                        className="h-9 min-w-0 flex-1 rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
-                      />
-                      <Button
-                        className="h-9"
-                        onClick={() => void searchIndexedDocuments()}
-                        disabled={!documentQuery.trim()}
-                      >
-                        Buscar
-                      </Button>
-                    </div>
-                    {documentResults.map((result) => (
-                      <button
-                        key={`${result.document_id}:${String(result.metadata.chunk_index ?? "0")}`}
-                        className="rounded-md border border-forge-line bg-[#171716] p-3 text-left text-sm transition hover:border-forge-amber/60"
-                        onClick={() => setDraft((current) => `${current}${current ? "\n\n" : ""}${result.content}`)}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium">{result.title}</span>
-                          <Badge>{result.score.toFixed(2)}</Badge>
-                        </div>
-                        <p className="mt-2 line-clamp-3 text-xs text-forge-muted">{result.content}</p>
-                      </button>
-                    ))}
-                    {documents.slice(0, 4).map((document) => (
-                      <InfoRow key={document.id} label={document.title} value={document.index_status} />
-                    ))}
-                  </PanelStack>
-                )}
-
-                {activePanel === "infra" && (
-                  <PanelStack>
-                    <PanelTitle icon={<Server size={18} />} title="Infra" />
-                    {infraLinks.map((link) => (
-                      <a
-                        key={link.href}
-                        href={link.href}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="rounded-md border border-forge-line bg-[#171716] p-3 text-sm text-forge-text no-underline transition hover:border-forge-amber/60"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="font-medium">{link.title}</span>
-                          <ExternalLink size={15} className="shrink-0 text-forge-amber" />
-                        </div>
-                        <p className="mt-2 break-words text-xs text-forge-muted">{link.href}</p>
-                        <Badge className="mt-3">{link.detail}</Badge>
-                      </a>
-                    ))}
-                    <PanelTitle icon={<Database size={18} />} title="Postgres" />
-                    <InfoRow label="Host Docker" value="postgres" />
-                    <InfoRow label="Porta Docker" value="5432" />
-                    <InfoRow label="Database" value="POSTGRES_DB" />
-                    <InfoRow label="Usuário" value="POSTGRES_USER" />
-                    <InfoRow label="Senha" value="POSTGRES_PASSWORD" />
-                  </PanelStack>
-                )}
-
-                {activePanel === "auditoria" && (
-                  <PanelStack>
-                    <PanelTitle icon={<ShieldCheck size={18} />} title="Auditoria" />
-                    {auditEvents.slice(0, 8).map((event) => (
-                      <div key={event.id} className="rounded-md border border-forge-line bg-[#171716] p-3 text-sm">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium">{event.event_type}</span>
-                          <Badge>{event.model_id ?? "modelo"}</Badge>
-                        </div>
-                        <p className="mt-2 text-xs text-forge-muted">
-                          {event.tokens_in} in / {event.tokens_out} out / R$ {event.estimated_cost_brl.toFixed(6)}
-                        </p>
-                      </div>
-                    ))}
-                    {!auditEvents.length && <EmptyPanel text="Nenhum evento registrado ainda." />}
-                  </PanelStack>
-                )}
-
-                {activePanel === "prompts" && (
-                  <PanelStack>
-                    <PanelTitle icon={<Library size={18} />} title="Prompts" />
-                    {prompts.map((prompt) => (
-                      <button
-                        key={prompt.id}
-                        className="rounded-md border border-forge-line bg-[#171716] p-3 text-left text-sm transition hover:border-forge-amber/60"
-                        onClick={() => setDraft(prompt.template)}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium">{prompt.title}</span>
-                          {prompt.favorite && <Badge>favorito</Badge>}
-                        </div>
-                        <p className="mt-2 line-clamp-3 text-xs text-forge-muted">{prompt.template}</p>
-                      </button>
-                    ))}
-                  </PanelStack>
-                )}
-
-                {activePanel === "config" && (
-                  <PanelStack>
-                    <Modeling3DSettingsSection software={modeling3dSoftware} onSoftwareChange={setModeling3dSoftware} />
-                    <PanelTitle icon={<KeyRound size={18} />} title="Provedores" />
-                    {providerStatuses.map((provider) => (
-                      <div key={provider.provider} className="rounded-md border border-forge-line bg-[#171716] p-3">
-                        <div className="mb-3 flex items-center justify-between gap-2">
-                          <span className="text-sm font-medium">{provider.provider}</span>
-                          <Badge className={provider.configured ? "border-forge-green text-forge-green" : ""}>
-                            {provider.configured ? provider.source : "pendente"}
-                          </Badge>
-                        </div>
-                        {provider.configured && !providerEditMode[provider.provider] ? (
-                          <Button
-                            className="h-9 w-full"
-                            onClick={() =>
-                              setProviderEditMode((current) => ({ ...current, [provider.provider]: true }))
-                            }
-                          >
-                            Remover chave configurada?
-                          </Button>
-                        ) : (
-                          <div className="flex gap-2">
-                            <input
-                              type="password"
-                              value={providerDrafts[provider.provider] ?? ""}
-                              onChange={(event) =>
-                                setProviderDrafts((current) => ({
-                                  ...current,
-                                  [provider.provider]: event.target.value
-                                }))
-                              }
-                              placeholder="Nova API key"
-                              className="min-w-0 flex-1 rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
-                            />
-                            <Button className="h-9" onClick={() => void saveProviderKey(provider.provider)}>
-                              Salvar
-                            </Button>
-                            <Button
-                              className="h-9 px-2"
-                              onClick={() => void clearProviderKey(provider.provider)}
-                              aria-label={`Remover chave ${provider.provider}`}
-                              title={`Remover chave ${provider.provider}`}
-                            >
-                              <X size={16} />
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    <PanelTitle icon={<Users size={18} />} title="Modelos por agente" />
-                    <Button className="h-9 w-full justify-start" onClick={() => editAgent(activeAgent ?? null)}>
-                      <Users size={16} />
-                      Abrir dashboard de agentes
-                    </Button>
-                  </PanelStack>
-                )}
-              </aside>
+              <ChatRightPanel
+                activePanel={activePanel}
+                onSelectPanel={setActivePanel}
+                status={status}
+                costUsage={costUsage}
+                costPolicy={costPolicy}
+                agentsCount={agents.length}
+                prompts={prompts}
+                documents={documents}
+                auditEvents={auditEvents}
+                documentTitle={documentTitle}
+                onSetDocumentTitle={setDocumentTitle}
+                documentContent={documentContent}
+                onSetDocumentContent={setDocumentContent}
+                documentQuery={documentQuery}
+                onSetDocumentQuery={setDocumentQuery}
+                documentResults={documentResults}
+                isIndexingDocument={isIndexingDocument}
+                onIndexTextDocument={() => void indexTextDocument()}
+                onSearchDocuments={() => void searchIndexedDocuments()}
+                setDraft={setDraft}
+                providerStatuses={providerStatuses}
+                providerDrafts={providerDrafts}
+                onSetProviderDrafts={setProviderDrafts}
+                providerEditMode={providerEditMode}
+                onSetProviderEditMode={setProviderEditMode}
+                onSaveProviderKey={(provider) => void saveProviderKey(provider)}
+                onClearProviderKey={(provider) => void clearProviderKey(provider)}
+                modeling3dSoftware={modeling3dSoftware}
+                onModeling3dSoftwareChange={setModeling3dSoftware}
+                onOpenAgentDashboard={() => editAgent(activeAgent ?? null)}
+              />
             </>
           ) : activeView === "agents" ? (
             <AgentDashboard
