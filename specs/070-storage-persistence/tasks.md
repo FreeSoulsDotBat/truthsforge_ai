@@ -12,7 +12,7 @@
 
 - [x] T010 [P1] [human] Ratificar ADR-015 em `docs/decisions.md` (2026-05-22)
 - [ ] T011 [P1] [any] Extrair `Protocol Store` a partir da superfície atual (sem mudar implementações) (DT-002)
-- [ ] T012 [P1] [any] Criar testes de paridade Postgres × DevStore (DT-003)
+- [x] T012 [P1] [claude-code] Teste de paridade Postgres × DevStore em `backend/tests/test_store_parity.py` (validado: ruff + pytest no container) (DT-003)
 - [ ] T013 [P2] [any] Fatiar storage em repositórios por domínio, um por vez (DT-001)
 
 ## Notas
