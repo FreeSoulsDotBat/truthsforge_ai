@@ -4,13 +4,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useShallow } from "zustand/react/shallow";
 
 import { useAppDataBootstrap } from "./app/hooks/use-app-data-bootstrap";
+import { useProviderSettings } from "./app/hooks/use-provider-settings";
 import { useChatScopeSync } from "./app/hooks/use-chat-scope-sync";
 import { useKnowledgeScopeSync, type ProjectsStatus } from "./app/hooks/use-knowledge-scope-sync";
 import { useOutsidePointerClose } from "./app/hooks/use-outside-pointer-close";
 import { quickActions } from "./app/constants";
 import { appDataQueryKey, fetchAppDataSnapshot } from "./app/queries/app-data";
 import { useAppStore } from "./app/store";
-import type { DashboardView, LoadState, ProviderCatalogState } from "./app/ui-state";
+import type { DashboardView, LoadState } from "./app/ui-state";
 import { AppHeader } from "./components/AppHeader";
 import { ChatComposerInput } from "./features/chat/components/ChatComposerInput";
 import { ChatMessageList } from "./features/chat/components/ChatMessageList";
@@ -104,8 +105,6 @@ import type {
   ProjectFolder,
   ProjectRecord,
   ProjectUpsert,
-  ProviderModel,
-  ProviderName,
   ProviderSecretStatus,
   Prompt,
   ServerStatus
@@ -232,13 +231,6 @@ function App() {
   const [agentEditorKey, setAgentEditorKey] = useState(0);
   const [draft, setDraft] = useState("");
   const [draftCursor, setDraftCursor] = useState(0);
-  const [providerDrafts, setProviderDrafts] = useState<Record<string, string>>({});
-  const [providerEditMode, setProviderEditMode] = useState<Record<string, boolean>>({});
-  const [providerCatalogs, setProviderCatalogs] = useState<Partial<Record<ProviderName, ProviderModel[]>>>({});
-  const [providerCatalogState, setProviderCatalogState] = useState<Partial<Record<ProviderName, ProviderCatalogState>>>(
-    {}
-  );
-  const [providerCatalogErrors, setProviderCatalogErrors] = useState<Partial<Record<ProviderName, string>>>({});
   const [documentTitle, setDocumentTitle] = useState("");
   const [documentContent, setDocumentContent] = useState("");
   const [documentTags, setDocumentTags] = useState("");
@@ -296,6 +288,23 @@ function App() {
   const refreshAppDataQuery = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: appDataQueryKey });
   }, [queryClient]);
+
+  const {
+    providerDrafts,
+    setProviderDrafts,
+    providerEditMode,
+    setProviderEditMode,
+    providerCatalogs,
+    providerCatalogState,
+    providerCatalogErrors,
+    saveProviderKey,
+    clearProviderKey,
+    loadProviderModels
+  } = useProviderSettings({
+    onProviderStatus: (provider, status) =>
+      setProviderStatuses((current) => current.map((item) => (item.provider === provider ? status : item))),
+    refresh: () => void refreshAppDataQuery()
+  });
 
   // Derived during render (no effect): mirrors the bootstrap query status so the
   // React Compiler's `set-state-in-effect` rule has nothing to flag here.
@@ -1473,40 +1482,6 @@ function App() {
         setModeling3dEnabled(false);
       }
       setIsStreaming(false);
-    }
-  }
-
-  async function saveProviderKey(provider: ProviderName) {
-    const apiKey = providerDrafts[provider]?.trim();
-    if (!apiKey) return;
-    const status = await api.saveProviderKey(provider, apiKey);
-    setProviderStatuses((current) => current.map((item) => (item.provider === provider ? status : item)));
-    setProviderDrafts((current) => ({ ...current, [provider]: "" }));
-    setProviderEditMode((current) => ({ ...current, [provider]: false }));
-    void refreshAppDataQuery();
-  }
-
-  async function clearProviderKey(provider: ProviderName) {
-    const status = await api.deleteProviderKey(provider);
-    setProviderStatuses((current) => current.map((item) => (item.provider === provider ? status : item)));
-    setProviderDrafts((current) => ({ ...current, [provider]: "" }));
-    setProviderEditMode((current) => ({ ...current, [provider]: false }));
-    void refreshAppDataQuery();
-  }
-
-  async function loadProviderModels(provider: ProviderName) {
-    setProviderCatalogState((current) => ({ ...current, [provider]: "loading" }));
-    setProviderCatalogErrors((current) => ({ ...current, [provider]: "" }));
-    try {
-      const providerModels = await api.providerModels(provider);
-      setProviderCatalogs((current) => ({ ...current, [provider]: providerModels }));
-      setProviderCatalogState((current) => ({ ...current, [provider]: "ready" }));
-    } catch (error) {
-      setProviderCatalogState((current) => ({ ...current, [provider]: "error" }));
-      setProviderCatalogErrors((current) => ({
-        ...current,
-        [provider]: error instanceof Error ? error.message : "Falha ao listar modelos"
-      }));
     }
   }
 
