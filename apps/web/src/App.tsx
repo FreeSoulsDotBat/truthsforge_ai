@@ -1,4 +1,4 @@
-import { Check, ChevronRight, EllipsisVertical, FileText, LoaderCircle, Menu, Plus, Send, Wifi, X } from "lucide-react";
+import { Check, ChevronRight, EllipsisVertical, LoaderCircle, Menu, Send, Wifi, X } from "lucide-react";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -14,7 +14,8 @@ import { useAppStore } from "./app/store";
 import type { DashboardView, LoadState, ProviderCatalogState } from "./app/ui-state";
 import { ChatMessageList } from "./features/chat/components/ChatMessageList";
 import { ChatRightPanel } from "./features/chat/components/ChatRightPanel";
-import { ContextChip, DuplicateFileModal, ExecutionMenuItem } from "./components/app-panels";
+import { ExecutionMenu } from "./features/chat/components/ExecutionMenu";
+import { ContextChip, DuplicateFileModal } from "./components/app-panels";
 import { AppSidebar } from "./components/AppSidebar";
 import { Badge } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
@@ -2408,99 +2409,47 @@ function App() {
                         </div>
 
                         <div className="flex items-center gap-1">
-                          <div className="relative" ref={executionMenuRef}>
-                            <Button
-                              className="h-8 w-8 px-0"
-                              onClick={() => setExecutionMenuOpen((current) => !current)}
-                              aria-label="Menu de execução"
-                              title="Menu de execução"
-                            >
-                              <Plus size={15} />
-                            </Button>
-                            {executionMenuOpen && (
-                              <div
-                                className="scrollbar-slim absolute right-0 z-50 max-h-[55vh] w-72 overflow-y-auto rounded-md border border-forge-line bg-[#111313] p-1 shadow-2xl"
-                                style={{ top: "auto", bottom: "calc(100% + 4px)" }}
-                              >
-                                <ExecutionMenuItem
-                                  label="MCP 3D"
-                                  active={modeling3dEnabled}
-                                  title="Usa o chat para criar plano estruturado Blender/Fusion via MCP."
-                                  onClick={() => {
-                                    setModelingEnableDialogOpen(true);
-                                    setResponseMode("text");
-                                    setDeepResearch(false);
-                                    setReasoningSummary(false);
-                                    setMultiAgentMode(false);
-                                  }}
-                                />
-                                <ExecutionMenuItem
-                                  label="Raciocínio longo"
-                                  active={reasoningOverride === "long"}
-                                  onClick={() =>
-                                    setReasoningOverride((current) => (current === "long" ? "default" : "long"))
-                                  }
-                                />
-                                <ExecutionMenuItem
-                                  label="Resumo oficial"
-                                  active={reasoningSummary}
-                                  disabled={reasoningSummaryUnavailable}
-                                  title={
-                                    reasoningSummaryUnavailable
-                                      ? "Disponível apenas para chat texto com modelo OpenAI."
-                                      : "Solicita reasoning.summary=auto."
-                                  }
-                                  onClick={() => setReasoningSummary((current) => !current)}
-                                />
-                                <ExecutionMenuItem
-                                  label="Pesquisa OpenAI"
-                                  active={deepResearch}
-                                  onClick={() => {
-                                    setDeepResearch((current) => !current);
-                                    setResponseMode("text");
-                                    setReasoningSummary(false);
-                                    if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
-                                  }}
-                                />
-                                <ExecutionMenuItem
-                                  label="Imagem"
-                                  active={responseMode === "image"}
-                                  onClick={() => {
-                                    setResponseMode((current) => (current === "image" ? "text" : "image"));
-                                    setDeepResearch(false);
-                                    setReasoningSummary(false);
-                                    if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
-                                  }}
-                                />
-                                <ExecutionMenuItem
-                                  label="Multiagente"
-                                  active={multiAgentMode}
-                                  onClick={() => {
-                                    setMultiAgentMode((current) => !current);
-                                    if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
-                                  }}
-                                />
-                                <button
-                                  type="button"
-                                  className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
-                                  onClick={() => setContextDocsModalOpen(true)}
-                                >
-                                  <span>Editar bases de conhecimento atreladas</span>
-                                </button>
-                                <div className="mx-1 my-1 border-t border-forge-line" />
-                                <button
-                                  type="button"
-                                  className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
-                                  onClick={() => fileInputRef.current?.click()}
-                                >
-                                  <span className="flex items-center gap-2">
-                                    <FileText size={14} />
-                                    Anexar arquivo
-                                  </span>
-                                </button>
-                              </div>
-                            )}
-                          </div>
+                          <ExecutionMenu
+                            menuRef={executionMenuRef}
+                            open={executionMenuOpen}
+                            onToggleOpen={() => setExecutionMenuOpen((current) => !current)}
+                            modeling3dEnabled={modeling3dEnabled}
+                            reasoningLong={reasoningOverride === "long"}
+                            reasoningSummary={reasoningSummary}
+                            reasoningSummaryUnavailable={reasoningSummaryUnavailable}
+                            deepResearch={deepResearch}
+                            imageMode={responseMode === "image"}
+                            multiAgentMode={multiAgentMode}
+                            onEnableModeling3d={() => {
+                              setModelingEnableDialogOpen(true);
+                              setResponseMode("text");
+                              setDeepResearch(false);
+                              setReasoningSummary(false);
+                              setMultiAgentMode(false);
+                            }}
+                            onToggleReasoningLong={() =>
+                              setReasoningOverride((current) => (current === "long" ? "default" : "long"))
+                            }
+                            onToggleReasoningSummary={() => setReasoningSummary((current) => !current)}
+                            onToggleDeepResearch={() => {
+                              setDeepResearch((current) => !current);
+                              setResponseMode("text");
+                              setReasoningSummary(false);
+                              if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
+                            }}
+                            onToggleImageMode={() => {
+                              setResponseMode((current) => (current === "image" ? "text" : "image"));
+                              setDeepResearch(false);
+                              setReasoningSummary(false);
+                              if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
+                            }}
+                            onToggleMultiAgent={() => {
+                              setMultiAgentMode((current) => !current);
+                              if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
+                            }}
+                            onEditKnowledgeBases={() => setContextDocsModalOpen(true)}
+                            onAttachFile={() => fileInputRef.current?.click()}
+                          />
 
                           <div className="relative" ref={shortcutMenuRef}>
                             <Button
