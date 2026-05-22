@@ -1,10 +1,10 @@
 # Especificação: Persistência e Abstração de Storage
 
-**Pasta da spec**: `specs/070-storage-persistence/` | **Criada em**: 2026-05-22 | **Status**: Rascunho
+**Pasta da spec**: `specs/070-storage-persistence/` | **Criada em**: 2026-05-22 | **Status**: Aprovada (ADR-015 ratificado)
 
-**Entrada**: Cobrir a camada de storage (Postgres + fallback JSON) — hoje sem spec e **sem ADR** de abstração. Esta é a dívida prioritária do backend.
+**Entrada**: Cobrir a camada de storage (Postgres + fallback JSON) — dívida prioritária do backend. A abstração agora tem decisão registrada (ADR-015).
 
-> Onda 7 do refactor SDD. Documenta o contrato de storage e a dívida de duplicação massiva; propõe **ADR-015** (interface de storage) em `research.md` — proposta, **não ratificada**.
+> Onda 7 do refactor SDD. Documenta o contrato de storage e a dívida de duplicação massiva; registra **ADR-015** (interface de storage), **ratificado** em `docs/decisions.md`; ver `research.md`. Implementação faseada pendente do gate (Docker).
 
 ## Cenários de usuário e testes
 

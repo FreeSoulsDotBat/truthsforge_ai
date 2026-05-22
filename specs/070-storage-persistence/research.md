@@ -1,8 +1,8 @@
-# Pesquisa: Abstração de Storage — proposta de ADR-015
+# Pesquisa: Abstração de Storage — ADR-015 (ratificado)
 
 **Pasta da spec**: `specs/070-storage-persistence/` | **Data**: 2026-05-22
 
-> **Proposta, NÃO ratificada.** Ratificar um ADR exige registro em `docs/decisions.md` + aprovação do dono do produto (constituição P2/governança). Este documento apenas instrui a decisão.
+> **Ratificada como ADR-015** em `docs/decisions.md` (2026-05-22, aprovação do dono). A implementação é faseada e exige os gates de `scripts/quality.ps1` (Docker) antes de concluir.
 
 ## Pergunta em aberto
 

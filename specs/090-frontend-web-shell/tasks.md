@@ -11,7 +11,8 @@
 
 - [ ] T010 [P2] [any] Decompor `apps/web/src/App.tsx` por feature/hooks, espelhando `features/modeling-3d/` (DT-001)
 - [ ] T011 [P2] [any] Dividir `apps/web/src/lib/api.ts` por domínio (DT-002)
-- [ ] T012 [P2] [human] Avaliar ADR + adotar geração de tipos do OpenAPI (`openapi-typescript`) (DT-003)
+- [x] T012a [P2] [human] Ratificar decisão de geração de tipos do OpenAPI → **ADR-016** (`docs/decisions.md`, 2026-05-22)
+- [ ] T012b [P2] [any] Adotar a toolchain `openapi-typescript` em PR próprio (typecheck/build verdes) (DT-003)
 - [ ] T013 [P2] [any] Consolidar estado (React Query por entidade) e remover fetch monolítico (DT-004)
 
 ## Notas
