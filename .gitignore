@@ -29,3 +29,6 @@ apps/desktop/src-tauri/target/
 *.log
 *.sqlite
 *.db
+
+# Relatório gerável do mapa de arquitetura (não versionar)
+architecture-map.html
