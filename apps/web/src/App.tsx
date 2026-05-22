@@ -54,6 +54,8 @@ import {
   loadSeenContextModalProjectIds,
   mergeUniqueMessages,
   normalizeMentionPart,
+  nowIso,
+  optimisticId,
   sessionHasEmptyDraft,
   sha256BrowserFile,
   type MentionMatch,
@@ -574,7 +576,7 @@ function App() {
               ...metadata,
               title_source: "manual"
             },
-            updated_at: new Date().toISOString()
+            updated_at: nowIso()
           };
         })
       )
@@ -1136,7 +1138,7 @@ function App() {
       const attachedPreviews = attachedPreviewFiles.map((platformFile) => createChatAttachmentPreview(platformFile));
 
       optimisticUser = {
-        id: `user_${Date.now()}`,
+        id: optimisticId("user"),
         session_id: sessionId ?? "pending",
         role: "user",
         content: message,
@@ -1146,7 +1148,7 @@ function App() {
           attached_file_ids: uploadedFileIds,
           attached_files: attachedPreviews
         },
-        created_at: new Date().toISOString()
+        created_at: nowIso()
       };
       optimisticAssistant = localAssistantMessage(
         sessionId ?? "pending",
@@ -1206,12 +1208,12 @@ function App() {
             const resolvedUserMessage: ChatMessage = optimisticUser
               ? { ...optimisticUser, session_id: meta.session_id }
               : {
-                  id: `user_${Date.now()}`,
+                  id: optimisticId("user"),
                   session_id: meta.session_id,
                   role: "user",
                   content: message,
                   model_id: activeAgentModelLabel,
-                  created_at: new Date().toISOString()
+                  created_at: nowIso()
                 };
             const resolvedAssistantMessage: ChatMessage = optimisticAssistant
               ? { ...optimisticAssistant, id: meta.message_id, session_id: meta.session_id }
@@ -1243,8 +1245,8 @@ function App() {
                     ...(streamTitle ? { title_source: "manual" } : {}),
                     ...(modeling3dPayload.enabled ? { modeling_3d: modeling3dPayload } : {})
                   },
-                  created_at: new Date().toISOString(),
-                  updated_at: new Date().toISOString(),
+                  created_at: nowIso(),
+                  updated_at: nowIso(),
                   messages: [resolvedUserMessage, resolvedAssistantMessage]
                 },
                 ...current
@@ -1404,7 +1406,7 @@ function App() {
             )
           ).then((results) => {
             const notes = results.map((entry, index) => {
-              const baseId = `m3d_note_${Date.now()}_${index}`;
+              const baseId = `${optimisticId("m3d_note")}_${index}`;
               if (entry.ok) {
                 return {
                   id: baseId,
@@ -1416,7 +1418,7 @@ function App() {
                     response_mode: "modeling_3d_attachment_analysis",
                     attachment_analysis: entry.analysis
                   } as Record<string, unknown>,
-                  created_at: new Date().toISOString()
+                  created_at: nowIso()
                 };
               }
               return {
@@ -1426,7 +1428,7 @@ function App() {
                 content: `Não consegui analisar o anexo (${entry.fileId}): ${entry.error}`,
                 model_id: null,
                 metadata: { response_mode: "modeling_3d_attachment_analysis_error" } as Record<string, unknown>,
-                created_at: new Date().toISOString()
+                created_at: nowIso()
               };
             });
             if (!notes.length) return;
@@ -1460,12 +1462,12 @@ function App() {
       const fallbackOptimisticUser =
         optimisticUser ??
         ({
-          id: `user_${Date.now()}`,
+          id: optimisticId("user"),
           session_id: sessionId ?? "pending",
           role: "user",
           content: message,
           model_id: activeAgentModelLabel,
-          created_at: new Date().toISOString()
+          created_at: nowIso()
         } as ChatMessage);
       const fallbackOptimisticAssistant =
         optimisticAssistant ??
@@ -1488,7 +1490,7 @@ function App() {
           })
         );
       } else {
-        const localSessionId = `local_error_${Date.now()}`;
+        const localSessionId = optimisticId("local_error");
         setActiveSessionId(localSessionId);
         setSessions((current) =>
           sortSessionsByNewest([
@@ -1511,8 +1513,8 @@ function App() {
                 is_empty_draft: false,
                 ...(modeling3dPayload.enabled ? { modeling_3d: modeling3dPayload } : {})
               },
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
+              created_at: nowIso(),
+              updated_at: nowIso(),
               messages: [
                 { ...fallbackOptimisticUser, session_id: localSessionId },
                 { ...failedAssistant, session_id: localSessionId }

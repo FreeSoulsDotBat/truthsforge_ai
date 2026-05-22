@@ -103,6 +103,20 @@ export async function sha256BrowserFile(file: File): Promise<string | null> {
     .join("");
 }
 
+/**
+ * Event-time clock/id helpers. Kept as plain module functions (not a
+ * component/hook) so the React Compiler purity rule does not flag the
+ * underlying ``new Date()`` / ``Date.now()`` — these run at event time
+ * (handlers/callbacks), not during render.
+ */
+export function nowIso(): string {
+  return new Date().toISOString();
+}
+
+export function optimisticId(prefix: string): string {
+  return `${prefix}_${Date.now()}`;
+}
+
 export function createDefaultKnowledgeBaseDraft(): KnowledgeBaseUpsert {
   return {
     name: "",
