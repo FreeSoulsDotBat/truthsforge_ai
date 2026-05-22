@@ -6,19 +6,16 @@ import {
   EllipsisVertical,
   ExternalLink,
   FileText,
-  FolderTree,
   Gauge,
   KeyRound,
   Library,
   LoaderCircle,
   Menu,
-  MessageSquare,
   Plus,
   Send,
   Server,
   Settings2,
   ShieldCheck,
-  Sparkles,
   Users,
   Wifi,
   X
@@ -34,20 +31,19 @@ import { useOutsidePointerClose } from "./app/hooks/use-outside-pointer-close";
 import { infraLinks, quickActions } from "./app/constants";
 import { appDataQueryKey, fetchAppDataSnapshot } from "./app/queries/app-data";
 import { useAppStore } from "./app/store";
-import type { LoadState, ProviderCatalogState } from "./app/ui-state";
+import type { DashboardView, LoadState, ProviderCatalogState } from "./app/ui-state";
 import { ChatMessageList } from "./features/chat/components/ChatMessageList";
 import {
   ContextChip,
-  DashboardNavButton,
   DuplicateFileModal,
   EmptyPanel,
   ExecutionMenuItem,
   InfoRow,
-  Metric,
   PanelButton,
   PanelStack,
   PanelTitle
 } from "./components/app-panels";
+import { AppSidebar } from "./components/AppSidebar";
 import { Badge } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
 import { api, ChatStreamHttpError, streamChat } from "./lib/api";
@@ -113,8 +109,6 @@ import { useModeling3dChat, useModelingPlanActions } from "./features/modeling-3
 import type { ModelingPlanCardActions } from "./components/app-chat";
 import { useModeling3DStore } from "./features/modeling-3d/store";
 import { Modeling3DSettingsSection } from "./features/modeling-3d/settings";
-import { HistorySection } from "./features/sidebar/history-section";
-import { ProjectExplorerSection } from "./features/sidebar/project-explorer-section";
 import { csvToList, delay, sortSessionsByNewest } from "./shared/utils/common";
 import type {
   Agent,
@@ -1061,6 +1055,22 @@ function App() {
     },
     [activeMention, draft]
   );
+
+  function handleSelectView(view: DashboardView) {
+    if (view === "agents") {
+      if (!editingAgentId) editAgent(activeAgent ?? null);
+      setActiveView("agents");
+      return;
+    }
+    setActiveView(view);
+    setMobileMenuOpen(false);
+  }
+
+  function handleSelectSidebarSession(sessionId: string) {
+    setActiveSessionId(sessionId);
+    setActiveView("chat");
+    setMobileMenuOpen(false);
+  }
 
   function handleQuickAction(action: string) {
     if (action.includes("agentes")) {
@@ -2306,137 +2316,39 @@ function App() {
         />
       )}
 
-      <aside
-        className={[
-          "fixed inset-y-0 left-0 z-30 w-[286px] border-r border-forge-line bg-[#101111] transition-transform md:static md:translate-x-0",
-          mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
-        ].join(" ")}
-      >
-        <div className="flex h-16 items-center justify-between border-b border-forge-line px-4">
-          <div>
-            <p className="text-sm text-forge-muted">Truth's Forge AI</p>
-            <h1 className="flex items-center gap-2 text-lg font-semibold">
-              <Sparkles size={18} className="text-forge-amber" />
-              JUDITE
-            </h1>
-          </div>
-          <Button
-            className="h-9 w-9 px-0 md:hidden"
-            onClick={() => setMobileMenuOpen(false)}
-            aria-label="Fechar menu"
-            title="Fechar menu"
-          >
-            <X size={18} />
-          </Button>
-        </div>
-
-        <div className="scrollbar-slim h-[calc(100vh-64px)] space-y-4 overflow-y-auto p-4 pb-8">
-          <Button
-            className="w-full justify-start border-forge-amber/50 bg-[#171717] text-forge-text hover:border-forge-amber hover:bg-[#211d16]"
-            onClick={() => void startNewChat()}
-            disabled={isCreatingNewChat}
-            aria-label="Novo chat"
-            title="Novo chat"
-          >
-            {isCreatingNewChat ? <LoaderCircle size={15} className="animate-spin" /> : <MessageSquare size={15} />}
-            {isCreatingNewChat ? "Criando..." : "Novo chat"}
-          </Button>
-
-          <div className="flex flex-col gap-1 rounded-md border border-forge-line bg-[#0e0f0e] p-1">
-            <DashboardNavButton
-              active={activeView === "chat"}
-              icon={<MessageSquare size={15} />}
-              label="Chat"
-              onClick={() => {
-                setActiveView("chat");
-                setMobileMenuOpen(false);
-              }}
-            />
-            <DashboardNavButton
-              active={activeView === "agents"}
-              icon={<Users size={15} />}
-              label="Agentes"
-              onClick={() => {
-                if (!editingAgentId) editAgent(activeAgent ?? null);
-                setActiveView("agents");
-              }}
-            />
-            <DashboardNavButton
-              active={activeView === "projects"}
-              icon={<FolderTree size={15} />}
-              label="Projetos"
-              onClick={() => {
-                setActiveView("projects");
-                setMobileMenuOpen(false);
-              }}
-            />
-            <DashboardNavButton
-              active={activeView === "knowledge"}
-              icon={<Database size={15} />}
-              label="Bases"
-              onClick={() => {
-                setActiveView("knowledge");
-                setMobileMenuOpen(false);
-              }}
-            />
-            <DashboardNavButton
-              active={activeView === "files"}
-              icon={<FileText size={15} />}
-              label="Arquivos"
-              onClick={() => {
-                setActiveView("files");
-                setMobileMenuOpen(false);
-              }}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <Metric label="Chats" value={sessions.length} />
-            <Metric label="Prompts" value={prompts.length} />
-          </div>
-
-          <ProjectExplorerSection
-            projects={nonGeneralProjects}
-            folders={projectFolders}
-            sessions={projectExplorerSessions}
-            activeSessionId={activeSessionId}
-            collapsed={projectExplorerCollapsed}
-            expandedKeys={projectExplorerExpanded}
-            onToggleCollapsed={() => setProjectExplorerCollapsed((current) => !current)}
-            onToggleExpanded={(key) =>
-              setProjectExplorerExpanded((current) => ({ ...current, [key]: !(current[key] ?? true) }))
-            }
-            onSelectSession={(sessionId) => {
-              setActiveSessionId(sessionId);
-              setActiveView("chat");
-              setMobileMenuOpen(false);
-            }}
-            onCreateChat={(projectId, folderId) => void createChatInProject(projectId, folderId)}
-            onCreateFolder={(projectId, parentId) => void createFolderFromExplorer(projectId, parentId)}
-            onDeleteFolder={(folderId) => void deleteFolderFromExplorer(folderId)}
-            onMoveSession={(sessionId, projectId, folderId) =>
-              void moveSessionInExplorer(sessionId, projectId, folderId)
-            }
-            renderSessionBadge={(session) => (isModeling3DChat(session) ? <ChatModeling3DBadge compact /> : null)}
-          />
-
-          <HistorySection
-            sessions={generalHistorySessions}
-            activeSessionId={activeSessionId}
-            collapsed={historyCollapsed}
-            deletingSessionId={deletingSessionId}
-            disabled={isStreaming}
-            onToggleCollapsed={() => setHistoryCollapsed((current) => !current)}
-            onSelectSession={(sessionId) => {
-              setActiveSessionId(sessionId);
-              setActiveView("chat");
-              setMobileMenuOpen(false);
-            }}
-            onDeleteSession={(session) => void deleteChatSession(session)}
-            renderSessionBadge={(session) => (isModeling3DChat(session) ? <ChatModeling3DBadge compact /> : null)}
-          />
-        </div>
-      </aside>
+      <AppSidebar
+        mobileMenuOpen={mobileMenuOpen}
+        onCloseMobile={() => setMobileMenuOpen(false)}
+        onNewChat={() => void startNewChat()}
+        isCreatingNewChat={isCreatingNewChat}
+        activeView={activeView}
+        onSelectView={handleSelectView}
+        sessionsCount={sessions.length}
+        promptsCount={prompts.length}
+        projects={nonGeneralProjects}
+        folders={projectFolders}
+        explorerSessions={projectExplorerSessions}
+        historySessions={generalHistorySessions}
+        activeSessionId={activeSessionId}
+        projectExplorerCollapsed={projectExplorerCollapsed}
+        projectExplorerExpanded={projectExplorerExpanded}
+        onToggleProjectExplorerCollapsed={() => setProjectExplorerCollapsed((current) => !current)}
+        onToggleProjectExplorerExpanded={(key) =>
+          setProjectExplorerExpanded((current) => ({ ...current, [key]: !(current[key] ?? true) }))
+        }
+        historyCollapsed={historyCollapsed}
+        deletingSessionId={deletingSessionId}
+        historyDisabled={isStreaming}
+        onToggleHistoryCollapsed={() => setHistoryCollapsed((current) => !current)}
+        onSelectSession={handleSelectSidebarSession}
+        onCreateChat={(projectId, folderId) => void createChatInProject(projectId, folderId)}
+        onCreateFolder={(projectId, parentId) => void createFolderFromExplorer(projectId, parentId)}
+        onDeleteFolder={(folderId) => void deleteFolderFromExplorer(folderId)}
+        onMoveSession={(sessionId, projectId, folderId) =>
+          void moveSessionInExplorer(sessionId, projectId, folderId)
+        }
+        onDeleteSession={(session) => void deleteChatSession(session)}
+      />
 
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-16 items-center justify-between border-b border-forge-line bg-[#0c0d0f]/95 px-4">
