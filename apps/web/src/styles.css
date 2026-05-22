@@ -2,18 +2,75 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Truth's Forge AI — identidade visual v4 "Hearth" (warm/cozy/brasa).
+ * Fonte única da verdade dos tokens: design-reference/themes.jsx (themeVars(HEARTH)).
+ * Onde a tabela TOKEN_MAP (hex Tailwind) diverge do themes.jsx, vale o themes.jsx.
+ */
 :root {
   color-scheme: dark;
-  background: #0c0d0f;
-  color: #e7edf5;
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+
+  /* Fundos — escuro quente, near-black com leve subtom laranja */
+  --bg: oklch(0.155 0.014 50);
+  --bg-ink: oklch(0.105 0.012 45);
+  --bg-elev: oklch(0.195 0.015 50);
+  --bg-card: oklch(0.225 0.016 50);
+  --bg-chip: oklch(0.21 0.014 50);
+  --bg-hover: oklch(0.255 0.018 48);
+
+  /* Linhas — quietas */
+  --line: oklch(0.32 0.018 50);
+  --line-soft: oklch(0.25 0.014 48);
+
+  /* Texto */
+  --text: oklch(0.96 0.012 75);
+  --text-soft: oklch(0.84 0.02 70);
+  --muted: oklch(0.64 0.018 65);
+  --faint: oklch(0.46 0.018 60);
+
+  /* Marca — ember (primária, calor da forja) #f7931e */
+  --ember: #f7931e;
+  --ember-soft: #bd6c0e;
+  --ember-ink: #3a1f06;
+  --ember-glow: rgba(247, 147, 30, 0.22);
+
+  /* Marca — amethyst (secundária, usar com parcimônia: 3D, multi-agente) #7800ff */
+  --amethyst: #7800ff;
+  --amethyst-soft: #5a16a6;
+  --amethyst-glow: rgba(120, 0, 255, 0.28);
+
+  /* Marca — azure (info, dados, links) #15bddc */
+  --azure: #15bddc;
+  --azure-soft: #0b8196;
+  --azure-glow: rgba(21, 189, 220, 0.22);
+
+  /* Semântico */
+  --ok: #5acf8c;
+  --warn: #f7931e; /* ember dobra como aviso */
+  --err: #ff5a4a;
+
+  /* Tipografia — stack da marca */
+  --font-display: "Lilita One", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-text: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-serif: "Instrument Serif", "Inter", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Tom */
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-lg: 18px;
+  --shadow-soft: 0 1px 0 0 oklch(0.3 0.018 50 / 0.5), 0 24px 60px -24px oklch(0.05 0.005 50 / 0.7);
+  --shadow-glow: 0 0 0 1px rgba(247, 147, 30, 0.2), 0 12px 36px -14px rgba(247, 147, 30, 0.35);
+
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 * {
@@ -24,7 +81,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: linear-gradient(180deg, rgba(21, 21, 19, 0.98), rgba(12, 13, 15, 1) 44%), #0c0d0f;
+  background: var(--bg);
 }
 
 button,
@@ -38,11 +95,85 @@ button:focus-visible,
 textarea:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: 2px solid #4aa3ff;
+  outline: 2px solid var(--ember);
   outline-offset: 2px;
+}
+
+/* Scrollbars — thumb ember (Visual Identity Manual v4) */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(247, 147, 30, 0.18);
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(247, 147, 30, 0.32);
 }
 
 .scrollbar-slim {
   scrollbar-width: thin;
-  scrollbar-color: #313334 transparent;
+  scrollbar-color: var(--ember) transparent;
+}
+
+/* Keyframes — Visual Identity Manual v4 */
+@keyframes tfPulse {
+  0%,
+  100% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+
+@keyframes tfBlink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes tfShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes tfDot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes tfSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
