@@ -14,9 +14,10 @@ import { useAppStore } from "./app/store";
 import type { DashboardView, LoadState, ProviderCatalogState } from "./app/ui-state";
 import { ChatMessageList } from "./features/chat/components/ChatMessageList";
 import { ChatRightPanel } from "./features/chat/components/ChatRightPanel";
+import { ComposerContextChips } from "./features/chat/components/ComposerContextChips";
 import { ExecutionMenu } from "./features/chat/components/ExecutionMenu";
 import { ShortcutMenu } from "./features/chat/components/ShortcutMenu";
-import { ContextChip, DuplicateFileModal } from "./components/app-panels";
+import { DuplicateFileModal } from "./components/app-panels";
 import { AppSidebar } from "./components/AppSidebar";
 import { Badge } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
@@ -2351,63 +2352,21 @@ function App() {
                   <div className="mx-auto max-w-3xl rounded-md border border-forge-line bg-[#171716] p-2">
                     <div className="mb-2 space-y-2 border-b border-forge-line pb-2">
                       <div className="flex items-start justify-between gap-3">
-                        <div className="flex min-w-0 flex-1 flex-wrap gap-2">
-                          <ContextChip label="Agente" value={activeAgent?.name ?? "Sem agente"} />
-                          <ContextChip label="Projeto" value={`${contextProjectsLabel} · ${scopeModeLabel}`} />
-                          <ContextChip label="Bases" value={selectedContextDocsLabel} />
-                          <ContextChip
-                            label="Execução"
-                            value={executionLabels.length ? executionLabels.join(", ") : "padrão"}
-                          />
-                          {deepResearch && (
-                            <label className="inline-flex h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted">
-                              <span>Chamadas</span>
-                              <input
-                                type="number"
-                                min={1}
-                                max={100}
-                                value={deepResearchMaxToolCalls}
-                                onChange={(event) =>
-                                  setDeepResearchMaxToolCalls(
-                                    Math.max(1, Math.min(100, Number(event.target.value) || 1))
-                                  )
-                                }
-                                className="h-6 w-14 rounded border border-forge-line bg-[#080908] px-2 text-forge-text"
-                                aria-label="Limite de chamadas de ferramenta"
-                                title="Limite de chamadas de ferramenta"
-                              />
-                            </label>
-                          )}
-                          {responseMode === "image" && (
-                            <label className="inline-flex h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted">
-                              <span>Modelo imagem</span>
-                              <select
-                                value={effectiveImageModel?.id ?? ""}
-                                onChange={(event) => setImageModelId(event.target.value || null)}
-                                className="h-6 min-w-44 rounded border border-forge-line bg-[#080908] px-2 text-forge-text"
-                                aria-label="Modelo de geração de imagem"
-                                title="Modelo de geração de imagem"
-                              >
-                                {!imageCapableModels.length && <option value="">Sem modelos de imagem</option>}
-                                {imageCapableModels.map((model) => (
-                                  <option key={model.id} value={model.id}>
-                                    {model.display_name}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          )}
-                          {activeSessionIsModeling3D && (
-                            <Button
-                              className="h-8 px-2 text-xs"
-                              onClick={() => setModelingDiagnosticsOpen(true)}
-                              aria-label="Abrir diagnóstico MCP 3D"
-                              title="Abrir diagnóstico MCP 3D"
-                            >
-                              Diagnóstico 3D
-                            </Button>
-                          )}
-                        </div>
+                        <ComposerContextChips
+                          agentName={activeAgent?.name ?? "Sem agente"}
+                          projectLabel={`${contextProjectsLabel} · ${scopeModeLabel}`}
+                          knowledgeBasesLabel={selectedContextDocsLabel}
+                          executionLabel={executionLabels.length ? executionLabels.join(", ") : "padrão"}
+                          deepResearch={deepResearch}
+                          deepResearchMaxToolCalls={deepResearchMaxToolCalls}
+                          onChangeDeepResearchMaxToolCalls={setDeepResearchMaxToolCalls}
+                          imageMode={responseMode === "image"}
+                          selectedImageModelId={effectiveImageModel?.id ?? ""}
+                          imageCapableModels={imageCapableModels}
+                          onSelectImageModel={setImageModelId}
+                          showDiagnostics={activeSessionIsModeling3D}
+                          onOpenDiagnostics={() => setModelingDiagnosticsOpen(true)}
+                        />
 
                         <div className="flex items-center gap-1">
                           <ExecutionMenu
