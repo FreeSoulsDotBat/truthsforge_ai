@@ -59,5 +59,6 @@ Ativas (`specs/NNN-<slug>/`):
 - `specs/090-frontend-web-shell/` — frontend web (React/Vite).
 - `specs/100-mobile-desktop-shells/` — shells desktop/mobile e pareamento.
 - `specs/110-artifacts-export/` — canvas e exports.
+- `specs/120-sdd-spec-kit-adoption/` — meta: adoção do Spec Kit e governança SDD.
 
 Legado (arquivado e congelado em `specs/_legacy/`): `agents-tools`, `rag-sensitive-data`, `observability-quality`, `mobile-pairing` — migradas para `050`/`030`/`060`/`100`, respectivamente.
