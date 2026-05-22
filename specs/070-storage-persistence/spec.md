@@ -45,11 +45,11 @@ Os dois stores expõem a mesma superfície de métodos; mudanças devem manter p
 ## Critérios de sucesso
 
 - **CS-001**: A suíte de store passa contra Postgres e dev-store com o mesmo contrato.
-- **CS-002**: Não há divergência silenciosa entre os dois stores (garantida por testes de paridade — futuro).
+- **CS-002**: Não há divergência silenciosa entre os dois stores (garantida por `backend/tests/test_store_parity.py`).
 
 ## Premissas
 
-- A abstração (Protocol/repositórios) é alvo de ADR-015 (proposta), pendente de aprovação.
+- A abstração (Protocol/repositórios) é regida pelo ADR-015 (ratificado em `docs/decisions.md`); implementação faseada pendente dos gates.
 
 ## Fontes
 
@@ -57,7 +57,7 @@ Os dois stores expõem a mesma superfície de métodos; mudanças devem manter p
 - Código: `backend/app/storage/store.py`, `postgres_store.py`, `dev_store.py`, `__init__.py`
 - Docs: `docs/decisions.md` (ADR-004), `docs/architecture.md`
 - Testes: `backend/tests/test_postgres_store.py`, `test_alembic_migrations.py`
-- Proposta: `./research.md` (ADR-015)
+- Decisão (ADR-015): `./research.md` + `docs/decisions.md`
 - Specs relacionadas: todas as ondas (storage é transversal)
 
 ## Dívida de código documentada *(não executar nesta frente)*
@@ -70,4 +70,4 @@ Os dois stores expõem a mesma superfície de métodos; mudanças devem manter p
 
 - [x] Requisitos testáveis (EARS) com Fontes válidas
 - [x] Constituição referenciada
-- [x] Dívida documentada; ADR-015 proposto (não ratificado)
+- [x] Dívida documentada; ADR-015 ratificado (`docs/decisions.md`)
