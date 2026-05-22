@@ -1,4 +1,3 @@
-import { Menu, Wifi } from "lucide-react";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -12,6 +11,7 @@ import { quickActions } from "./app/constants";
 import { appDataQueryKey, fetchAppDataSnapshot } from "./app/queries/app-data";
 import { useAppStore } from "./app/store";
 import type { DashboardView, LoadState, ProviderCatalogState } from "./app/ui-state";
+import { AppHeader } from "./components/AppHeader";
 import { ChatComposerInput } from "./features/chat/components/ChatComposerInput";
 import { ChatMessageList } from "./features/chat/components/ChatMessageList";
 import { ChatRightPanel } from "./features/chat/components/ChatRightPanel";
@@ -21,8 +21,6 @@ import { ExecutionMenu } from "./features/chat/components/ExecutionMenu";
 import { ShortcutMenu } from "./features/chat/components/ShortcutMenu";
 import { DuplicateFileModal } from "./components/app-panels";
 import { AppSidebar } from "./components/AppSidebar";
-import { Badge } from "./components/ui/Badge";
-import { Button } from "./components/ui/Button";
 import { api, ChatStreamHttpError, streamChat } from "./lib/api";
 import {
   agentRequiredFieldsComplete,
@@ -76,11 +74,7 @@ import {
   KnowledgeDashboard,
   ProjectsDashboard
 } from "./features/dashboard/dashboard-sections";
-import {
-  ChatModeling3DBadge,
-  EnableModeling3DDialog,
-  ModelingDiagnosticsModal
-} from "./features/modeling-3d/components";
+import { EnableModeling3DDialog, ModelingDiagnosticsModal } from "./features/modeling-3d/components";
 import { isModeling3DChat } from "./features/modeling-3d/chat-domain";
 import { modeling3dApi } from "./features/modeling-3d";
 import { useModeling3dChat, useModelingPlanActions } from "./features/modeling-3d/hooks";
@@ -2282,56 +2276,15 @@ function App() {
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 items-center justify-between border-b border-forge-line bg-[#0c0d0f]/95 px-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <Button
-              className="h-9 w-9 px-0 md:hidden"
-              onClick={() => setMobileMenuOpen(true)}
-              aria-label="Abrir menu"
-              title="Abrir menu"
-            >
-              <Menu size={18} />
-            </Button>
-            <div className="min-w-0">
-              <h2 className="flex min-w-0 items-center gap-2 truncate text-base font-semibold">
-                {activeSessionIsModeling3D && <ChatModeling3DBadge />}
-                <span className="truncate">
-                  {activeView === "chat"
-                    ? (activeSession?.title ?? "Novo chat com JUDITE")
-                    : activeView === "agents"
-                      ? "Dashboard de agentes"
-                      : activeView === "projects"
-                        ? "Projetos e contexto"
-                        : activeView === "knowledge"
-                          ? "Bases de conhecimento"
-                          : "Arquivos da plataforma"}
-                </span>
-              </h2>
-              <p className="truncate text-xs text-forge-muted">
-                {activeView === "chat"
-                  ? (activeAgent?.description ?? "Orquestração local-first")
-                  : activeView === "agents"
-                    ? "JUDITE, especialistas e configuração de LLM por agente"
-                    : activeView === "projects"
-                      ? "Estruture projetos, pastas e escopo de recuperação"
-                      : activeView === "knowledge"
-                        ? "Coleções curadas para RAG e agentes"
-                        : "Uploads, imports e arquivos gerados"}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge className="hidden max-w-[260px] truncate md:inline-flex">{activeAgentModelLabel}</Badge>
-            <Badge
-              className={
-                loadState === "ready" ? "border-forge-green text-forge-green" : "border-forge-red text-forge-red"
-              }
-            >
-              <Wifi size={13} />
-              {loadState === "ready" ? "Online" : "Offline"}
-            </Badge>
-          </div>
-        </header>
+        <AppHeader
+          activeView={activeView}
+          isModeling3D={activeSessionIsModeling3D}
+          chatTitle={activeSession?.title ?? "Novo chat com JUDITE"}
+          chatSubtitle={activeAgent?.description ?? "Orquestração local-first"}
+          agentModelLabel={activeAgentModelLabel}
+          online={loadState === "ready"}
+          onOpenMobileMenu={() => setMobileMenuOpen(true)}
+        />
 
         <div className="flex min-h-0 flex-1">
           {activeView === "chat" ? (
