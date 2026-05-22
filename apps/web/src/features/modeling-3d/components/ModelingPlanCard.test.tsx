@@ -71,9 +71,7 @@ describe("ModelingPlanCard", () => {
     render(
       <ModelingPlanCard
         plan={plan({
-          steps: [
-            step({ tool_name: "blender.apply_boolean", risk_level: "high", approval_required: true })
-          ]
+          steps: [step({ tool_name: "blender.apply_boolean", risk_level: "high", approval_required: true })]
         })}
       />
     );
@@ -126,13 +124,7 @@ describe("ModelingPlanCard", () => {
   it("exposes Retry and Revise buttons when execution failed", () => {
     const onRetry = vi.fn();
     const onRevise = vi.fn();
-    render(
-      <ModelingPlanCard
-        plan={plan({ status: "failed" })}
-        onRetry={onRetry}
-        onRevise={onRevise}
-      />
-    );
+    render(<ModelingPlanCard plan={plan({ status: "failed" })} onRetry={onRetry} onRevise={onRevise} />);
     fireEvent.click(screen.getByTestId("modeling-plan-retry"));
     expect(onRetry).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId("modeling-plan-revise"));

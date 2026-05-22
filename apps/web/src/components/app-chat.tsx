@@ -240,8 +240,7 @@ export function MessageBubble({
           )}
           {markdownText ? <div className="leading-6">{renderMarkdown(markdownText)}</div> : null}
           {!isUser && metadata.modeling_plan ? (
-            metadata.modeling_plan.kind === "edit" &&
-            metadata.modeling_plan.status !== "waiting_approval" ? (
+            metadata.modeling_plan.kind === "edit" && metadata.modeling_plan.status !== "waiting_approval" ? (
               <ModelingEditCard plan={metadata.modeling_plan} />
             ) : (
               <ModelingPlanCard
@@ -249,44 +248,27 @@ export function MessageBubble({
                 isBusy={modelingPlanActions?.isBusy}
                 onApprove={
                   modelingPlanActions?.onApprove
-                    ? () =>
-                        modelingPlanActions.onApprove?.(
-                          metadata.modeling_plan!.id
-                        )
+                    ? () => modelingPlanActions.onApprove?.(metadata.modeling_plan!.id)
                     : undefined
                 }
                 onReject={
                   modelingPlanActions?.onReject
-                    ? (reason: string) =>
-                        modelingPlanActions.onReject?.(
-                          metadata.modeling_plan!.id,
-                          reason
-                        )
+                    ? (reason: string) => modelingPlanActions.onReject?.(metadata.modeling_plan!.id, reason)
                     : undefined
                 }
                 onRetry={
                   modelingPlanActions?.onRetry
-                    ? () =>
-                        modelingPlanActions.onRetry?.(
-                          metadata.modeling_plan!.id
-                        )
+                    ? () => modelingPlanActions.onRetry?.(metadata.modeling_plan!.id)
                     : undefined
                 }
                 onRevise={
                   modelingPlanActions?.onRevise
-                    ? () =>
-                        modelingPlanActions.onRevise?.(
-                          metadata.modeling_plan!.id
-                        )
+                    ? () => modelingPlanActions.onRevise?.(metadata.modeling_plan!.id)
                     : undefined
                 }
                 onEditPlan={
                   modelingPlanActions?.onEditPlan
-                    ? (payload) =>
-                        modelingPlanActions.onEditPlan?.(
-                          metadata.modeling_plan!.id,
-                          payload
-                        )
+                    ? (payload) => modelingPlanActions.onEditPlan?.(metadata.modeling_plan!.id, payload)
                     : undefined
                 }
               />

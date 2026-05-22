@@ -38,9 +38,7 @@ function iconFor(plan: ModelingPlan) {
 
 export function ModelingEditCard({ plan }: ModelingEditCardProps) {
   const summary = summaryText(plan);
-  const executedCount = plan.steps.filter(
-    (step) => step.status === "completed"
-  ).length;
+  const executedCount = plan.steps.filter((step) => step.status === "completed").length;
   const failedCount = plan.steps.filter((step) => step.status === "failed").length;
 
   return (
@@ -63,8 +61,7 @@ export function ModelingEditCard({ plan }: ModelingEditCardProps) {
       <p className="mt-1 line-clamp-2 text-forge-muted">{summary}</p>
       <p className="mt-1 text-forge-muted">
         {executedCount} etapa(s) executada(s)
-        {failedCount > 0 ? ` · ${failedCount} com falha` : ""} · sem aprovação
-        adicional (allowlist segura).
+        {failedCount > 0 ? ` · ${failedCount} com falha` : ""} · sem aprovação adicional (allowlist segura).
       </p>
     </section>
   );

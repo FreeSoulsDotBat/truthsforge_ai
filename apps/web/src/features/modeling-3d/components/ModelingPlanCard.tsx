@@ -16,12 +16,7 @@ import { useId, useMemo, useState } from "react";
 
 import { Badge } from "../../../components/ui/Badge";
 import { cn } from "../../../lib/utils";
-import type {
-  ModelingPlan,
-  ModelingPlanEdit,
-  ModelingPlanStep,
-  ModelingRiskLevel
-} from "../types";
+import type { ModelingPlan, ModelingPlanEdit, ModelingPlanStep, ModelingRiskLevel } from "../types";
 
 interface DraftStep {
   id: string | null;
@@ -45,8 +40,7 @@ const CARD_BUTTON_BASE =
   "inline-flex h-7 items-center justify-center gap-1 rounded-md border px-2.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-50";
 
 const CARD_BUTTON_VARIANTS = {
-  primary:
-    "border-forge-amber/60 bg-[#241d12] text-forge-amber hover:bg-[#2e2417]",
+  primary: "border-forge-amber/60 bg-[#241d12] text-forge-amber hover:bg-[#2e2417]",
   ghost: "border-forge-line bg-transparent text-forge-text hover:bg-[#1a1d20]",
   danger: "border-forge-red/60 bg-[#2a1414] text-forge-red hover:bg-[#3a1818]"
 } as const;
@@ -112,9 +106,7 @@ function statusLabel(status: string | undefined | null): string {
 }
 
 function highRiskSteps(steps: ModelingPlanStep[]): ModelingPlanStep[] {
-  return steps.filter(
-    (step) => step.risk_level === "high" || step.approval_required === true
-  );
+  return steps.filter((step) => step.risk_level === "high" || step.approval_required === true);
 }
 
 function isApprovable(plan: ModelingPlan): boolean {
@@ -181,9 +173,7 @@ export function ModelingPlanCard({
   }
 
   function updateDraft(index: number, patch: Partial<DraftStep>) {
-    setDraftSteps((current) =>
-      current.map((step, i) => (i === index ? { ...step, ...patch } : step))
-    );
+    setDraftSteps((current) => current.map((step, i) => (i === index ? { ...step, ...patch } : step)));
   }
 
   function moveDraft(index: number, delta: number) {
@@ -286,8 +276,8 @@ export function ModelingPlanCard({
         >
           <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden />
           <p className="leading-snug">
-            <strong>{highRisk.length} etapa(s) high-risk</strong> nesse plano —
-            aprovar autoriza todas, incluindo deleções e operações irreversíveis.
+            <strong>{highRisk.length} etapa(s) high-risk</strong> nesse plano — aprovar autoriza todas, incluindo
+            deleções e operações irreversíveis.
           </p>
         </div>
       )}
@@ -299,7 +289,9 @@ export function ModelingPlanCard({
               <span className="line-clamp-1 font-medium">
                 {step.seq}. {step.title}
               </span>
-              <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${RISK_BADGE_CLASS[step.risk_level]}`}>
+              <span
+                className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${RISK_BADGE_CLASS[step.risk_level]}`}
+              >
                 {step.risk_level}
               </span>
             </div>
@@ -315,13 +307,10 @@ export function ModelingPlanCard({
       </ol>
 
       {editing && (
-        <div
-          className="mt-3 rounded border border-forge-amber/40 bg-[#0e0f0e] p-2"
-          data-testid="modeling-plan-editor"
-        >
+        <div className="mt-3 rounded border border-forge-amber/40 bg-[#0e0f0e] p-2" data-testid="modeling-plan-editor">
           <p className="mb-2 text-[11px] text-forge-muted">
-            Edite as etapas (título, tool, risco e argumentos JSON). Reordene,
-            remova ou adicione. Salvar mantém o plano aguardando sua aprovação.
+            Edite as etapas (título, tool, risco e argumentos JSON). Reordene, remova ou adicione. Salvar mantém o plano
+            aguardando sua aprovação.
           </p>
           <ol className="space-y-2">
             {draftSteps.map((draft, index) => (
@@ -376,9 +365,7 @@ export function ModelingPlanCard({
                     aria-label={`Risco da etapa ${index + 1}`}
                     className="rounded border border-forge-line bg-[#161716] px-1 py-1 text-forge-text"
                     value={draft.risk_level}
-                    onChange={(e) =>
-                      updateDraft(index, { risk_level: e.target.value as ModelingRiskLevel })
-                    }
+                    onChange={(e) => updateDraft(index, { risk_level: e.target.value as ModelingRiskLevel })}
                     disabled={isBusy}
                   >
                     <option value="low">low</option>
@@ -512,8 +499,7 @@ export function ModelingPlanCard({
             </div>
           )}
           <p className="text-[11px] text-forge-muted">
-            Aprovação acontece só pelos botões acima — texto livre no chat não
-            executa o plano (ADR-013).
+            Aprovação acontece só pelos botões acima — texto livre no chat não executa o plano (ADR-013).
           </p>
         </div>
       )}
@@ -566,9 +552,7 @@ export function ModelingPlanCard({
       )}
 
       {showRejectedBlock && (
-        <p className="mt-3 text-forge-muted">
-          Plano rejeitado. O agente vai retomar a descoberta na próxima mensagem.
-        </p>
+        <p className="mt-3 text-forge-muted">Plano rejeitado. O agente vai retomar a descoberta na próxima mensagem.</p>
       )}
     </section>
   );

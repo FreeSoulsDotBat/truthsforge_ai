@@ -41,13 +41,7 @@ function traceSourceLabel(source: ModelingTraceEvent["source"]): string {
   }
 }
 
-export function ModelingDiagnosticsModal({
-  open,
-  planId,
-  projectId,
-  traceId,
-  onClose
-}: ModelingDiagnosticsModalProps) {
+export function ModelingDiagnosticsModal({ open, planId, projectId, traceId, onClose }: ModelingDiagnosticsModalProps) {
   const diagnosticsQuery = useModeling3dDiagnostics(planId, projectId);
   const traceQuery = useModeling3dTrace(planId, traceId, { enabled: open });
   const recordEvent = useRecordClientTrace(traceId, planId);
@@ -165,12 +159,8 @@ export function ModelingDiagnosticsModal({
                   </code>
                 </p>
               )}
-              {traceQuery.isLoading && (
-                <p className="text-xs text-forge-muted">Carregando trace...</p>
-              )}
-              {traceQuery.isError && (
-                <p className="text-xs text-forge-red">Falha ao carregar trace.</p>
-              )}
+              {traceQuery.isLoading && <p className="text-xs text-forge-muted">Carregando trace...</p>}
+              {traceQuery.isError && <p className="text-xs text-forge-red">Falha ao carregar trace.</p>}
               {traceQuery.data && traceQuery.data.length === 0 && (
                 <p className="text-xs text-forge-muted">
                   Sem eventos de trace para este plano. (Observabilidade pode estar desativada — veja
@@ -181,29 +171,20 @@ export function ModelingDiagnosticsModal({
                 traceQuery.data
                   .filter((evt) => traceLevelFilter.has(evt.level))
                   .map((evt) => (
-                    <details
-                      key={evt.id}
-                      className="rounded-md border border-forge-line bg-[#171716] p-2 text-xs"
-                    >
+                    <details key={evt.id} className="rounded-md border border-forge-line bg-[#171716] p-2 text-xs">
                       <summary className="flex flex-wrap items-center justify-between gap-2 cursor-pointer">
                         <span className="flex items-center gap-2">
                           <span className="rounded bg-[#0e0f0e] px-1.5 py-0.5 text-[10px] uppercase text-forge-muted">
                             {traceSourceLabel(evt.source)}
                           </span>
-                          <span className={`font-medium ${traceLevelClass(evt.level)}`}>
-                            {evt.event_type}
-                          </span>
+                          <span className={`font-medium ${traceLevelClass(evt.level)}`}>{evt.event_type}</span>
                           {evt.duration_ms != null && (
-                            <span className="text-forge-muted">
-                              · {formatDurationMs(evt.duration_ms)}
-                            </span>
+                            <span className="text-forge-muted">· {formatDurationMs(evt.duration_ms)}</span>
                           )}
                         </span>
                         <span className="text-forge-muted">{formatTimestamp(evt.created_at)}</span>
                       </summary>
-                      {evt.message && (
-                        <p className="mt-2 text-forge-muted">{evt.message}</p>
-                      )}
+                      {evt.message && <p className="mt-2 text-forge-muted">{evt.message}</p>}
                       {evt.payload && Object.keys(evt.payload).length > 0 && (
                         <pre className="mt-2 max-h-48 overflow-auto rounded bg-[#0e0f0e] p-2 text-[10px] text-forge-muted">
                           {JSON.stringify(evt.payload, null, 2)}
