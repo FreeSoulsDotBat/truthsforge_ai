@@ -28,12 +28,16 @@ from app.core.contracts import (
     ModelingApprovalRequest,
     ModelingCapabilities,
     ModelingCapability,
+    ModelingDiscoveryAssessment,
     ModelingExecutionResult,
     ModelingPlan,
     ModelingPlanCreate,
+    ModelingPlanEdit,
     ModelingPlanStatus,
+    ModelingPlanStep,
     ModelingPrintabilityReport,
     ModelingPrintabilityRequest,
+    ModelingRiskLevel,
     ModelingSession,
     ModelingSessionStart,
     ModelingSnapshot,
@@ -57,8 +61,29 @@ from app.modeling.executor import (
 )
 from app.modeling.mcp_client import LocalMCPClient
 from app.modeling.planner_service import ModelingPlannerService
+from app.modeling.policy import apply_modeling_policy
 from app.modeling.printability import ModelingPrintabilityService
 from app.modeling.snapshot_service import ModelingSnapshotService
+from app.modeling.tool_registry import PLANNER_TOOLSET
+
+
+class ModelingPlanNotEditable(Exception):
+    """Plano não pode ser editado no estado atual (já aprovado/executado)."""
+
+    def __init__(self, plan_id: str, status: ModelingPlanStatus) -> None:
+        super().__init__(
+            f"Plano {plan_id!r} não é editável no estado {status.value!r}."
+        )
+        self.plan_id = plan_id
+        self.status = status
+
+
+class ModelingInvalidEditTool(Exception):
+    """Etapa editada referencia um tool fora da allowlist do planner."""
+
+    def __init__(self, tool_name: str) -> None:
+        super().__init__(f"Ferramenta não permitida na edição: {tool_name!r}.")
+        self.tool_name = tool_name
 
 
 class ModelingService:
@@ -154,6 +179,25 @@ class ModelingService:
     async def create_plan_async(self, payload: ModelingPlanCreate) -> ModelingPlan:
         return await self.planner.create_plan_async(payload)
 
+    async def assess_request_async(
+        self,
+        prompt: str,
+        *,
+        history: list[dict[str, str]] | None = None,
+        software_override: Any = None,
+        threshold: float | None = None,
+        has_existing_model: bool = False,
+    ) -> ModelingDiscoveryAssessment:
+        """P2/P3 discovery: avalia prontidão e intent (edit/new_model)."""
+
+        return await self.planner.assess_request_async(
+            prompt,
+            history=history,
+            software_override=software_override,
+            threshold=threshold,
+            has_existing_model=has_existing_model,
+        )
+
     # ------------------------------------------------------------------
     # approval & step decisions (kept inline; mutate only the persisted plan)
     # ------------------------------------------------------------------
@@ -195,6 +239,79 @@ class ModelingService:
             ),
         )
         return approved
+
+    def edit_plan(self, plan_id: str, payload: ModelingPlanEdit) -> ModelingPlan:
+        """P4: edita um plano ANTES da aprovação (etapas e/ou rationale).
+
+        Permitido só enquanto ``draft``/``waiting_approval``. Valida cada
+        ``tool_name`` contra a allowlist do planner, reordena ``seq`` pela
+        posição, re-aplica a policy de segurança e mantém o plano em
+        ``waiting_approval`` (gate da P1) para o card seguir exibindo Aprovar.
+        Ver specs/005-modeling-3d-fusion/chat-flow-redesign.md (P4).
+        """
+
+        plan = self._get_plan_or_raise(plan_id)
+        if plan.status not in {
+            ModelingPlanStatus.draft,
+            ModelingPlanStatus.waiting_approval,
+        }:
+            raise ModelingPlanNotEditable(plan_id, plan.status)
+
+        updates: dict[str, Any] = {"updated_at": now_utc()}
+        if payload.rationale is not None:
+            updates["rationale"] = payload.rationale
+        if payload.steps is not None:
+            existing_by_id = {step.id: step for step in plan.steps}
+            new_steps: list[ModelingPlanStep] = []
+            for index, edit in enumerate(payload.steps, start=1):
+                if edit.tool_name not in PLANNER_TOOLSET:
+                    raise ModelingInvalidEditTool(edit.tool_name)
+                base = existing_by_id.get(edit.id) if edit.id else None
+                if base is not None:
+                    new_steps.append(
+                        base.model_copy(
+                            update={
+                                "seq": index,
+                                "title": edit.title,
+                                "tool_name": edit.tool_name,
+                                "risk_level": edit.risk_level,
+                                "input_json": edit.input_json,
+                                "status": ModelingStepStatus.pending,
+                                "output_json": {},
+                                "error": None,
+                                "approved_at": None,
+                                "completed_at": None,
+                            }
+                        )
+                    )
+                else:
+                    new_steps.append(
+                        ModelingPlanStep(
+                            seq=index,
+                            title=edit.title,
+                            software=plan.software_choice,
+                            tool_name=edit.tool_name,
+                            risk_level=edit.risk_level,
+                            input_json=edit.input_json,
+                        )
+                    )
+            updates["steps"] = new_steps
+
+        edited = apply_modeling_policy(plan.model_copy(update=updates))
+        # Mantém o gate da P1: a policy pode ter promovido para ``approved``
+        # (sem high-risk); forçamos waiting_approval para o card continuar.
+        if edited.status == ModelingPlanStatus.approved:
+            edited = edited.model_copy(
+                update={"status": ModelingPlanStatus.waiting_approval}
+            )
+        self.store.upsert_modeling_plan(edited)
+        self.store.add_audit_event(
+            AuditEvent(
+                event_type="modeling.plan_edited",
+                metadata={"plan_id": edited.id, "step_count": len(edited.steps)},
+            ),
+        )
+        return edited
 
     def decide_step(
         self, step_id: str, payload: ModelingApprovalRequest

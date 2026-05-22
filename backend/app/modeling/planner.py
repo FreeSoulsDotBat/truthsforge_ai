@@ -404,13 +404,14 @@ def create_llm_plan(
     gateway: LLMGateway,
     model: ModelConfig,
     knowledge_bases: list[KnowledgeBase] | None = None,
+    edit_context: str | None = None,
 ) -> ModelingPlan:
     """Generate a plan by calling the LLM with Structured Outputs.
 
     Raises any exception from the underlying provider; the caller is expected
     to wrap this call with a try/except and fall back to the heuristic plan.
     """
-    messages = _build_messages(payload, knowledge_bases or [])
+    messages = _build_messages(payload, knowledge_bases or [], edit_context=edit_context)
     parsed = asyncio.run(
         gateway.generate_structured(
             model=model,
@@ -428,8 +429,9 @@ async def create_llm_plan_async(
     gateway: LLMGateway,
     model: ModelConfig,
     knowledge_bases: list[KnowledgeBase] | None = None,
+    edit_context: str | None = None,
 ) -> ModelingPlan:
-    messages = _build_messages(payload, knowledge_bases or [])
+    messages = _build_messages(payload, knowledge_bases or [], edit_context=edit_context)
     parsed = await gateway.generate_structured(
         model=model,
         messages=messages,
@@ -439,8 +441,65 @@ async def create_llm_plan_async(
     return _plan_from_llm_payload(payload, parsed)
 
 
+def build_edit_context_block(parent_plan: ModelingPlan | None) -> str | None:
+    """P5: monta um bloco de contexto para o planner de EDIÇÃO.
+
+    O backend não fala com o Fusion ao vivo na hora de planejar, então usamos
+    o que já temos: o histórico de construção do plano-pai (etapas + args) e as
+    métricas de corpos capturadas nas saídas das etapas executadas
+    (validate_dimensions / validate_printability / query_geometry). Isso dá ao
+    LLM o estado conhecido do modelo para gerar um DELTA em vez de recriar a
+    base. Retorna None quando não há plano-pai utilizável.
+    """
+
+    if parent_plan is None or not parent_plan.steps:
+        return None
+
+    history_lines: list[str] = []
+    for step in parent_plan.steps:
+        args = ""
+        try:
+            if step.input_json:
+                args = " args=" + json.dumps(step.input_json, ensure_ascii=False)
+        except (TypeError, ValueError):
+            args = ""
+        history_lines.append(f"- {step.seq}. {step.title} [{step.tool_name}]{args}")
+
+    # Métricas de corpos: varre as saídas das etapas por chaves conhecidas.
+    metrics_lines: list[str] = []
+    for step in parent_plan.steps:
+        output = step.output_json or {}
+        bodies = output.get("bodies")
+        if isinstance(bodies, list):
+            for body in bodies:
+                if isinstance(body, dict) and body.get("name"):
+                    metrics_lines.append(f"- corpo '{body.get('name')}': {json.dumps(body, ensure_ascii=False)}")
+        metrics = output.get("metrics")
+        if isinstance(metrics, dict):
+            for name, data in metrics.items():
+                metrics_lines.append(f"- corpo '{name}': {json.dumps(data, ensure_ascii=False)}")
+
+    block = [
+        "<modelo-atual>",
+        "Este chat JÁ TEM um modelo construído. Você está gerando uma EDIÇÃO.",
+        "NÃO recrie a base do zero; produza SOMENTE as etapas do delta pedido.",
+        "Referencie corpos/sketches existentes pelo NOME. NÃO inclua um passo",
+        "fusion.open_design com new_document=true (isso apagaria o modelo).",
+        "",
+        "Histórico de construção (plano anterior):",
+        *history_lines,
+    ]
+    if metrics_lines:
+        block.extend(["", "Métricas conhecidas dos corpos atuais:", *metrics_lines[:20]])
+    block.append("</modelo-atual>")
+    return "\n".join(block)
+
+
 def _build_messages(
-    payload: ModelingPlanCreate, knowledge_bases: list[KnowledgeBase]
+    payload: ModelingPlanCreate,
+    knowledge_bases: list[KnowledgeBase],
+    *,
+    edit_context: str | None = None,
 ) -> list[dict[str, str]]:
     kb_block = _knowledge_block(knowledge_bases)
     system_prompt = (
@@ -458,6 +517,27 @@ def _build_messages(
         "- input_json deve ser uma string JSON válida com os parâmetros da tool, em mm quando\n"
         '  fizer sentido (ex.: "{\\"primitive\\":\\"cube\\",\\"dimensions_mm\\":[40,20,10]}").'
         "\n\n"
+        "REGRAS DE SEQUÊNCIA GEOMÉTRICA (Fusion) — OBRIGATÓRIAS:\n"
+        "- `fusion.create_sketch` cria um sketch VAZIO. Ele NÃO desenha nada.\n"
+        "- Para extrudar ou revolver, o sketch precisa de um perfil FECHADO. Portanto,\n"
+        "  ANTES de `fusion.extrude_profile`/`fusion.revolve_profile` você DEVE chamar\n"
+        "  uma tool de geometria que desenhe a forma no sketch:\n"
+        "  `fusion.add_rectangle`, `fusion.add_circle`, `fusion.add_polygon`,\n"
+        "  `fusion.add_line` (com closed=true) ou `fusion.add_arc`.\n"
+        "- A tool de geometria recebe `sketch` (ou `sketch_name`) igual ao nome usado\n"
+        "  no `create_sketch` correspondente. Use nomes consistentes entre os steps.\n"
+        "- NUNCA descreva a geometria apenas em texto (campos como `notes`/`description`).\n"
+        "  Texto livre é IGNORADO pelo executor; só tools de geometria criam perfil.\n"
+        "- PREFIRA primitivas diretas quando a forma for básica: `fusion.add_sphere`,\n"
+        "  `fusion.add_box`, `fusion.add_cylinder`, `fusion.add_cone` criam o corpo\n"
+        "  em UM step (sem sketch/revolve manual). Use-as para bola/esfera, caixa,\n"
+        "  cilindro e cone — é mais robusto que montar o perfil à mão.\n"
+        "- Só use `fusion.revolve_profile` para formas de revolução NÃO cobertas pelas\n"
+        "  primitivas. O meio-perfil deve ficar INTEIRAMENTE de um lado do eixo (não\n"
+        "  cruze o eixo de revolução, senão o sólido é inválido).\n"
+        "- Para PENTÁGONO/HEXÁGONO e afins use `fusion.add_polygon` (sides=5/6...).\n"
+        "- Ordem típica de um corpo composto: create_sketch → add_<forma> → extrude/revolve.\n"
+        "\n"
         "Ferramentas disponíveis:\n"
         + "\n".join(f"- {tool}" for tool in PLANNER_TOOLSET)
         + "\n\nResponda apenas em JSON conforme o schema modeling_execution_plan."
@@ -468,6 +548,8 @@ def _build_messages(
             f"{user_prompt}\n\n"
             f"O usuário pediu explicitamente software={payload.software_override.value}; respeite."
         )
+    if edit_context:
+        user_prompt = f"{user_prompt}\n\n{edit_context}"
     if kb_block:
         user_prompt = f"{user_prompt}\n\n{kb_block}"
     return [

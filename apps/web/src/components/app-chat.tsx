@@ -18,6 +18,7 @@ import { type ChatMessageAttachment, messageMetadata } from "../features/chat/ch
 import { imageUrlsFromMarkdown, renderMarkdown, stripImageMarkdown } from "../lib/message-content";
 import type { StreamStatusEvent } from "../lib/api";
 import type { ChatMessage } from "../types/api";
+import type { ModelingPlanEdit } from "../types/api";
 import type { PlatformFile } from "../types/api";
 
 function OfficialReasoningSummary({ isActive, summary }: { isActive: boolean; summary?: string }) {
@@ -166,6 +167,7 @@ export interface ModelingPlanCardActions {
   onReject?: (planId: string, reason: string) => Promise<void> | void;
   onRetry?: (planId: string) => Promise<void> | void;
   onRevise?: (planId: string) => Promise<void> | void;
+  onEditPlan?: (planId: string, payload: ModelingPlanEdit) => Promise<void> | void;
   isBusy?: boolean;
 }
 
@@ -275,6 +277,15 @@ export function MessageBubble({
                     ? () =>
                         modelingPlanActions.onRevise?.(
                           metadata.modeling_plan!.id
+                        )
+                    : undefined
+                }
+                onEditPlan={
+                  modelingPlanActions?.onEditPlan
+                    ? (payload) =>
+                        modelingPlanActions.onEditPlan?.(
+                          metadata.modeling_plan!.id,
+                          payload
                         )
                     : undefined
                 }

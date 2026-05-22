@@ -168,6 +168,21 @@ export interface ModelingApprovalRequest {
   reason?: string;
 }
 
+// P4: edição de plano antes da aprovação. O cliente envia a lista completa
+// de etapas (cobre editar/reordenar/remover/adicionar).
+export interface ModelingPlanEditStep {
+  id?: string | null;
+  title: string;
+  tool_name: string;
+  risk_level?: ModelingRiskLevel;
+  input_json?: Record<string, unknown>;
+}
+
+export interface ModelingPlanEdit {
+  steps?: ModelingPlanEditStep[];
+  rationale?: string | null;
+}
+
 export interface ModelingSnapshotFile {
   relative_path: string;
   sha256: string;

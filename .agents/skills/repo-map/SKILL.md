@@ -9,13 +9,15 @@ Explicar rapidamente onde vivem código, docs, runtime e responsabilidades no `t
 
 ## Sempre consultar primeiro
 
+- `.specify/memory/constitution.md` (invariantes não-negociáveis do projeto)
+- `specs/README.md` (catálogo de specs `NNN-` e padrão Spec Kit)
 - `README.md`
 - `docs/application-map.md`
 - `docs/architecture.md`
 - `docs/decisions.md`
 - `docs/implementation-plan.md`
 - `docs/mvp-readiness.md`
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`
 
 ## Saída esperada
 

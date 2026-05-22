@@ -13,8 +13,10 @@ O projeto e um monorepo: backend, frontends, documentacao, pacotes compartilhado
 - `packages/ui`: espaco reservado para componentes compartilhados.
 - `infra`: Docker Compose e configuracao dos servicos locais.
 - `docs`: documentacao do produto, arquitetura e operacao.
-- `specs`: especificacoes SDD vivas; `specs/repo-foundation` e o baseline compartilhado por humanos e agentes.
+- `specs`: especificacoes SDD vivas (padrao GitHub Spec Kit, pastas `NNN-<slug>`); `specs/000-repo-foundation` e o baseline; specs absorvidas ficam congeladas em `specs/_legacy`.
+- `.specify`: constituicao (`memory/constitution.md`), templates e scripts do Spec Kit.
 - `.agents/skills`: procedimentos versionados por bounded context para Codex, Claude Code, Devin e humanos.
+- `.claude/skills/speckit-*`: fases SDD (constitution/specify/clarify/plan/analyze/tasks/implement) para Claude Code.
 - `.local`: dados locais ignorados pelo Git.
 
 ## Backend
@@ -57,15 +59,18 @@ Ele nao duplica a documentacao: le diretamente os arquivos Markdown da pasta `do
 
 ## SDD
 
-O SDD vive em `specs/` e organiza intenção, plano, tasks e handoff sem substituir `docs/`.
+O SDD segue o padrão **GitHub Spec Kit**. Invariantes em `.specify/memory/constitution.md`; templates em `.specify/templates/`; fases como skills em `.claude/skills/speckit-*`. As specs vivem em `specs/NNN-<slug>/` e organizam intenção, plano, tasks e handoff sem substituir `docs/`.
 
+- `.specify/memory/constitution.md`: princípios não-negociáveis (P1–P9) que governam todas as fases.
 - `AGENTS.md`: contrato comum de arquitetura, prioridade de contexto e qualidade.
 - `CLAUDE.md`: adaptador mínimo para Claude Code carregar `AGENTS.md`.
-- `specs/repo-foundation/spec.md`: baseline do MVP local-first.
-- `specs/repo-foundation/plan.md`: plano técnico e sequência de workstreams.
-- `specs/repo-foundation/tasks.md`: backlog rastreável por prioridade e executor sugerido.
-- `specs/repo-foundation/handoff.md`: continuidade quando humanos, Codex, Claude Code ou Devin alternarem a execução.
-- `specs/<slug-do-dominio>/`: specs por domínio para agentes/tools, RAG, mobile, artifacts/export, 3D/Fusion e observabilidade.
+- `specs/000-repo-foundation/spec.md`: baseline do MVP local-first.
+- `specs/000-repo-foundation/plan.md`: plano técnico e sequência de workstreams.
+- `specs/000-repo-foundation/tasks.md`: backlog rastreável por prioridade e executor sugerido.
+- `specs/000-repo-foundation/handoff.md`: continuidade quando humanos, Codex, Claude Code ou Devin alternarem a execução.
+- `specs/NNN-<slug>/`: specs por domínio (chat, gateway, files/RAG, import/workers, agents/tools, cost/audit, storage, prompts, frontend, mobile/desktop, 3D, artifacts) — catálogo em `specs/README.md`.
+- `specs/_legacy/`: specs absorvidas por um domínio novo, congeladas.
+- `.claude/skills/speckit-*`: fases do fluxo SDD para Claude Code.
 - `docs/delivery-checklist.md`: checklist obrigatório de entrega para PRs e handoffs.
 - `.agents/skills/`: skills instruction-first para mapear repo, validar qualidade e trabalhar nos principais bounded contexts.
 

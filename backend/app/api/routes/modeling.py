@@ -8,13 +8,14 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.core.contracts import (
-    ChatSession,
-    ModelingApprovalDecision,
+    ChatModelingStage,
     ModelingApprovalRequest,
     ModelingCapabilities,
     ModelingExecutionResult,
     ModelingModelVersion,
     ModelingPlan,
+    ModelingPlanEdit,
+    ModelingPlanStatus,
     ModelingPrintabilityReport,
     ModelingPrintabilityRequest,
     ModelingSession,
@@ -28,34 +29,17 @@ from app.core.contracts import (
     ModelingTraceEventCreate,
     ModelingTraceLevel,
     ModelingTraceSource,
+    now_utc,
 )
-from app.modeling.chat_orchestrator import get_modeling_orchestrator
 from app.modeling.observability import _truncate_payload, get_tracer
-from app.modeling.service import get_modeling_service
+from app.modeling.service import (
+    ModelingInvalidEditTool,
+    ModelingPlanNotEditable,
+    get_modeling_service,
+)
 from app.storage.store import get_store
 
 router = APIRouter()
-
-
-def _modeling_chat_for_plan(store: Any, plan: ModelingPlan) -> ChatSession | None:
-    """Resolve the 3D chat that owns ``plan`` so the orchestrator can drive
-    its state machine on approve/execute.
-
-    Returns ``None`` for plans not linked to a modeling chat (legacy plans
-    created directly via ``ModelingService``), so callers fall back to the
-    plain service path and keep working.
-    """
-
-    conversation_id = getattr(plan, "conversation_id", None)
-    if not conversation_id or not hasattr(store, "get_chat_session"):
-        return None
-    try:
-        chat = store.get_chat_session(conversation_id)
-    except Exception:  # noqa: BLE001 - missing chat must never break execution
-        return None
-    if chat is None or not chat.is_modeling_3d:
-        return None
-    return chat
 
 
 def _service():
@@ -118,57 +102,69 @@ def get_plan(plan_id: str) -> ModelingPlan:
 
 @router.post("/plans/{plan_id}/approve", response_model=ModelingPlan)
 def approve_plan(plan_id: str, payload: ModelingApprovalRequest) -> ModelingPlan:
-    """Approve (or reject) a plan from the in-chat card.
-
-    For plans linked to a 3D chat this drives the ModelingChatOrchestrator so
-    the chat state machine and ``modeling.chat.*`` audit advance with the
-    decision (ADR-013). Execution is deferred to ``/execute`` so the existing
-    two-call frontend contract (``useModelingPlanActions``) keeps working.
-    Legacy/unlinked plans fall back to the plain service path.
-    """
-
-    store = get_store()
-    plan = store.get_modeling_plan(plan_id) if hasattr(store, "get_modeling_plan") else None
-    if plan is None:
-        raise HTTPException(status_code=404, detail="Plano 3D não encontrado.")
-    chat = _modeling_chat_for_plan(store, plan)
-    if chat is not None:
-        orchestrator = get_modeling_orchestrator(store)
-        if payload.decision == ModelingApprovalDecision.reject:
-            _, rejected = orchestrator.reject(chat, plan_id, reason=payload.reason or "")
-            return rejected
-        _, approved = orchestrator.approve_plan_only(chat, plan_id, payload=payload)
-        return approved
     try:
         return _service().approve_plan(plan_id, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
 
 
-@router.post("/plans/{plan_id}/execute", response_model=ModelingExecutionResult)
-def execute_plan(plan_id: str) -> ModelingExecutionResult:
-    """Execute an approved plan.
+@router.patch("/plans/{plan_id}", response_model=ModelingPlan)
+def edit_plan(plan_id: str, payload: ModelingPlanEdit) -> ModelingPlan:
+    """P4: edita um plano antes da aprovação (etapas/rationale)."""
 
-    For chat-linked plans the ModelingChatOrchestrator runs the executor and
-    advances the chat to ``editing`` (and emits the execution audit/trace).
-    The executor still skips any step whose approval was not granted, so
-    high-risk steps never run without an explicit human approval. Legacy
-    plans fall back to the plain service path.
-    """
-
-    store = get_store()
-    plan = store.get_modeling_plan(plan_id) if hasattr(store, "get_modeling_plan") else None
-    if plan is None:
-        raise HTTPException(status_code=404, detail="Plano 3D não encontrado.")
-    chat = _modeling_chat_for_plan(store, plan)
-    if chat is not None:
-        orchestrator = get_modeling_orchestrator(store)
-        _, _, execution = orchestrator.execute_plan(chat, plan_id)
-        return execution
     try:
-        return _service().execute_plan(plan_id)
+        return _service().edit_plan(plan_id, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
+    except ModelingPlanNotEditable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ModelingInvalidEditTool as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/plans/{plan_id}/execute", response_model=ModelingExecutionResult)
+def execute_plan(plan_id: str) -> ModelingExecutionResult:
+    try:
+        result = _service().execute_plan(plan_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
+    _advance_chat_to_editing_after_execute(result)
+    return result
+
+
+def _advance_chat_to_editing_after_execute(result: ModelingExecutionResult) -> None:
+    """P3: após uma execução concluída via card, avança o chat 3D para
+    ``editing`` para que o próximo turno seja tratado como edição (e não como
+    novo plano primário). Sem isso o chat ficava preso em ``planning`` e
+    follow-ups recriavam o modelo. Best-effort: nunca quebra a execução.
+    """
+
+    plan = getattr(result, "plan", None)
+    if plan is None or plan.status != ModelingPlanStatus.completed:
+        return
+    conversation_id = plan.conversation_id
+    if not conversation_id:
+        return
+    store = get_store()
+    if not hasattr(store, "get_chat_session") or not hasattr(store, "upsert_chat_session"):
+        return
+    try:
+        session = store.get_chat_session(conversation_id)
+    except Exception:
+        return
+    if session is None or not session.is_modeling_3d:
+        return
+    if session.modeling_stage == ChatModelingStage.editing:
+        return
+    store.upsert_chat_session(
+        session.model_copy(
+            update={
+                "modeling_stage": ChatModelingStage.editing,
+                "modeling_plan_id": plan.id,
+                "updated_at": now_utc(),
+            }
+        )
+    )
 
 
 # NOTE: ``POST /steps/{step_id}/approve`` was removed in Onda 2.11

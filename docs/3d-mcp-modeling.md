@@ -536,13 +536,130 @@ periodicamente para não acumular chaves por traces já encerrados. No backend,
 em profundidade, buffers têm limite máximo e a eviction persiste eventos fora
 do lock global para não bloquear gravações concorrentes de trace.
 
+### Debug de schema drift do adapter Fusion (fix-by-trace)
+
+Quando um prompt 3D falha no Fusion, o método é sempre o mesmo: **rodar o
+prompt → ler o trace → achar o `error_code` e o `request_json` exato que o
+LLM mandou → acomodar o drift no adapter (`backend/app/modeling/fusion_mcp_scripts.py`)
+→ adicionar teste de contrato → repetir.** Os scripts abaixo extraem tudo
+que esse loop precisa. Tudo é `JSONB` em duas tabelas (ver
+`docs/infra-observability.md`):
+
+- `modeling_trace_events` — colunas `trace_id`, `plan_id`, `payload` (cada
+  evento do trace: `planner.*`, `executor.step_started`/`step_ok`/`step_error`).
+- `modeling_tool_calls` — `payload` com `request_json` (args que o LLM mandou)
+  e `response_json` (resposta do adapter, incluindo `host_details.inner_traceback`).
+
+Atalho de conexão (usa as credenciais de `infra/.env`):
+
+```powershell
+# abre um psql no container (defaults de infra/.env: forge / truths_forge_ai)
+docker compose -p truths-forge-ai exec postgres `
+  psql -U forge -d truths_forge_ai
+```
+
+**1. Achar o trace mais recente** (ou pegue o `trace_id` que a UI mostra no
+botão de diagnóstico / no SSE `modeling_plan`):
+
+```sql
+SELECT trace_id,
+       payload->>'event_type' AS event,
+       created_at
+FROM modeling_trace_events
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+**2. Linha do tempo completa de um trace** (é o 1º bloco que costumamos colar):
+
+```sql
+SELECT payload
+FROM modeling_trace_events
+WHERE trace_id = 'mt_XXXXXXXX'
+ORDER BY (payload->>'sequence')::int;
+```
+
+**3. Só os passos que falharam** (vai direto ao drift — `error_code` +
+mensagem por step):
+
+```sql
+SELECT payload->>'sequence'                  AS seq,
+       payload->'payload'->>'tool_name'      AS tool,
+       payload->'payload'->>'error_code'     AS error_code,
+       payload->>'message'                   AS message
+FROM modeling_trace_events
+WHERE trace_id = 'mt_XXXXXXXX'
+  AND payload->>'level' = 'error'
+ORDER BY (payload->>'sequence')::int;
+```
+
+**4. Tool calls do plano com os args crus** (é o 2º bloco; `request_json`
+mostra a chave/sintaxe que o LLM inventou vs. o que o adapter esperava):
+
+```sql
+SELECT payload->>'seq'            AS seq,
+       payload->>'tool_name'      AS tool,
+       payload->>'status'         AS status,
+       payload->>'error_code'     AS error_code,
+       payload->'request_json'    AS request_json,
+       payload->'response_json'->'host_details'->>'inner_traceback' AS inner_traceback
+FROM modeling_tool_calls
+WHERE payload->>'plan_id' = 'm3d_plan_XXXXXXXX'
+ORDER BY (payload->>'seq')::int;
+```
+
+**5. Procurar um drift recorrente em todos os traces** (ex: quantas vezes
+`fusion.invalid_dimensions` apareceu por tool — prioriza o que corrigir):
+
+```sql
+SELECT payload->'payload'->>'tool_name'  AS tool,
+       payload->'payload'->>'error_code' AS error_code,
+       count(*)                          AS hits
+FROM modeling_trace_events
+WHERE payload->>'level' = 'error'
+GROUP BY 1, 2
+ORDER BY hits DESC;
+```
+
+**6. Logs estruturados do backend** (JsonFormatter do logger
+`app.modeling.observability` — é o 3º bloco; útil quando o erro nem chega a
+virar tool call, ex: falha de rede do LLM com fallback heurístico):
+
+```powershell
+docker compose -p truths-forge-ai logs backend --since 10m `
+  | Select-String 'mt_XXXXXXXX'
+```
+
+Alternativa por HTTP (sem SQL), reconstrói a timeline pelo `trace_id`:
+`GET /api/3d/traces/{trace_id}` e `GET /api/3d/plans/{plan_id}/trace`.
+
+**Mapa de `error_code` → onde olhar no adapter:**
+
+| `error_code`                  | Significado                                  | Onde acomodar |
+| ----------------------------- | -------------------------------------------- | ------------- |
+| `fusion.invalid_dimensions`   | chave/sintaxe de dimensão que o parser não aceitou | normalização no início da função da tool (`_add_*`, `_extrude_profile`) ou `_normalize_param_suffix` no `_dispatch` |
+| `fusion.invalid_parameter`    | `set_parameter` sem `name`/`expression`      | aliases em `_set_parameter` (`value_mm`, bulk) |
+| `fusion.script_failed`        | a API do Fusion estourou (ver `inner_traceback`) | lógica/ordem da feature, não parsing |
+| `fusion.sketch_not_found`     | drift de identidade de sketch                 | alias de nome em `_create_sketch`/`_find_sketch` |
+| `fusion.no_geometry` / `no_body` | falha em cascata (passo anterior não criou body) | corrigir o passo raiz, não este |
+
+> **Padrão de acomodação de drift:** o adapter aceita o formato canônico
+> (`*_mm`) **e** os aliases que o LLM gera (chave sem sufixo, `*_param`,
+> `value_mm`, `=expressão` da barra de parâmetros do Fusion, listas
+> `dimensions_mm=[w,d,h]`). Cada acomodação ganha um teste de contrato em
+> `backend/tests/test_modeling_observability.py` (`test_schema_drift_*`)
+> que só compila o script gerado (`ast.parse`) — barato e pega regressão de
+> chave literal no f-string template.
+
 ### Configurações gerais (sem painel dedicado)
 
 A seção "Modelagem 3D" em Configurações gerais expõe:
 
 - Preferência de software do próximo chat (`auto`, Blender ou Fusion).
-- Aviso do modo fluido allowlistado: adições e alterações normais podem
-  autoexecutar; deleções, ações destrutivas e high-risk exigem aprovação humana.
+- Aviso do modo fluido allowlistado (opt-in por chat, fase P3): quando
+  ativado, adições e alterações normais em EDIÇÕES autoexecutam; o plano
+  primário sempre pede aprovação; deleções, ações destrutivas e high-risk
+  exigem aprovação humana sempre.
 - O status técnico de adapter fica no `ModelingDiagnosticsModal`; valores de
   ambiente como `TRUTHS_FORGE_BLENDER_EXECUTABLE`,
   `TRUTHS_FORGE_FUSION_MCP_URL`, `TRUTHS_FORGE_MCP_TRANSPORT` e timeout seguem
@@ -555,9 +672,18 @@ Resposta textual livre **não** aciona execução. Uma vez aprovado, o plano
 primário cobre todas as etapas, incluindo high-risk. Rejeição (com motivo
 opcional) volta o chat para `discovery` e o agente retoma a conversa.
 
+> **Gate de aprovação (P1, 2026-05-20).** A rota de chat
+> (`chat.py:modeling_events`) **sempre** propõe o plano com
+> `status=waiting_approval` e PARA — nunca auto-executa, nem em `safe_auto`.
+> A execução só ocorre quando o usuário clica em Aprovar (que chama
+> `/plans/{id}/approve` + `/execute`). A sessão fica em `planning` até a
+> aprovação. Ver `specs/005-modeling-3d-fusion/chat-flow-redesign.md`.
+
 Em edições, mini-planos sem high-risk autoexecutam e renderizam
 `ModelingEditCard` compacto. Se a edição tocar em high-risk, o card retorna a
-pedir aprovação inline.
+pedir aprovação inline. **Nota:** o caminho de edição auto-executável depende
+do "modo fluido" opt-in por chat, ainda **não** entregue (fase P3 da spec
+`chat-flow-redesign.md`); até lá, todo plano para no card.
 
 ## Transporte MCP: in-process vs stdio
 
@@ -787,7 +913,7 @@ ou `./scripts/quality.ps1`.
 
 ## Próximos incrementos
 
-A refatoração v2 (`specs/modeling-3d-fusion/plan.md`) é a próxima entrega
+A refatoração v2 (`specs/005-modeling-3d-fusion/plan.md`) é a próxima entrega
 maior. Após v2 concluída:
 
 1. Próximas tools Blender ficariam em tier 3 (animação básica, modifiers avançados).

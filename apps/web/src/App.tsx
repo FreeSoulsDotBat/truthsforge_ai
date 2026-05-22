@@ -99,6 +99,7 @@ import type {
   KnowledgeBaseUpsert,
   ModelConfig,
   ModelingPlan,
+  ModelingPlanEdit,
   PlatformFile,
   PlatformFileIndexingStatus,
   PlatformFileUpdate,
@@ -580,12 +581,22 @@ function App() {
     [applyPlanToSession, modelingPlanActionsRuntime]
   );
 
+  const handleEditModelingPlan = useCallback(
+    async (planId: string, payload: ModelingPlanEdit) => {
+      const edited = await modelingPlanActionsRuntime.edit(planId, payload);
+      if (!edited) return;
+      applyPlanToSession(edited, "planning");
+    },
+    [applyPlanToSession, modelingPlanActionsRuntime]
+  );
+
   const modelingPlanActions = useMemo<ModelingPlanCardActions>(
     () => ({
       onApprove: handleApproveModelingPlan,
       onReject: handleRejectModelingPlan,
       onRetry: handleRetryModelingPlan,
       onRevise: handleReviseModelingPlan,
+      onEditPlan: handleEditModelingPlan,
       isBusy: modelingPlanActionsRuntime.busy
     }),
     [
@@ -593,6 +604,7 @@ function App() {
       handleRejectModelingPlan,
       handleRetryModelingPlan,
       handleReviseModelingPlan,
+      handleEditModelingPlan,
       modelingPlanActionsRuntime.busy
     ]
   );

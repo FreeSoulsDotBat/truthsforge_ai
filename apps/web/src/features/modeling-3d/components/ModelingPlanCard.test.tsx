@@ -149,4 +149,37 @@ describe("ModelingPlanCard", () => {
     render(<ModelingPlanCard plan={plan({ kind: "edit" })} />);
     expect(screen.getByText("edição")).toBeTruthy();
   });
+
+  it("P4: edits a step and calls onEditPlan with the updated steps", () => {
+    const onEditPlan = vi.fn();
+    render(
+      <ModelingPlanCard
+        plan={plan({ steps: [step({ title: "Criar cubo", input_json: { primitive: "cube" } })] })}
+        onEditPlan={onEditPlan}
+      />
+    );
+    fireEvent.click(screen.getByTestId("modeling-plan-edit-toggle"));
+    expect(screen.getByTestId("modeling-plan-editor")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Título da etapa 1"), {
+      target: { value: "Criar cubo grande" }
+    });
+    fireEvent.click(screen.getByTestId("modeling-plan-edit-save"));
+    expect(onEditPlan).toHaveBeenCalledTimes(1);
+    const payload = onEditPlan.mock.calls[0][0];
+    expect(payload.steps[0].title).toBe("Criar cubo grande");
+    expect(payload.steps[0].tool_name).toBe("blender.create_mesh_primitive");
+    expect(payload.steps[0].input_json).toEqual({ primitive: "cube" });
+  });
+
+  it("P4: blocks save and shows an error when the JSON args are invalid", () => {
+    const onEditPlan = vi.fn();
+    render(<ModelingPlanCard plan={plan()} onEditPlan={onEditPlan} />);
+    fireEvent.click(screen.getByTestId("modeling-plan-edit-toggle"));
+    fireEvent.change(screen.getByLabelText("Argumentos JSON da etapa 1"), {
+      target: { value: "{ not valid json" }
+    });
+    fireEvent.click(screen.getByTestId("modeling-plan-edit-save"));
+    expect(onEditPlan).not.toHaveBeenCalled();
+    expect(screen.getByTestId("modeling-plan-edit-error")).toBeTruthy();
+  });
 });

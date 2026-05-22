@@ -27,7 +27,7 @@ agente principal, o agente solicitado ou agentes de apoio não tiverem acesso ao
 ativo validado e as bases habilitadas para aquele projeto/agente.
 
 Chamadas de chat, custos, uso de documentos em contexto e decisões de agentes
-devem permanecer auditáveis conforme `specs/observability-quality/`.
+devem permanecer auditáveis conforme `specs/060-cost-audit-governance/`.
 
 ## Configuracao
 

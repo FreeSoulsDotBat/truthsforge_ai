@@ -472,3 +472,52 @@ def test_blender_score_with_organic_prompt_is_correct() -> None:
     # personagem(1) + orgânico(1) + render(1) + cena(1) = 4. Antes da fix
     # daria 5 porque organico estava duplicado.
     assert score == 4
+
+
+def test_build_edit_context_block_none_when_no_parent() -> None:
+    """P5: sem plano-pai não há contexto de edição."""
+
+    from app.modeling.planner import build_edit_context_block
+
+    assert build_edit_context_block(None) is None
+
+
+def test_build_edit_context_block_includes_history_and_metrics() -> None:
+    """P5: o contexto de edição traz o histórico de construção do plano-pai e
+    as métricas de corpos capturadas nas saídas das etapas, com instrução de
+    NÃO recriar a base."""
+
+    from app.core.contracts import (
+        ModelingPlan,
+        ModelingPlanStep,
+        ModelingStepStatus,
+    )
+    from app.modeling.planner import build_edit_context_block
+
+    parent = ModelingPlan(
+        prompt="placa 80x60x5 com furo",
+        software_choice=ModelingSoftware.fusion,
+        steps=[
+            ModelingPlanStep(
+                seq=1,
+                title="Criar caixa",
+                software=ModelingSoftware.fusion,
+                tool_name="fusion.add_box",
+                input_json={"dimensions_mm": [80, 60, 5], "name": "PlateBody"},
+            ),
+            ModelingPlanStep(
+                seq=2,
+                title="Validar dimensões",
+                software=ModelingSoftware.fusion,
+                tool_name="fusion.validate_dimensions",
+                status=ModelingStepStatus.completed,
+                output_json={"bodies": [{"name": "PlateBody", "dimensions_mm": [80, 60, 5]}]},
+            ),
+        ],
+    )
+    block = build_edit_context_block(parent)
+    assert block is not None
+    assert "EDIÇÃO" in block
+    assert "NÃO recrie" in block
+    assert "fusion.add_box" in block
+    assert "PlateBody" in block

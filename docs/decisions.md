@@ -82,7 +82,7 @@ A descoberta de contexto aceita anexos com análise profunda: imagens via vision
 
 A allowlist de tools deixa de viver em três arquivos espalhados (`planner.py`, `policy.py`, adapters) e passa a derivar de uma única fonte (`backend/app/modeling/tool_registry.py`) para eliminar divergência silenciosa.
 
-A trajetória de implementação está descrita em `specs/modeling-3d-fusion/plan.md` (6 ondas: docs/ADRs → backend foundations → backend chat orchestration → frontend feature module → frontend cards/aprovação → título obrigatório → QA/handoff).
+A trajetória de implementação está descrita em `specs/005-modeling-3d-fusion/plan.md` (6 ondas: docs/ADRs → backend foundations → backend chat orchestration → frontend feature module → frontend cards/aprovação → título obrigatório → QA/handoff).
 
 ## ADR-014 - Título de chat obrigatório; remoção da auto-titulação OpenAI
 
@@ -93,3 +93,23 @@ O serviço/endpoint atual que chama a OpenAI para gerar título automático é *
 A motivação combina três pontos: (1) economia de tokens em uma chamada que não agrega valor consistente, (2) clareza explícita de propósito do chat desde o início, (3) suporte ao novo fluxo 3D, onde o título distingue rapidamente sessões de modelagem na sidebar (junto com o `ChatModeling3DBadge`).
 
 Renomeação posterior do chat continua permitida via UI. A obrigatoriedade vale apenas para a transição "chat criado → primeira mensagem enviada".
+
+## ADR-015 - Abstração de storage (interface Store)
+
+A camada de storage passa a ter uma **interface única** descrita por um `typing.Protocol` `Store` em `backend/app/storage/`, derivada da superfície atual já compartilhada por `PostgresStore` (`postgres_store.py`) e pelo dev-store JSON (`dev_store.py`). `get_store()` (`storage/store.py`) passa a ser tipado como `Store`.
+
+Motivação: hoje os dois stores duplicam ~46 métodos sem contrato comum (~3390 linhas), o que gera risco de divergência silenciosa quando uma assinatura muda em apenas um deles.
+
+A decisão **não troca a stack** (P5/ADR-004 permanecem: Postgres é produção; JSON é apenas dev/test). A implementação é **faseada e de baixo risco**: (1) teste de paridade que garante superfície idêntica entre os dois stores; (2) `Protocol Store` extraído da superfície atual, sem alterar implementações; (3) opcionalmente, fatiamento futuro em repositórios por domínio, um por vez, com testes. Cada fase roda os gates de `scripts/quality.ps1` antes de concluir.
+
+Spec e plano: `specs/070-storage-persistence/` (ver `research.md`).
+
+## ADR-016 - Geração de tipos do contrato a partir do OpenAPI
+
+Os tipos do contrato consumidos pelo frontend deixam de ser mantidos à mão em `apps/web/src/types/api.ts` (740 linhas) e passam a ser **gerados a partir do OpenAPI do backend** (`apps/web/src/types/openapi.json`, hoje já exportado mas não usado), via `openapi-typescript` (ou equivalente leve).
+
+Motivação: eliminar o drift silencioso entre backend e frontend, no qual uma mudança de contrato no FastAPI não se reflete nos tipos manuais.
+
+Por ser **mudança de toolchain de build** (nova dependência de dev + passo de geração), a adoção entra em um PR controlado próprio, com `typecheck`/`build` verdes e os tipos gerados versionados ou gerados no build. Sem dependências pesadas em runtime (P-Frontend de `AGENTS.md`).
+
+Spec e plano: `specs/090-frontend-web-shell/` (dívida DT-003).

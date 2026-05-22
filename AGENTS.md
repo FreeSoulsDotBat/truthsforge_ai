@@ -20,9 +20,15 @@ Este repositório pode ser trabalhado por Codex, Claude Code, Devin e humanos. N
 
 - Use `AGENTS.md` como contrato comum de arquitetura, qualidade e estilo de entrega.
 - Use `CLAUDE.md` apenas como adaptador do Claude Code para carregar `AGENTS.md` e regras específicas dele.
-- Use `specs/repo-foundation/handoff.md` para registrar continuidade entre agentes quando uma tarefa for interrompida, transferida ou retomada.
+- Use `specs/000-repo-foundation/handoff.md` para registrar continuidade entre agentes quando uma tarefa for interrompida, transferida ou retomada.
 - Não aceite decisões arquiteturais apenas porque uma IA anterior sugeriu; valide contra código, docs e specs.
 - Quando continuar trabalho iniciado por outro agente, leia primeiro a spec relevante, `tasks.md`, o handoff mais recente e o diff atual.
+
+## Constituição e SDD (Spec Kit)
+
+- A camada curta de invariantes vive em `.specify/memory/constitution.md` (princípios P1–P9). Este `AGENTS.md` é o "como trabalhar" detalhado; a constituição é "o inegociável". Em conflito, vale a constituição + a ordem de prioridade de contexto acima.
+- O repositório segue o padrão **GitHub Spec Kit**: specs em `specs/NNN-<slug>/` (ver `specs/README.md`), templates em `.specify/templates/`, scripts em `.specify/scripts/`, e as fases SDD como skills do Claude Code em `.claude/skills/speckit-*` (constitution → specify → clarify → plan → analyze → tasks → implement). Codex, Devin e humanos seguem os mesmos templates/constituição (agnósticos de agente).
+- Toda frente que exceda ajuste pontual nasce de uma spec (`speckit-specify`) e passa pelo Constitution Check no `plan`.
 
 ## Princípios obrigatórios
 
@@ -87,7 +93,7 @@ Antes de concluir uma tarefa relevante:
 - rode os checks equivalentes a `scripts/quality.ps1` para as áreas alteradas;
 - valide backend e frontend impactados;
 - confirme se documentação e spec continuam coerentes;
-- registre no `specs/repo-foundation/tasks.md` o que foi concluído e o que ficou pendente quando a tarefa fizer parte do SDD.
+- registre no `specs/000-repo-foundation/tasks.md` o que foi concluído e o que ficou pendente quando a tarefa fizer parte do SDD.
 - envie ao dono do produto o checklist de entrega definido em `docs/delivery-checklist.md`.
 
 ## Estilo de entrega

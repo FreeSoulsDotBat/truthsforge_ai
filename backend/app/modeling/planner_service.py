@@ -43,8 +43,10 @@ from app.core.contracts import (
     KnowledgeBase,
     ModelCapability,
     ModelConfig,
+    ModelingDiscoveryAssessment,
     ModelingPlan,
     ModelingPlanCreate,
+    ModelingPlanKind,
     ModelingPlannerSource,
     ModelingTraceLevel,
     ModelingTraceSource,
@@ -59,8 +61,11 @@ from app.llm_gateway.exceptions import (
     classify_provider_exception,
 )
 from app.llm_gateway.gateway import LLMGateway
+from app.modeling.discovery import assess_request_async as assess_discovery_async
+from app.modeling.discovery import heuristic_assessment
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner import (
+    build_edit_context_block,
     create_heuristic_plan,
     create_llm_plan,
     create_llm_plan_async,
@@ -129,6 +134,86 @@ class ModelingPlannerService:
         )
         return self._persist_plan(plan, source, fallback_reason)
 
+    async def assess_request_async(
+        self,
+        prompt: str,
+        *,
+        history: list[dict[str, str]] | None = None,
+        software_override: Any = None,
+        threshold: float | None = None,
+        has_existing_model: bool = False,
+    ) -> ModelingDiscoveryAssessment:
+        """P2/P3: avalia se o pedido está pronto para planejar (e, quando já
+        existe modelo, classifica intent edit/new_model/ambiguous). Reusa a
+        resolução de modelo + gateway do planner. Em qualquer falha cai no
+        fallback heurístico, que NÃO bloqueia o usuário.
+        """
+
+        effective_threshold = (
+            threshold
+            if threshold is not None
+            else settings.modeling_discovery_confidence_threshold
+        )
+        model = self._resolve_planner_model()
+        if model is None:
+            return heuristic_assessment(
+                prompt, history, has_existing_model=has_existing_model
+            )
+        try:
+            with self._tracer.record_span(
+                "discovery.assess",
+                source=ModelingTraceSource.backend,
+                payload={
+                    "model_id": model.id,
+                    "provider": model.provider.value,
+                    "provider_model_id": model.provider_model_id,
+                    "threshold": effective_threshold,
+                    "history_len": len(history or []),
+                    "prompt_length": len(prompt or ""),
+                    "has_existing_model": has_existing_model,
+                },
+            ) as span:
+                assessment = await assess_discovery_async(
+                    prompt,
+                    gateway=self.gateway,
+                    model=model,
+                    history=history,
+                    software_override=software_override,
+                    threshold=effective_threshold,
+                    has_existing_model=has_existing_model,
+                )
+                span.attach(
+                    {
+                        "ready_to_plan": assessment.ready_to_plan,
+                        "confidence": assessment.confidence,
+                        "question_count": len(assessment.questions),
+                        "intent": assessment.intent,
+                    }
+                )
+            self._tracer.record(
+                "discovery.assessed",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.info,
+                message=(
+                    "Pedido pronto para planejar"
+                    if assessment.ready_to_plan
+                    else f"Descoberta pediu {len(assessment.questions)} esclarecimento(s)"
+                ),
+                payload={
+                    "ready_to_plan": assessment.ready_to_plan,
+                    "confidence": assessment.confidence,
+                    "question_count": len(assessment.questions),
+                    "intent": assessment.intent,
+                    "threshold": effective_threshold,
+                },
+            )
+            return assessment
+        except Exception as exc:  # noqa: BLE001 - fallback is intentional
+            self._classify_and_record_llm_error(exc, model)
+            return heuristic_assessment(
+                prompt, history, has_existing_model=has_existing_model
+            )
+
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------
@@ -182,6 +267,21 @@ class ModelingPlannerService:
         )
         return plan
 
+    def _resolve_edit_context(self, payload: ModelingPlanCreate) -> str | None:
+        """P5: para planos de edição, monta o contexto do modelo atual a partir
+        do plano-pai (histórico + métricas de corpos). Retorna None quando não
+        é edição ou o pai não está disponível."""
+
+        if payload.kind != ModelingPlanKind.edit or not payload.parent_plan_id:
+            return None
+        if not hasattr(self.store, "get_modeling_plan"):
+            return None
+        try:
+            parent = self.store.get_modeling_plan(payload.parent_plan_id)
+        except Exception:
+            return None
+        return build_edit_context_block(parent)
+
     def _build_plan(
         self, payload: ModelingPlanCreate
     ) -> tuple[ModelingPlan, ModelingPlannerSource, str | None]:
@@ -194,6 +294,7 @@ class ModelingPlannerService:
             )
         try:
             knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
+            edit_context = self._resolve_edit_context(payload)
             with self._tracer.record_span(
                 "planner.llm_request",
                 source=ModelingTraceSource.backend,
@@ -204,8 +305,15 @@ class ModelingPlannerService:
                     gateway=self.gateway,
                     model=model,
                     knowledge_bases=knowledge_bases,
+                    edit_context=edit_context,
                 )
-                span.attach({"step_count": len(plan.steps), "kind": plan.kind.value})
+                span.attach(
+                    {
+                        "step_count": len(plan.steps),
+                        "kind": plan.kind.value,
+                        "edit_context": bool(edit_context),
+                    }
+                )
             return plan, ModelingPlannerSource.llm, None
         except Exception as exc:  # noqa: BLE001 - fallback is intentional
             classified = self._classify_and_record_llm_error(exc, model)
@@ -227,6 +335,7 @@ class ModelingPlannerService:
             )
         try:
             knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
+            edit_context = self._resolve_edit_context(payload)
             with self._tracer.record_span(
                 "planner.llm_request",
                 source=ModelingTraceSource.backend,
@@ -237,8 +346,15 @@ class ModelingPlannerService:
                     gateway=self.gateway,
                     model=model,
                     knowledge_bases=knowledge_bases,
+                    edit_context=edit_context,
                 )
-                span.attach({"step_count": len(plan.steps), "kind": plan.kind.value})
+                span.attach(
+                    {
+                        "step_count": len(plan.steps),
+                        "kind": plan.kind.value,
+                        "edit_context": bool(edit_context),
+                    }
+                )
             return plan, ModelingPlannerSource.llm, None
         except Exception as exc:  # noqa: BLE001 - fallback is intentional
             classified = self._classify_and_record_llm_error(exc, model)

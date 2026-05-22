@@ -14,7 +14,7 @@ Trabalhar no backend sem romper a arquitetura atual do projeto.
 - `backend/app/api/router.py`
 - `docs/application-map.md`
 - `docs/architecture.md`
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`
 
 ## Regras
 
