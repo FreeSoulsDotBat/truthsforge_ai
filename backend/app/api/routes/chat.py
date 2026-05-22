@@ -1,18 +1,29 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import re
 from collections.abc import AsyncIterator
-from typing import Any
 
-import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.api.routes.chat_context import (
+    _indexed_documents_for_projects,
+    _knowledge_base_ids_for_runtime,
+    _mentioned_folder_ids,
+    _normalize_knowledge_base_ids,
+    _search_knowledge_base_context,
+    _select_context_documents,
+)
+from app.api.routes.chat_images import save_generated_images_from_markdown
 from app.api.routes.chat_modeling import (
     _promote_modeling_session,
     build_modeling_3d_stream_response,
+)
+from app.api.routes.chat_scope import (
+    _general_project_id,
+    _normalize_project_ids,
+    _runtime_allowed_project_ids,
+    _validate_active_project_scope,
+    _validate_attachment_project_scope,
 )
 from app.api.routes.chat_sse import DEFAULT_CHAT_TITLES, _runtime_status, _sse
 from app.audit.service import record_audit_event
@@ -22,8 +33,6 @@ from app.chat.session_cleanup import (
 )
 from app.core.config import settings
 from app.core.contracts import (
-    DEFAULT_GENERAL_PROJECT_ID,
-    MAX_CONTEXT_KNOWLEDGE_BASE_IDS,
     Agent,
     AuditEvent,
     ChatAttachmentAnalyzeRequest,
@@ -36,12 +45,8 @@ from app.core.contracts import (
     ChatSessionMoveRequest,
     ChatSessionWithMessages,
     ChatStreamRequest,
-    Document,
-    KnowledgeBase,
-    KnowledgeBaseDocument,
     ModelCapability,
     PlatformFile,
-    PlatformFileCreate,
     PlatformFileUpdate,
     ProviderName,
     now_utc,
@@ -53,7 +58,6 @@ from app.cost_governor.service import (
     monthly_events_for_store,
     monthly_spend,
 )
-from app.files.library import counted_filename, find_duplicate
 from app.files.processor import read_text_preview
 from app.judite.orchestrator import judite_dev_response
 from app.llm_gateway.gateway import LLMGateway
@@ -65,201 +69,13 @@ from app.llm_gateway.providers import (
     token_event,
 )
 from app.modeling.attachment_analyzer import ModelingAttachmentAnalyzer
-from app.rag.embeddings import embed_text
 from app.rag.indexing import ensure_document_for_platform_file
-from app.rag.vector_store import QdrantVectorStore
 from app.storage.store import get_store
 from app.workers.index_queue import enqueue_platform_file_index
 
 router = APIRouter()
-DATA_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\(data:(image/[-+.\w]+);base64,([A-Za-z0-9+/=\s]+)\)")
-REMOTE_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\((https?://[^)\s]+)\)")
-DOCUMENT_COLLECTION = "truths_forge_documents"
-IMAGE_EXTENSIONS = {
-    "image/gif": ".gif",
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/svg+xml": ".svg",
-    "image/webp": ".webp",
-}
-MAX_CONTEXT_PROJECTS = 3
-MAX_CONTEXT_DOCUMENTS = 20
-FOLDER_MENTION_PATTERN = re.compile(r"@([A-Za-z0-9_./-]+)")
-GENERATED_IMAGE_MAX_BYTES = 50 * 1024 * 1024
 IMAGE_GENERATION_ESTIMATED_OUTPUT_TOKENS = 1290
 USD_TO_BRL = 5.0
-
-
-def _create_generated_image_file(
-    *,
-    raw: bytes,
-    content_type: str,
-    store,
-    session_id: str,
-    message_id: str,
-    project_id: str,
-    folder_id: str | None,
-    index: int,
-    existing_files: list[PlatformFile],
-    existing_names: set[str],
-    source_url: str | None = None,
-) -> PlatformFile:
-    normalized_content_type = content_type.split(";")[0].strip().lower() or "image/png"
-    checksum = hashlib.sha256(raw).hexdigest()
-    extension = IMAGE_EXTENSIONS.get(normalized_content_type, ".png")
-    filename = counted_filename(
-        f"imagem-gerada-{message_id[:8]}-{index}{extension}", existing_names
-    )
-    existing_names.add(filename)
-    target_dir = settings.files_dir / "generated" / session_id
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target_path = target_dir / filename
-    target_path.write_bytes(raw)
-
-    duplicate = find_duplicate(
-        existing_files,
-        filename=filename,
-        size_bytes=len(raw),
-        checksum_sha256=checksum,
-    )
-    metadata: dict[str, Any] = {
-        "session_id": session_id,
-        "project_id": project_id,
-        "folder_id": folder_id,
-        "message_id": message_id,
-        "generated_from": "chat.image",
-    }
-    if source_url:
-        metadata["source_url"] = source_url
-
-    platform_file = store.create_platform_file(
-        PlatformFileCreate(
-            filename=filename,
-            original_filename=filename,
-            content_type=normalized_content_type,
-            size_bytes=len(raw),
-            storage_path=str(target_path),
-            checksum_sha256=checksum,
-            duplicate_of_id=duplicate.id if duplicate else None,
-            source="generated",
-            tags=["generated", "image"],
-            metadata=metadata,
-        )
-    )
-    ensure_document_for_platform_file(
-        store,
-        platform_file,
-        project_id=project_id,
-        folder_id=folder_id,
-        tags=["generated", "image"],
-        metadata={
-            "session_id": session_id,
-            "message_id": message_id,
-            "generated_from": "chat.image",
-        },
-        force_status_pending=True,
-    )
-    enqueue_platform_file_index(platform_file.id)
-    existing_files.append(platform_file)
-    return platform_file
-
-
-async def _download_remote_generated_image(url: str) -> tuple[bytes, str] | None:
-    try:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-            async with client.stream("GET", url) as response:
-                response.raise_for_status()
-                content_type = response.headers.get("content-type", "").split(";")[0].lower()
-                if not content_type.startswith("image/"):
-                    return None
-
-                chunks: list[bytes] = []
-                size = 0
-                async for chunk in response.aiter_bytes():
-                    size += len(chunk)
-                    if size > GENERATED_IMAGE_MAX_BYTES:
-                        return None
-                    chunks.append(chunk)
-    except httpx.HTTPError:
-        return None
-    return b"".join(chunks), content_type
-
-
-async def save_generated_images_from_markdown(
-    content: str,
-    store,
-    *,
-    session_id: str,
-    message_id: str,
-    project_id: str,
-    folder_id: str | None,
-) -> tuple[str, list[PlatformFile]]:
-    data_matches = list(DATA_IMAGE_PATTERN.finditer(content))
-    remote_matches = list(REMOTE_IMAGE_PATTERN.finditer(content))
-    if not data_matches and not remote_matches:
-        return content, []
-
-    settings.ensure_local_dirs()
-    generated_files: list[PlatformFile] = []
-    existing_files = store.list_platform_files()
-    existing_names = {
-        platform_file.filename for platform_file in existing_files if platform_file.filename
-    }
-    updated_content = content
-
-    for match in data_matches:
-        content_type = match.group(1)
-        try:
-            raw = base64.b64decode(match.group(2), validate=False)
-        except ValueError:
-            continue
-        platform_file = _create_generated_image_file(
-            raw=raw,
-            content_type=content_type,
-            store=store,
-            session_id=session_id,
-            message_id=message_id,
-            project_id=project_id,
-            folder_id=folder_id,
-            index=len(generated_files) + 1,
-            existing_files=existing_files,
-            existing_names=existing_names,
-        )
-        generated_files.append(platform_file)
-        stored_url = f"{settings.public_base_url.rstrip('/')}/api/files/{platform_file.id}/content"
-        updated_content = updated_content.replace(
-            match.group(0), f"![Imagem gerada]({stored_url})", 1
-        )
-
-    local_file_prefix = f"{settings.public_base_url.rstrip('/')}/api/files/"
-    for match in remote_matches:
-        source_url = match.group(1)
-        if source_url.startswith(local_file_prefix):
-            continue
-        downloaded = await _download_remote_generated_image(source_url)
-        if downloaded is None:
-            continue
-        raw, content_type = downloaded
-        platform_file = _create_generated_image_file(
-            raw=raw,
-            content_type=content_type,
-            store=store,
-            session_id=session_id,
-            message_id=message_id,
-            project_id=project_id,
-            folder_id=folder_id,
-            index=len(generated_files) + 1,
-            existing_files=existing_files,
-            existing_names=existing_names,
-            source_url=source_url,
-        )
-        generated_files.append(platform_file)
-        stored_url = f"{settings.public_base_url.rstrip('/')}/api/files/{platform_file.id}/content"
-        updated_content = updated_content.replace(
-            match.group(0), f"![Imagem gerada]({stored_url})", 1
-        )
-
-    return updated_content, generated_files
 
 
 def _is_empty_draft_session(session: ChatSession) -> bool:
@@ -310,261 +126,6 @@ def _apply_stream_title_to_session(
     if hasattr(store, "upsert_chat_session"):
         store.upsert_chat_session(updated)
     return updated
-
-
-def _general_project_id(store) -> str:
-    if hasattr(store, "list_projects"):
-        general = next((project for project in store.list_projects() if project.is_general), None)
-        if general is not None:
-            return general.id
-    return DEFAULT_GENERAL_PROJECT_ID
-
-
-def _normalize_project_ids(
-    project_ids: list[str], *, fallback_project_id: str, known_project_ids: set[str]
-) -> list[str]:
-    normalized: list[str] = []
-    for raw_id in project_ids:
-        if raw_id not in known_project_ids:
-            continue
-        if raw_id in normalized:
-            continue
-        normalized.append(raw_id)
-    if not normalized:
-        return [fallback_project_id]
-    return normalized[:MAX_CONTEXT_PROJECTS]
-
-
-def _agent_allowed_project_ids(agent: Agent | None, *, general_project_id: str) -> set[str]:
-    if agent is None:
-        return {general_project_id}
-    allowed = set(agent.allowed_project_ids or [])
-    if not allowed:
-        return {general_project_id}
-    return allowed
-
-
-def _runtime_allowed_project_ids(
-    agents: list[Agent | None], *, general_project_id: str
-) -> set[str]:
-    allowed: set[str] = set()
-    for agent in agents:
-        allowed.update(_agent_allowed_project_ids(agent, general_project_id=general_project_id))
-    return allowed or {general_project_id}
-
-
-def _validate_active_project_scope(
-    *, active_project_id: str, runtime_allowed_project_ids: set[str]
-) -> None:
-    if active_project_id in runtime_allowed_project_ids:
-        return
-    raise HTTPException(
-        status_code=403,
-        detail="O agente selecionado não tem acesso ao projeto ativo desta conversa.",
-    )
-
-
-def _metadata_project_id(metadata: dict[str, Any] | None) -> str:
-    if isinstance(metadata, dict):
-        raw_project_id = metadata.get("project_id")
-        if isinstance(raw_project_id, str) and raw_project_id.strip():
-            return raw_project_id
-    return DEFAULT_GENERAL_PROJECT_ID
-
-
-def _document_scope_project_id(document: Document) -> str:
-    return document.project_id or _metadata_project_id(document.metadata)
-
-
-def _platform_file_scope_project_id(platform_file: PlatformFile) -> str:
-    return _metadata_project_id(platform_file.metadata)
-
-
-def _format_scoped_attachment_error(ids: list[str]) -> str:
-    return ", ".join(ids[:5]) + ("..." if len(ids) > 5 else "")
-
-
-def _validate_attachment_project_scope(
-    *,
-    active_project_id: str,
-    runtime_allowed_project_ids: set[str],
-    documents: list[Document],
-    files: list[PlatformFile],
-) -> None:
-    if documents or files:
-        if active_project_id not in runtime_allowed_project_ids:
-            raise HTTPException(
-                status_code=403,
-                detail="O agente selecionado não tem acesso ao projeto ativo dos anexos.",
-            )
-
-    invalid_document_ids = [
-        document.id
-        for document in documents
-        if _document_scope_project_id(document) != active_project_id
-    ]
-    if invalid_document_ids:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Documentos anexados fora do escopo do projeto ativo: "
-                + _format_scoped_attachment_error(invalid_document_ids)
-            ),
-        )
-
-    invalid_file_ids = [
-        platform_file.id
-        for platform_file in files
-        if _platform_file_scope_project_id(platform_file) != active_project_id
-    ]
-    if invalid_file_ids:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Arquivos anexados fora do escopo do projeto ativo: "
-                + _format_scoped_attachment_error(invalid_file_ids)
-            ),
-        )
-
-
-def _folder_lookup_key(project_name: str, folder_path: str) -> str:
-    normalized_project = project_name.strip().replace(" ", "_")
-    normalized_path = folder_path.strip().replace(" ", "_")
-    return f"{normalized_project}/{normalized_path}".strip("/").lower()
-
-
-def _mentioned_folder_ids(
-    message: str,
-    *,
-    projects_by_id: dict[str, Any],
-    project_folders: list[Any],
-) -> set[str]:
-    mentions = {
-        match.group(1).strip().replace("\\", "/").replace(" ", "_").lower()
-        for match in FOLDER_MENTION_PATTERN.finditer(message)
-        if match.group(1).strip()
-    }
-    if not mentions:
-        return set()
-
-    folder_id_by_key: dict[str, str] = {}
-    for folder in project_folders:
-        project = projects_by_id.get(folder.project_id)
-        if project is None:
-            continue
-        key = _folder_lookup_key(project.name, folder.path)
-        folder_id_by_key[key] = folder.id
-    return {folder_id for key, folder_id in folder_id_by_key.items() if key in mentions}
-
-
-def _indexed_documents_for_projects(
-    documents: list[Document], project_ids: set[str]
-) -> list[Document]:
-    return [
-        document
-        for document in documents
-        if document.indexed
-        and str(document.index_status) == "completed"
-        and document.project_id in project_ids
-    ]
-
-
-def _select_context_documents(
-    *,
-    documents: list[Document],
-    selected_document_ids: list[str],
-) -> list[Document]:
-    if not selected_document_ids:
-        return []
-    allowed = set(selected_document_ids[:MAX_CONTEXT_DOCUMENTS])
-    selected = [document for document in documents if document.id in allowed]
-    selected.sort(key=lambda document: selected_document_ids.index(document.id))
-    return selected[:MAX_CONTEXT_DOCUMENTS]
-
-
-def _normalize_knowledge_base_ids(
-    knowledge_base_ids: list[str],
-    *,
-    knowledge_bases: list[KnowledgeBase],
-) -> list[str]:
-    known_ids = {knowledge_base.id for knowledge_base in knowledge_bases if knowledge_base.enabled}
-    normalized: list[str] = []
-    for raw_id in knowledge_base_ids:
-        if raw_id not in known_ids or raw_id in normalized:
-            continue
-        normalized.append(raw_id)
-    return normalized[:MAX_CONTEXT_KNOWLEDGE_BASE_IDS]
-
-
-def _allowed_knowledge_base_ids_for_runtime(
-    *,
-    project_id: str,
-    projects_by_id: dict[str, Any],
-    primary_agent: Agent | None,
-    target_agent: Agent | None,
-    support_agents: list[Agent],
-    knowledge_bases: list[KnowledgeBase],
-) -> list[str]:
-    ordered: list[str] = []
-    project = projects_by_id.get(project_id)
-    if project is not None:
-        ordered.extend(getattr(project.context, "knowledge_base_ids", []) or [])
-    for agent in [primary_agent, target_agent, *support_agents]:
-        if agent is None:
-            continue
-        ordered.extend(agent.knowledge_base_ids or [])
-    return _normalize_knowledge_base_ids(ordered, knowledge_bases=knowledge_bases)
-
-
-def _knowledge_base_ids_for_runtime(
-    *,
-    project_id: str,
-    projects_by_id: dict[str, Any],
-    primary_agent: Agent | None,
-    target_agent: Agent | None,
-    support_agents: list[Agent],
-    payload_ids: list[str],
-    session_ids: list[str],
-    knowledge_bases: list[KnowledgeBase],
-) -> list[str]:
-    allowed_ids = _allowed_knowledge_base_ids_for_runtime(
-        project_id=project_id,
-        projects_by_id=projects_by_id,
-        primary_agent=primary_agent,
-        target_agent=target_agent,
-        support_agents=support_agents,
-        knowledge_bases=knowledge_bases,
-    )
-    allowed_set = set(allowed_ids)
-    if payload_ids:
-        return [
-            knowledge_base_id
-            for knowledge_base_id in _normalize_knowledge_base_ids(
-                payload_ids, knowledge_bases=knowledge_bases
-            )
-            if knowledge_base_id in allowed_set
-        ][:MAX_CONTEXT_KNOWLEDGE_BASE_IDS]
-    if session_ids:
-        return [
-            knowledge_base_id
-            for knowledge_base_id in _normalize_knowledge_base_ids(
-                session_ids, knowledge_bases=knowledge_bases
-            )
-            if knowledge_base_id in allowed_set
-        ][:MAX_CONTEXT_KNOWLEDGE_BASE_IDS]
-
-    return allowed_ids
-
-
-def _knowledge_base_document_index(
-    items: list[KnowledgeBaseDocument], knowledge_base_ids: set[str]
-) -> dict[str, list[KnowledgeBaseDocument]]:
-    indexed: dict[str, list[KnowledgeBaseDocument]] = {}
-    for item in items:
-        if not item.enabled or item.knowledge_base_id not in knowledge_base_ids:
-            continue
-        indexed.setdefault(item.document_id, []).append(item)
-    return indexed
 
 
 # Auto-titulação via OpenAI removida em Onda 2.10 (ADR-014). Todo chat
@@ -650,182 +211,6 @@ def select_orchestration_agents(
         support_agents.append(agent)
         seen_ids.add(agent.id)
     return primary_agent, target_agent, support_agents
-
-
-def _project_scope_matches(
-    raw_project_id: str | None,
-    *,
-    active_project_id: str | None,
-    scope_mode: str,
-) -> bool:
-    normalized = raw_project_id or None
-    global_ids = {None, DEFAULT_GENERAL_PROJECT_ID}
-    if scope_mode == "global_only":
-        return normalized in global_ids
-    if scope_mode == "project_only":
-        if active_project_id:
-            return normalized == active_project_id
-        return normalized in global_ids
-    if scope_mode == "project_plus_global":
-        if active_project_id:
-            return normalized in {active_project_id, None, DEFAULT_GENERAL_PROJECT_ID}
-        return normalized in global_ids
-    return True
-
-
-async def _search_project_context(
-    *,
-    message: str,
-    project_ids: set[str],
-    selected_document_ids: set[str],
-    max_documents: int,
-    folder_ids: set[str],
-) -> list[dict[str, str]]:
-    if not message.strip():
-        return []
-    vector_store = QdrantVectorStore()
-    try:
-        results = await vector_store.search(
-            DOCUMENT_COLLECTION,
-            embed_text(message),
-            max(8, min(80, max_documents * 4)),
-        )
-    except Exception:
-        return []
-
-    snippets: list[dict[str, str]] = []
-    for item in results:
-        raw_payload = item.get("payload") or {}
-        raw_project_id = str(raw_payload.get("project_id") or "")
-        if project_ids and raw_project_id not in project_ids:
-            continue
-        raw_folder_id = raw_payload.get("folder_id")
-        if folder_ids and str(raw_folder_id or "") not in folder_ids:
-            continue
-        raw_document_id = str(raw_payload.get("document_id") or "")
-        if selected_document_ids and raw_document_id not in selected_document_ids:
-            continue
-        content = str(raw_payload.get("content") or "").strip()
-        if not content:
-            continue
-        snippets.append(
-            {
-                "title": str(raw_payload.get("title") or "Documento"),
-                "content": content,
-                "project_id": str(raw_payload.get("project_id") or ""),
-                "folder_id": str(raw_folder_id or ""),
-                "score": f"{float(item.get('score', 0)):.3f}",
-            }
-        )
-        if len(snippets) >= max_documents:
-            break
-    return snippets
-
-
-async def _search_knowledge_base_context(
-    *,
-    message: str,
-    knowledge_bases: list[KnowledgeBase],
-    knowledge_base_items: list[KnowledgeBaseDocument],
-    documents: list[Document],
-    folder_ids: set[str],
-) -> list[dict[str, str]]:
-    if not message.strip() or not knowledge_bases:
-        return []
-
-    active_bases = [knowledge_base for knowledge_base in knowledge_bases if knowledge_base.enabled]
-    active_base_ids = {knowledge_base.id for knowledge_base in active_bases}
-    items_by_document_id = _knowledge_base_document_index(knowledge_base_items, active_base_ids)
-    if not items_by_document_id:
-        return []
-
-    document_by_id = {
-        document.id: document
-        for document in documents
-        if document.indexed and str(document.index_status) == "completed"
-    }
-    active_bases_by_id = {knowledge_base.id: knowledge_base for knowledge_base in active_bases}
-    base_document_hits: dict[str, set[str]] = {
-        knowledge_base.id: set() for knowledge_base in active_bases
-    }
-    document_chunk_hits: dict[tuple[str, str], int] = {}
-    max_documents_total = min(
-        MAX_CONTEXT_DOCUMENTS,
-        sum(knowledge_base.max_documents_per_query for knowledge_base in active_bases),
-    )
-    vector_limit = max(8, min(120, max_documents_total * 5))
-
-    vector_store = QdrantVectorStore()
-    try:
-        results = await vector_store.search(DOCUMENT_COLLECTION, embed_text(message), vector_limit)
-    except Exception:
-        return []
-
-    ranked: list[tuple[float, dict[str, str]]] = []
-    for item in results:
-        raw_payload = item.get("payload") or {}
-        raw_document_id = str(raw_payload.get("document_id") or "")
-        document = document_by_id.get(raw_document_id)
-        if document is None:
-            continue
-        if folder_ids and str(raw_payload.get("folder_id") or "") not in folder_ids:
-            continue
-        memberships = items_by_document_id.get(raw_document_id, [])
-        if not memberships:
-            continue
-
-        selected_membership: KnowledgeBaseDocument | None = None
-        selected_base: KnowledgeBase | None = None
-        for membership in sorted(memberships, key=lambda value: value.priority, reverse=True):
-            candidate_base = active_bases_by_id.get(membership.knowledge_base_id)
-            if candidate_base is None:
-                continue
-            base_documents = base_document_hits[candidate_base.id]
-            document_already_counted = document.id in base_documents
-            if (
-                not document_already_counted
-                and len(base_documents) >= candidate_base.max_documents_per_query
-            ):
-                continue
-            chunk_key = (candidate_base.id, document.id)
-            if document_chunk_hits.get(chunk_key, 0) >= candidate_base.max_chunks_per_document:
-                continue
-            selected_membership = membership
-            selected_base = candidate_base
-            break
-        if selected_membership is None or selected_base is None:
-            continue
-
-        content = str(raw_payload.get("content") or "").strip()
-        if not content:
-            continue
-        base_document_hits[selected_base.id].add(document.id)
-        chunk_key = (selected_base.id, document.id)
-        document_chunk_hits[chunk_key] = document_chunk_hits.get(chunk_key, 0) + 1
-        vector_score = float(item.get("score", 0))
-        priority_boost = selected_membership.priority * 0.015
-        pinned_boost = 0.03 if document.pinned else 0
-        score = vector_score + priority_boost + pinned_boost
-        ranked.append(
-            (
-                score,
-                {
-                    "title": str(raw_payload.get("title") or document.title or "Documento"),
-                    "content": content,
-                    "knowledge_base_id": selected_base.id,
-                    "knowledge_base_name": selected_base.name,
-                    "document_id": document.id,
-                    "folder_id": str(raw_payload.get("folder_id") or ""),
-                    "score": f"{score:.3f}",
-                    "vector_score": f"{vector_score:.3f}",
-                },
-            )
-        )
-        if len(ranked) >= MAX_CONTEXT_DOCUMENTS:
-            break
-
-    ranked.sort(key=lambda value: value[0], reverse=True)
-    return [item for _score, item in ranked[:MAX_CONTEXT_DOCUMENTS]]
 
 
 @router.post(
