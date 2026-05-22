@@ -25,10 +25,10 @@ Tasks pendentes da v1 são absorvidas pela Onda 6 da v2:
 
 ### Onda 0 — Specs, ADRs e docs (concluída, commit `bf9395a`)
 
-- [x] [P0] [any] Atualizar `specs/modeling-3d-fusion/spec.md` com novo fluxo chat-first integral.
-- [x] [P0] [any] Atualizar `specs/modeling-3d-fusion/plan.md` com 6 ondas.
-- [x] [P0] [any] Atualizar `specs/modeling-3d-fusion/tasks.md` (este arquivo).
-- [x] [P0] [any] Atualizar `specs/modeling-3d-fusion/handoff.md`.
+- [x] [P0] [any] Atualizar `specs/005-modeling-3d-fusion/spec.md` com novo fluxo chat-first integral.
+- [x] [P0] [any] Atualizar `specs/005-modeling-3d-fusion/plan.md` com 6 ondas.
+- [x] [P0] [any] Atualizar `specs/005-modeling-3d-fusion/tasks.md` (este arquivo).
+- [x] [P0] [any] Atualizar `specs/005-modeling-3d-fusion/handoff.md`.
 - [x] [P0] [any] Adicionar ADR-013 em `docs/decisions.md`: 3D chat-first sem painel; aprovação inline; fluxo único.
 - [x] [P0] [any] Adicionar ADR-014 em `docs/decisions.md`: título de chat obrigatório; remoção da auto-titulação OpenAI.
 - [x] [P0] [any] Atualizar `docs/3d-mcp-modeling.md` com state machine, novas tools e remoção do painel.
@@ -122,7 +122,7 @@ para rascunhos `Novo chat` já criados antes do primeiro envio.
 - [x] [P1] [any] **5.5** Flag flip: `TRUTHS_FORGE_REQUIRE_CHAT_TITLE=true` em `infra/docker-compose.dev.yml` e `infra/.env.example`.
 - [x] [P1] [any] **5.6** Smoke test manual: criar chat novo → modal aparece → confirma → mensagem sobe sem 422. Chats antigos (com título da migração 002) continuam funcionando sem modal.
 - [x] [P1] [any] **5.7** Atualizar `docs/application-map.md` (fluxo de criação de chat com título obrigatório) e `README.md` (remover qualquer menção a auto-titulação).
-- [x] [P1] [any] **5.8** Atualizar `specs/modeling-3d-fusion/tasks.md` (este arquivo) e `handoff.md` marcando Onda 5 como concluída localmente.
+- [x] [P1] [any] **5.8** Atualizar `specs/005-modeling-3d-fusion/tasks.md` (este arquivo) e `handoff.md` marcando Onda 5 como concluída localmente.
 
 **Contratos backend já implementados (não precisam mexer):**
 
@@ -150,7 +150,7 @@ para rascunhos `Novo chat` já criados antes do primeiro envio.
 
 ### Onda 8 — Expansão do adapter Fusion (MVP de operações)
 
-Spec completa: `specs/modeling-3d-fusion/adapter-tools-mvp.md`. Cada onda
+Spec completa: `specs/005-modeling-3d-fusion/adapter-tools-mvp.md`. Cada onda
 abaixo é um PR. Pré-requisito comum: atualizar o system prompt do planner
 para exigir geometria explícita antes de extrude/revolve (vai junto com A).
 
@@ -165,7 +165,7 @@ para exigir geometria explícita antes de extrude/revolve (vai junto com A).
 
 ### Onda 9 — Cobertura dos gaps pós-MVP
 
-Spec completa: `specs/modeling-3d-fusion/adapter-gaps-roadmap.md`. Fases
+Spec completa: `specs/005-modeling-3d-fusion/adapter-gaps-roadmap.md`. Fases
 priorizadas por valor/custo. Aguardando priorização do dono do produto.
 
 - [x] [P0] [any] **G1.1** — parametrização de distâncias de feature: helper `_param_value_input` (createByString quando arg é nome de parâmetro existente → vínculo; createByReal quando número). Aplicado em extrude/fillet/chamfer/shell. Branch `feat/fusion-gaps-g1-g2-g5`. (revolve angle e primitivas ficam para quando G1.2 amarrar sketch dims; hole depth bakeado por causa da negação.)

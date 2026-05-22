@@ -16,10 +16,10 @@
 - [x] [P0] [any] Criar `AGENTS.md` na raiz do repositório.
 - [x] [P0] [claude-code] Criar `CLAUDE.md` na raiz importando `AGENTS.md`.
 - [x] [P0] [any] Criar `specs/README.md`.
-- [x] [P0] [any] Criar `specs/repo-foundation/spec.md`.
-- [x] [P0] [any] Criar `specs/repo-foundation/plan.md`.
-- [x] [P0] [any] Criar `specs/repo-foundation/tasks.md`.
-- [x] [P0] [any] Criar `specs/repo-foundation/handoff.md`.
+- [x] [P0] [any] Criar `specs/000-repo-foundation/spec.md`.
+- [x] [P0] [any] Criar `specs/000-repo-foundation/plan.md`.
+- [x] [P0] [any] Criar `specs/000-repo-foundation/tasks.md`.
+- [x] [P0] [any] Criar `specs/000-repo-foundation/handoff.md`.
 - [x] [P0] [any] Criar `/.agents/skills/README.md`.
 - [x] [P0] [any] Criar skill `repo-map`.
 - [x] [P0] [any] Criar skill `dev-quality-gates`.

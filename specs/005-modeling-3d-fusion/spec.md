@@ -164,5 +164,5 @@ imutável após criação.
 
 - `docs/3d-mcp-modeling.md`
 - `docs/decisions.md` (ADR-012, ADR-013, ADR-014)
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`
 - Plano de execução: `C:\Users\Jonatan\.claude\plans\gostaria-de-planejar-uma-lovely-ember.md`

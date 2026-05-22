@@ -15,7 +15,7 @@ Explicar rapidamente onde vivem código, docs, runtime e responsabilidades no `t
 - `docs/decisions.md`
 - `docs/implementation-plan.md`
 - `docs/mvp-readiness.md`
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`
 
 ## Saída esperada
 

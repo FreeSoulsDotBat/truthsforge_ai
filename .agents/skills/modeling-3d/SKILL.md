@@ -12,7 +12,7 @@ Preservar o contrato de segurança e auditabilidade do módulo 3D.
 - `docs/3d-mcp-modeling.md`
 - `docs/implementation-plan.md`
 - `docs/application-map.md`
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`
 
 ## Guardrails obrigatórios
 

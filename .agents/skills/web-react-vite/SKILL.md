@@ -12,7 +12,7 @@ Manter a experiência principal do produto consistente com o baseline atual.
 - `apps/web/package.json`
 - `docs/application-map.md`
 - `docs/mvp-readiness.md`
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`
 - `docs/3d-mcp-modeling.md` quando a mudança tocar a aba 3D
 
 ## Regras

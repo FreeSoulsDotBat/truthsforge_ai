@@ -61,10 +61,10 @@ O SDD vive em `specs/` e organiza intenção, plano, tasks e handoff sem substit
 
 - `AGENTS.md`: contrato comum de arquitetura, prioridade de contexto e qualidade.
 - `CLAUDE.md`: adaptador mínimo para Claude Code carregar `AGENTS.md`.
-- `specs/repo-foundation/spec.md`: baseline do MVP local-first.
-- `specs/repo-foundation/plan.md`: plano técnico e sequência de workstreams.
-- `specs/repo-foundation/tasks.md`: backlog rastreável por prioridade e executor sugerido.
-- `specs/repo-foundation/handoff.md`: continuidade quando humanos, Codex, Claude Code ou Devin alternarem a execução.
+- `specs/000-repo-foundation/spec.md`: baseline do MVP local-first.
+- `specs/000-repo-foundation/plan.md`: plano técnico e sequência de workstreams.
+- `specs/000-repo-foundation/tasks.md`: backlog rastreável por prioridade e executor sugerido.
+- `specs/000-repo-foundation/handoff.md`: continuidade quando humanos, Codex, Claude Code ou Devin alternarem a execução.
 - `specs/<slug-do-dominio>/`: specs por domínio para agentes/tools, RAG, mobile, artifacts/export, 3D/Fusion e observabilidade.
 - `docs/delivery-checklist.md`: checklist obrigatório de entrega para PRs e handoffs.
 - `.agents/skills/`: skills instruction-first para mapear repo, validar qualidade e trabalhar nos principais bounded contexts.

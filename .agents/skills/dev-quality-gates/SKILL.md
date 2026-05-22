@@ -11,7 +11,7 @@ Aplicar os gates reais do repositório.
 
 - `scripts/quality.ps1`
 - `docs/local-dev.md`
-- `specs/repo-foundation/plan.md`
+- `specs/000-repo-foundation/plan.md`
 
 ## Procedimento
 

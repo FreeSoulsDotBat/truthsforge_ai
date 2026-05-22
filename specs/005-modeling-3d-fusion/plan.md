@@ -7,7 +7,7 @@ docs atualizadas. Ondas posteriores assumem que as anteriores estão em main.
 
 ### Onda 0 — Specs, ADRs e docs (sem código de produção)
 
-- Atualizar `specs/modeling-3d-fusion/spec.md`, `plan.md`, `tasks.md`, `handoff.md`.
+- Atualizar `specs/005-modeling-3d-fusion/spec.md`, `plan.md`, `tasks.md`, `handoff.md`.
 - Criar ADR-013 (3D chat-first sem painel) e ADR-014 (título obrigatório) em
   `docs/decisions.md`.
 - Atualizar `docs/3d-mcp-modeling.md` com state machine, novas tools, fluxo único,

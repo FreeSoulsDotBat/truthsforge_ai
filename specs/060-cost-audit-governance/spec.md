@@ -2,7 +2,7 @@
 
 **Pasta da spec**: `specs/060-cost-audit-governance/` | **Criada em**: 2026-05-22 | **Status**: Rascunho
 
-**Entrada**: Consolidar Cost Governor, auditoria e os golden paths/eventos auditáveis. **Migra e supersede** `specs/observability-quality/` (arquivada em `specs/_legacy/observability-quality/`).
+**Entrada**: Consolidar Cost Governor, auditoria e os golden paths/eventos auditáveis. **Migra e supersede** o legado `observability-quality` (arquivada em `specs/_legacy/observability-quality/`).
 
 > Onda 6 do refactor SDD. Documenta governança de custo e auditoria transversais; registra dívida (schema/retentção de auditoria, golden paths).
 
@@ -68,7 +68,7 @@ Mudanças relevantes são validadas por golden paths visuais/e2e.
 
 ## Dívida de código documentada *(não executar nesta frente)*
 
-- **DT-001**: Schema de auditoria não padronizado; retenção não consolidada (`specs/repo-foundation/tasks.md`). Direção: schema único + política de retenção (1 ano) + índices. Esforço: M.
+- **DT-001**: Schema de auditoria não padronizado; retenção não consolidada (`specs/000-repo-foundation/tasks.md`). Direção: schema único + política de retenção (1 ano) + índices. Esforço: M.
 - **DT-002**: Mapeamento de lacunas de auditoria por evento obrigatório pendente. Direção: matriz evento→código→teste. Esforço: S.
 - **DT-003**: Golden paths (chat/RAG/upload/agente restrito/3D/mobile) não automatizados. Direção: e2e por golden path. Esforço: L.
 

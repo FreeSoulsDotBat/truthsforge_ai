@@ -22,4 +22,4 @@ Entregar artifacts/canvas com exportações em Markdown, código, JSON, HTML, Me
 
 - `docs/implementation-plan.md`
 - `docs/mvp-readiness.md`
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`

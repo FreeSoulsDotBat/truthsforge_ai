@@ -82,7 +82,7 @@ A descoberta de contexto aceita anexos com análise profunda: imagens via vision
 
 A allowlist de tools deixa de viver em três arquivos espalhados (`planner.py`, `policy.py`, adapters) e passa a derivar de uma única fonte (`backend/app/modeling/tool_registry.py`) para eliminar divergência silenciosa.
 
-A trajetória de implementação está descrita em `specs/modeling-3d-fusion/plan.md` (6 ondas: docs/ADRs → backend foundations → backend chat orchestration → frontend feature module → frontend cards/aprovação → título obrigatório → QA/handoff).
+A trajetória de implementação está descrita em `specs/005-modeling-3d-fusion/plan.md` (6 ondas: docs/ADRs → backend foundations → backend chat orchestration → frontend feature module → frontend cards/aprovação → título obrigatório → QA/handoff).
 
 ## ADR-014 - Título de chat obrigatório; remoção da auto-titulação OpenAI
 

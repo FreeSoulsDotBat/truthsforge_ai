@@ -343,7 +343,7 @@ def _sync_modeling_plan_proposed(
 
     O plano NÃO foi executado — está aguardando a aprovação humana via card
     (endpoints /approve + /execute). Ver
-    specs/modeling-3d-fusion/chat-flow-redesign.md (P1).
+    specs/005-modeling-3d-fusion/chat-flow-redesign.md (P1).
     """
 
     updated = session.model_copy(
@@ -1762,7 +1762,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
             # ligados em useModelingPlanActions). Forçamos waiting_approval para
             # o card exibir Aprovar/Rejeitar mesmo quando o planner marcou o
             # plano como ``approved`` (safe_auto sem high-risk). Ver
-            # specs/modeling-3d-fusion/chat-flow-redesign.md (P1).
+            # specs/005-modeling-3d-fusion/chat-flow-redesign.md (P1).
             if plan.status not in (
                 ModelingPlanStatus.waiting_approval,
                 ModelingPlanStatus.completed,

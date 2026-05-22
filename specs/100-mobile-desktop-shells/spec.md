@@ -2,7 +2,7 @@
 
 **Pasta da spec**: `specs/100-mobile-desktop-shells/` | **Criada em**: 2026-05-22 | **Status**: Rascunho
 
-**Entrada**: Cobrir os wrappers desktop (Tauri) e mobile (Capacitor) e o pareamento local. **Migra e supersede** `specs/mobile-pairing/` (arquivada em `specs/_legacy/mobile-pairing/`).
+**Entrada**: Cobrir os wrappers desktop (Tauri) e mobile (Capacitor) e o pareamento local. **Migra e supersede** o legado `mobile-pairing` (arquivada em `specs/_legacy/mobile-pairing/`).
 
 > Onda 10 do refactor SDD. Documenta os shells e o pareamento QR local; registra a dívida (QR, online/offline, cache).
 

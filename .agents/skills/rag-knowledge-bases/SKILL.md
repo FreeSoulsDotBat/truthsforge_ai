@@ -14,7 +14,7 @@ Tratar RAG como pipeline completo, não como simples upload de arquivo.
 - `docs/knowledge-bases.md`
 - `docs/implementation-plan.md`
 - `docs/mvp-readiness.md`
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`
 
 ## Regras
 

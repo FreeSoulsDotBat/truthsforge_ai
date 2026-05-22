@@ -14,14 +14,14 @@ Este arquivo não substitui `tasks.md`, issues ou PRs. Ele existe para evitar pe
 - Executor anterior: Devin.
 - Executor recomendado para continuação: qualquer agente compatível após leitura de `AGENTS.md`, `spec.md`, `plan.md` e `tasks.md`.
 - Branch/PR relacionado: `devin/sdd-domain-specs-governance`.
-- Spec relacionada: `specs/repo-foundation/spec.md`.
+- Spec relacionada: `specs/000-repo-foundation/spec.md`.
 - Task relacionada: `Foundation SDD` e specs de domínio.
 
 ### Decisões tomadas
 
 - `AGENTS.md` é o contrato comum para Codex, Claude Code, Devin e humanos.
 - `CLAUDE.md` é apenas adaptador mínimo para Claude Code.
-- `specs/repo-foundation/` é o baseline do produto; specs futuras devem usar `specs/<slug>/`.
+- `specs/000-repo-foundation/` é o baseline do produto; specs futuras devem usar `specs/<slug>/`.
 - Skills ficam em `.agents/skills/` e começam como instruction-only.
 - O baseline SDD foi ajustado ao estado atual já documentado: upload/parsing/OCR, workers, geração de imagem e Fusion bridge existem em níveis iniciais e não devem voltar a ser tratados como inexistentes.
 - Toda alteração relevante deve confirmar branch e commit semântico com o dono do produto antes de editar.

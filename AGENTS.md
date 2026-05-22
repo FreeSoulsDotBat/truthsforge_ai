@@ -20,7 +20,7 @@ Este repositório pode ser trabalhado por Codex, Claude Code, Devin e humanos. N
 
 - Use `AGENTS.md` como contrato comum de arquitetura, qualidade e estilo de entrega.
 - Use `CLAUDE.md` apenas como adaptador do Claude Code para carregar `AGENTS.md` e regras específicas dele.
-- Use `specs/repo-foundation/handoff.md` para registrar continuidade entre agentes quando uma tarefa for interrompida, transferida ou retomada.
+- Use `specs/000-repo-foundation/handoff.md` para registrar continuidade entre agentes quando uma tarefa for interrompida, transferida ou retomada.
 - Não aceite decisões arquiteturais apenas porque uma IA anterior sugeriu; valide contra código, docs e specs.
 - Quando continuar trabalho iniciado por outro agente, leia primeiro a spec relevante, `tasks.md`, o handoff mais recente e o diff atual.
 
@@ -93,7 +93,7 @@ Antes de concluir uma tarefa relevante:
 - rode os checks equivalentes a `scripts/quality.ps1` para as áreas alteradas;
 - valide backend e frontend impactados;
 - confirme se documentação e spec continuam coerentes;
-- registre no `specs/repo-foundation/tasks.md` o que foi concluído e o que ficou pendente quando a tarefa fizer parte do SDD.
+- registre no `specs/000-repo-foundation/tasks.md` o que foi concluído e o que ficou pendente quando a tarefa fizer parte do SDD.
 - envie ao dono do produto o checklist de entrega definido em `docs/delivery-checklist.md`.
 
 ## Estilo de entrega

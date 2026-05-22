@@ -336,7 +336,7 @@ direção do cut em `hole`. Total agora: 36 tools (era 24 no v1).
 
 ### Onda 8A — add_polygon/add_line/add_arc/revolve_profile + fix do prompt
 
-Spec: `specs/modeling-3d-fusion/adapter-tools-mvp.md`. Branch
+Spec: `specs/005-modeling-3d-fusion/adapter-tools-mvp.md`. Branch
 `feat/fusion-revolve-polygon`. Entregue:
 
 - **4 tools novas** em `fusion_mcp_scripts.py` (template + dispatch + tupla)
@@ -436,7 +436,7 @@ build e smoke manual com Fusion conectado seguem pendentes na Onda 6.
 
 ## Onda 7 — Observabilidade do módulo 3D + caça aos schema drifts do adapter Fusion
 
-**Sessão:** 18–19/05/2026, Claude Code. **Branch:** `feat/modeling-3d-observability` (mergeada na `codex/3d-chat-title-required` localmente, sem push). **Plano completo:** `specs/modeling-3d-fusion/observability-plan.md` (este repo) — descreve a arquitetura de observabilidade que foi implementada (contracts, tracer, endpoints, frontend, containerização, gaps fora de escopo). Cópia local original em `C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md`.
+**Sessão:** 18–19/05/2026, Claude Code. **Branch:** `feat/modeling-3d-observability` (mergeada na `codex/3d-chat-title-required` localmente, sem push). **Plano completo:** `specs/005-modeling-3d-fusion/observability-plan.md` (este repo) — descreve a arquitetura de observabilidade que foi implementada (contracts, tracer, endpoints, frontend, containerização, gaps fora de escopo). Cópia local original em `C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md`.
 
 ### Contexto que originou a Onda
 
@@ -1027,7 +1027,7 @@ Após 5.1–5.4 mergeado:
 - `docs/application-map.md` — descrever o fluxo de criação de chat com
   título obrigatório.
 - `README.md` — se mencionar auto-titulação, remover.
-- `specs/modeling-3d-fusion/tasks.md` — marcar 5.1–5.6 concluídos.
+- `specs/005-modeling-3d-fusion/tasks.md` — marcar 5.1–5.6 concluídos.
 - `handoff.md` (este arquivo) — mover Onda 5 para mergeado e listar
   novos commits.
 
@@ -1112,9 +1112,9 @@ Eventos legados (preservados): `modeling.plan_created`,
 ## Referências
 
 - Plano de execução original (host-side): `C:\Users\Jonatan\.claude\plans\gostaria-de-planejar-uma-lovely-ember.md`
-- Spec viva: `specs/modeling-3d-fusion/spec.md`
-- Plano técnico: `specs/modeling-3d-fusion/plan.md`
-- Tasks: `specs/modeling-3d-fusion/tasks.md`
+- Spec viva: `specs/005-modeling-3d-fusion/spec.md`
+- Plano técnico: `specs/005-modeling-3d-fusion/plan.md`
+- Tasks: `specs/005-modeling-3d-fusion/tasks.md`
 - ADRs: `docs/decisions.md` (ADR-012, ADR-013, ADR-014)
 - Documentação operacional: `docs/3d-mcp-modeling.md`
 - Mapa da aplicação: `docs/application-map.md`

@@ -69,7 +69,7 @@ O repositório usa Spec-Driven Development em `specs/`.
 
 - `AGENTS.md` é o contrato comum para Codex, Claude Code, Devin e humanos.
 - `CLAUDE.md` apenas adapta o Claude Code para carregar o contrato comum.
-- `specs/repo-foundation/` descreve o baseline atual do produto em `spec.md`, `plan.md`, `tasks.md` e `handoff.md`.
+- `specs/000-repo-foundation/` descreve o baseline atual do produto em `spec.md`, `plan.md`, `tasks.md` e `handoff.md`.
 - Specs de domínio vivem em `specs/<slug>/` para agentes/tools, RAG, mobile, artifacts/export, 3D/Fusion e observabilidade.
 - `.agents/skills/` guarda procedimentos por bounded context, sem scripts executáveis por padrão.
 - `docs/delivery-checklist.md` define o checklist obrigatório que deve acompanhar entregas relevantes.

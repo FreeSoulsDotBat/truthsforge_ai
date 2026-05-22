@@ -2,7 +2,7 @@
 
 **Pasta da spec**: `specs/050-agents-tools-runtime/` | **Criada em**: 2026-05-22 | **Status**: Rascunho
 
-**Entrada**: Consolidar JUDITE/agentes, catálogo e runtime de tools, policy/segurança e memória operacional. **Migra e supersede** `specs/agents-tools/` (arquivada em `specs/_legacy/agents-tools/`).
+**Entrada**: Consolidar JUDITE/agentes, catálogo e runtime de tools, policy/segurança e memória operacional. **Migra e supersede** o legado `agents-tools` (arquivada em `specs/_legacy/agents-tools/`).
 
 > Onda 5 do refactor SDD. Documenta o contrato de agentes/tools e a dívida (sandbox real, memória durável, workflows LangGraph) — decisões ADR-005/009.
 

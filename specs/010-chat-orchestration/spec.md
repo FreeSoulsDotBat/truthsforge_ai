@@ -81,7 +81,7 @@ Deep Research, geração de imagem, reasoning summary (só OpenAI) e modelagem 3
 - Código: `backend/app/api/routes/chat.py` (rota e orquestração), `backend/app/api/router.py` (prefixo `/api/chat`), `backend/app/chat/session_cleanup.py`, `backend/app/judite/orchestrator.py`, `backend/app/agents/graph.py`, `backend/app/cost_governor/service.py`, `backend/app/llm_gateway/gateway.py`, `backend/app/llm_gateway/model_registry.py`, `backend/app/audit/service.py`
 - Docs: `docs/application-map.md`, `docs/deep-research.md`, `docs/image-generation.md`, `docs/reasoning-summary.md`, `docs/decisions.md` (ADR-013, ADR-014)
 - Testes: `backend/tests/test_chat_orchestrator.py`, `test_chat_title_required.py`, `test_chat_modeling_state_machine.py`, `test_chat_attachment_analyze_endpoint.py`, `test_agent_orchestration.py`, `test_runtime_routes.py`
-- Specs relacionadas: `specs/modeling-3d-fusion/` (3D), `specs/050-agents-tools-runtime/` (agentes/tools), `specs/060-cost-audit-governance/` (custo/auditoria), `specs/030-files-rag-pipeline/` (RAG)
+- Specs relacionadas: `specs/005-modeling-3d-fusion/` (3D), `specs/050-agents-tools-runtime/` (agentes/tools), `specs/060-cost-audit-governance/` (custo/auditoria), `specs/030-files-rag-pipeline/` (RAG)
 
 ## Dívida de código documentada *(não executar nesta frente)*
 

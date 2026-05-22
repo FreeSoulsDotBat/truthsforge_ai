@@ -2,7 +2,7 @@
 
 **Pasta da spec**: `specs/030-files-rag-pipeline/` | **Criada em**: 2026-05-22 | **Status**: Rascunho
 
-**Entrada**: Consolidar o pipeline de arquivos/documentos/bases + recuperação RAG e a classificação de dados sensíveis. **Migra e supersede** `specs/rag-sensitive-data/` (arquivada em `specs/_legacy/rag-sensitive-data/`).
+**Entrada**: Consolidar o pipeline de arquivos/documentos/bases + recuperação RAG e a classificação de dados sensíveis. **Migra e supersede** o legado `rag-sensitive-data` (arquivada em `specs/_legacy/rag-sensitive-data/`).
 
 > Onda 3 do refactor SDD. Cobre upload → parsing → chunking → indexação → bases → recuperação, com escopo por projeto/agente e classificação sensível (decisão ADR-010, ainda não implementada).
 
@@ -75,7 +75,7 @@ Conteúdo sensível é classificado (manual + heurística) e rastreável antes d
 
 ## Dívida de código documentada *(não executar nesta frente)*
 
-- **DT-001**: Classificação sensível **não implementada** (`specs/repo-foundation/tasks.md` item aberto). Direção: marcação manual + heurística + flag de auditoria. Esforço: M.
+- **DT-001**: Classificação sensível **não implementada** (`specs/000-repo-foundation/tasks.md` item aberto). Direção: marcação manual + heurística + flag de auditoria. Esforço: M.
 - **DT-002**: Embeddings locais simples (sentence-transformers ou hash determinístico). Direção: melhorar qualidade/consistência; busca híbrida (vetorial + filtros + boost + fallback). Esforço: M.
 - **DT-003**: Fila de indexação em memória (`rag/indexing.py`, `workers/index_queue.py`) — migrar para Valkey/Redis com volume. Esforço: M. (cruza com `040-import-workers-queues`.)
 

@@ -63,7 +63,7 @@ A UI consome o SSE de `/api/chat/stream` e renateriza tokens/estados.
 - Código: `apps/web/src/App.tsx`, `apps/web/src/main.tsx`, `apps/web/src/lib/api.ts`, `apps/web/src/types/api.ts`, `apps/web/src/types/openapi.json`, `apps/web/src/app/store.ts`, `apps/web/src/app/queries/app-data.ts`, `apps/web/src/app/hooks/`, `apps/web/src/features/` (agents, chat, dashboard, files, modeling-3d, projects, sidebar), `apps/web/src/components/`, `apps/web/src/shared/utils/`
 - Docs: `docs/local-dev.md`, `docs/application-map.md`, `AGENTS.md` (Frontend)
 - Testes: `apps/web/src/app/store.test.ts`, `apps/web/src/lib/message-content.test.tsx` (+ testes em `features/modeling-3d/`)
-- Specs relacionadas: `specs/010-chat-orchestration/`, `specs/modeling-3d-fusion/`
+- Specs relacionadas: `specs/010-chat-orchestration/`, `specs/005-modeling-3d-fusion/`
 
 ## Dívida de código documentada *(não executar nesta frente)*
 

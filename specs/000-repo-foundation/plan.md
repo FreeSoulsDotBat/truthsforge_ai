@@ -20,12 +20,12 @@ Aplicar SDD como camada de governança e execução sobre a arquitetura já comm
 
 ### Estrutura SDD
 
-- Usar `specs/repo-foundation/` como pacote baseline do produto.
+- Usar `specs/000-repo-foundation/` como pacote baseline do produto.
 - Criar specs futuras por feature em `specs/<slug>/`.
 - Adotar `AGENTS.md` na raiz como contrato comum.
 - Adotar `CLAUDE.md` na raiz como adaptador mínimo para Claude Code.
 - Adotar `/.agents/skills/` na raiz com skills instruction-first.
-- Adotar `specs/repo-foundation/handoff.md` para continuidade entre agentes.
+- Adotar `specs/000-repo-foundation/handoff.md` para continuidade entre agentes.
 
 ### Fronteiras de arquitetura
 
@@ -46,10 +46,10 @@ Entregas:
 - `AGENTS.md`
 - `CLAUDE.md`
 - `specs/README.md`
-- `specs/repo-foundation/spec.md`
-- `specs/repo-foundation/plan.md`
-- `specs/repo-foundation/tasks.md`
-- `specs/repo-foundation/handoff.md`
+- `specs/000-repo-foundation/spec.md`
+- `specs/000-repo-foundation/plan.md`
+- `specs/000-repo-foundation/tasks.md`
+- `specs/000-repo-foundation/handoff.md`
 - `/.agents/skills/*`
 
 ### Coordenação multiagente
@@ -152,17 +152,17 @@ Convergir documentação e código:
 
 Atacar lacunas funcionais de maior valor:
 
-- `specs/agents-tools/`: JUDITE orquestradora, workflows multi-etapa, tools, sandbox, memória e rollback.
-- `specs/rag-sensitive-data/`: classificação sensível manual/heurística, auditoria de documentos e escopo RAG.
-- `specs/modeling-3d-fusion/`: Blender real, Fusion bridge, snapshots, rollback, printability e artifacts.
-- `specs/observability-quality/`: auditoria obrigatória e golden paths.
+- `specs/050-agents-tools-runtime/`: JUDITE orquestradora, workflows multi-etapa, tools, sandbox, memória e rollback.
+- `specs/030-files-rag-pipeline/`: classificação sensível manual/heurística, auditoria de documentos e escopo RAG.
+- `specs/005-modeling-3d-fusion/`: Blender real, Fusion bridge, snapshots, rollback, printability e artifacts.
+- `specs/060-cost-audit-governance/`: auditoria obrigatória e golden paths.
 
 ### Onda D
 
 Expandir especializações:
 
-- `specs/mobile-pairing/`: QR local, mobile sem autenticação no MVP, indicador online/offline e cache completo.
-- `specs/artifacts-export/`: canvas, artifacts e exports Markdown/código/JSON/HTML/Mermaid/PDF/DOCX/PPTX.
+- `specs/100-mobile-desktop-shells/`: QR local, mobile sem autenticação no MVP, indicador online/offline e cache completo.
+- `specs/110-artifacts-export/`: canvas, artifacts e exports Markdown/código/JSON/HTML/Mermaid/PDF/DOCX/PPTX.
 - Retenção, compactação e performance quando houver volume real.
 - Automação de rastreabilidade entre PR, spec, task e documentação.
 
