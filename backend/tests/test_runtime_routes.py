@@ -692,7 +692,7 @@ def test_chat_stream_never_executes_inline_even_if_executor_would_fail(monkeypat
     # wiring a service whose ``execute_plan`` always raises: the stream must
     # still succeed and propose a ``waiting_approval`` plan, because it never
     # calls execute during streaming.
-    from app.api.routes import chat as chat_route
+    from app.api.routes import chat_modeling
     from app.modeling import service as service_module
     from app.storage.store import get_store
 
@@ -701,7 +701,9 @@ def test_chat_stream_never_executes_inline_even_if_executor_would_fail(monkeypat
             raise AssertionError("o stream 3D NÃO deve executar inline")
 
     failing_service = FailingInlineService(store=get_store())
-    monkeypatch.setattr(chat_route, "get_modeling_service", lambda store: failing_service)
+    # The 3D stream handler now lives in chat_modeling.py and calls
+    # get_modeling_service from there.
+    monkeypatch.setattr(chat_modeling, "get_modeling_service", lambda store: failing_service)
 
     client = TestClient(app)
     project = client.post(
