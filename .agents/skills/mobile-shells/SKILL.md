@@ -14,7 +14,7 @@ Manter desktop e mobile como shells coerentes com o frontend principal e com o m
 - `docs/architecture.md`
 - `docs/local-dev.md`
 - `docs/mvp-readiness.md`
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`
 
 ## Regras
 

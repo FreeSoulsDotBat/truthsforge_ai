@@ -677,7 +677,7 @@ opcional) volta o chat para `discovery` e o agente retoma a conversa.
 > `status=waiting_approval` e PARA — nunca auto-executa, nem em `safe_auto`.
 > A execução só ocorre quando o usuário clica em Aprovar (que chama
 > `/plans/{id}/approve` + `/execute`). A sessão fica em `planning` até a
-> aprovação. Ver `specs/modeling-3d-fusion/chat-flow-redesign.md`.
+> aprovação. Ver `specs/005-modeling-3d-fusion/chat-flow-redesign.md`.
 
 Em edições, mini-planos sem high-risk autoexecutam e renderizam
 `ModelingEditCard` compacto. Se a edição tocar em high-risk, o card retorna a
@@ -913,7 +913,7 @@ ou `./scripts/quality.ps1`.
 
 ## Próximos incrementos
 
-A refatoração v2 (`specs/modeling-3d-fusion/plan.md`) é a próxima entrega
+A refatoração v2 (`specs/005-modeling-3d-fusion/plan.md`) é a próxima entrega
 maior. Após v2 concluída:
 
 1. Próximas tools Blender ficariam em tier 3 (animação básica, modifiers avançados).

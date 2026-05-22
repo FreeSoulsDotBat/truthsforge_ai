@@ -9,8 +9,10 @@ Este repositorio comeca pelo ambiente de desenvolvimento local:
 - `apps/desktop/`: scaffold Tauri para empacotar o frontend no Windows.
 - `apps/mobile/`: scaffold Capacitor para Android.
 - `infra/`: Docker Compose com PostgreSQL/pgvector, Qdrant e Valkey.
-- `specs/`: baseline SDD e futuras specs por feature.
+- `specs/`: specs SDD no padrao GitHub Spec Kit (pastas `NNN-<slug>`); legado congelado em `specs/_legacy/`.
+- `.specify/`: constituicao, templates e scripts do Spec Kit.
 - `.agents/skills/`: procedimentos versionados para agentes e humanos trabalharem por bounded context.
+- `.claude/skills/speckit-*`: fases do fluxo SDD (specify/plan/tasks/implement) para Claude Code.
 - `.local/`: dados locais de desenvolvimento, ignorados pelo Git.
 
 ## Estado atual
@@ -65,12 +67,13 @@ O hook preparado em `.githooks/pre-commit` roda format check, lint e testes unit
 
 ## SDD e colaboração multiagente
 
-O repositório usa Spec-Driven Development em `specs/`.
+O repositório usa Spec-Driven Development no padrão **GitHub Spec Kit**. Os invariantes ficam em `.specify/memory/constitution.md`, os templates em `.specify/templates/` e as fases como skills em `.claude/skills/speckit-*` (specify → plan → tasks → implement).
 
+- `.specify/memory/constitution.md` reúne os princípios não-negociáveis (P1–P9).
 - `AGENTS.md` é o contrato comum para Codex, Claude Code, Devin e humanos.
 - `CLAUDE.md` apenas adapta o Claude Code para carregar o contrato comum.
-- `specs/repo-foundation/` descreve o baseline atual do produto em `spec.md`, `plan.md`, `tasks.md` e `handoff.md`.
-- Specs de domínio vivem em `specs/<slug>/` para agentes/tools, RAG, mobile, artifacts/export, 3D/Fusion e observabilidade.
+- `specs/000-repo-foundation/` descreve o baseline atual do produto em `spec.md`, `plan.md`, `tasks.md` e `handoff.md`.
+- Specs de domínio vivem em `specs/NNN-<slug>/` (catálogo em `specs/README.md`); specs absorvidas ficam congeladas em `specs/_legacy/`.
 - `.agents/skills/` guarda procedimentos por bounded context, sem scripts executáveis por padrão.
 - `docs/delivery-checklist.md` define o checklist obrigatório que deve acompanhar entregas relevantes.
 

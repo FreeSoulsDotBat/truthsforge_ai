@@ -247,7 +247,7 @@ class ModelingService:
         ``tool_name`` contra a allowlist do planner, reordena ``seq`` pela
         posição, re-aplica a policy de segurança e mantém o plano em
         ``waiting_approval`` (gate da P1) para o card seguir exibindo Aprovar.
-        Ver specs/modeling-3d-fusion/chat-flow-redesign.md (P4).
+        Ver specs/005-modeling-3d-fusion/chat-flow-redesign.md (P4).
         """
 
         plan = self._get_plan_or_raise(plan_id)

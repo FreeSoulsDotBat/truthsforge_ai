@@ -186,7 +186,7 @@ def test_chat_stream_proposes_plan_without_executing(monkeypatch) -> None:
     ligado deve PROPOR o plano (status waiting_approval) e NÃO executar,
     mesmo em mode=safe_auto. A execução só acontece via /approve+/execute
     (acionados pelo card). Regressão da dor "o plano executa sem autorização".
-    Ver specs/modeling-3d-fusion/chat-flow-redesign.md (P1).
+    Ver specs/005-modeling-3d-fusion/chat-flow-redesign.md (P1).
     """
 
     monkeypatch.setattr(FusionDesktopAdapter, "is_available", lambda self: False)
@@ -236,7 +236,7 @@ def test_chat_stream_asks_clarification_when_ambiguous(monkeypatch) -> None:
     """P2 (discovery): quando o agente avalia o pedido como ambíguo, a rota
     /api/chat/stream deve FAZER perguntas e NÃO criar plano; o chat fica em
     ``discovery``. Mockamos a avaliação para não depender do LLM.
-    Ver specs/modeling-3d-fusion/chat-flow-redesign.md (P2).
+    Ver specs/005-modeling-3d-fusion/chat-flow-redesign.md (P2).
     """
 
     from app.core.contracts import ModelingDiscoveryAssessment
@@ -408,7 +408,7 @@ def test_chat_stream_fluid_edit_auto_executes(monkeypatch) -> None:
 def test_execute_advances_chat_to_editing(monkeypatch) -> None:
     """P3: ao executar um plano vinculado a um chat 3D via card, o chat avança
     para ``editing`` (para que follow-ups sejam tratados como edição).
-    Ver specs/modeling-3d-fusion/chat-flow-redesign.md (P3).
+    Ver specs/005-modeling-3d-fusion/chat-flow-redesign.md (P3).
     """
 
     from app.core.contracts import ChatModelingStage, ChatSession
