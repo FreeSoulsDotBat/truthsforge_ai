@@ -1,4 +1,4 @@
-import { LoaderCircle, Menu, Send, Wifi } from "lucide-react";
+import { Menu, Wifi } from "lucide-react";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -12,6 +12,7 @@ import { quickActions } from "./app/constants";
 import { appDataQueryKey, fetchAppDataSnapshot } from "./app/queries/app-data";
 import { useAppStore } from "./app/store";
 import type { DashboardView, LoadState, ProviderCatalogState } from "./app/ui-state";
+import { ChatComposerInput } from "./features/chat/components/ChatComposerInput";
 import { ChatMessageList } from "./features/chat/components/ChatMessageList";
 import { ChatRightPanel } from "./features/chat/components/ChatRightPanel";
 import { ComposerAttachments } from "./features/chat/components/ComposerAttachments";
@@ -2481,57 +2482,23 @@ function App() {
                         setAttachedDocumentIds((current) => current.filter((itemId) => itemId !== documentId))
                       }
                     />
-                    {activeMention && mentionSuggestions.length > 0 && (
-                      <div className="mb-2 rounded-md border border-forge-line bg-[#0f1011] p-1">
-                        <div className="px-2 pb-1 pt-0.5 text-[11px] text-forge-muted">Pastas de contexto</div>
-                        <div className="max-h-36 space-y-1 overflow-y-auto pr-1">
-                          {mentionSuggestions.map((option) => (
-                            <button
-                              key={option.key}
-                              type="button"
-                              className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
-                              onClick={() => insertFolderMention(option)}
-                            >
-                              <span className="truncate">{option.label}</span>
-                              <span className="ml-2 shrink-0 text-[10px] text-forge-amber">@</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    <div className="flex items-end gap-2">
-                      <textarea
-                        ref={draftInputRef}
-                        value={draft}
-                        onChange={(event) => {
-                          setDraft(event.target.value);
-                          setDraftCursor(event.target.selectionStart ?? event.target.value.length);
-                        }}
-                        onClick={(event) => setDraftCursor((event.target as HTMLTextAreaElement).selectionStart ?? 0)}
-                        onKeyUp={(event) => setDraftCursor((event.target as HTMLTextAreaElement).selectionStart ?? 0)}
-                        rows={1}
-                        placeholder={
-                          loadState === "offline"
-                            ? "Servidor indisponível"
-                            : modeling3dEnabled
-                              ? "Descreva o modelo 3D para Blender/Fusion via MCP"
-                              : "Mensagem para JUDITE"
-                        }
-                        disabled={loadState === "offline"}
-                        className="max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-forge-text placeholder:text-forge-muted focus:outline-none"
-                      />
-                      <span title={sendButtonTitle}>
-                        <Button
-                          type="submit"
-                          className="h-10 w-10 px-0"
-                          disabled={sendDisabled}
-                          aria-label="Enviar"
-                          title={sendButtonTitle}
-                        >
-                          {isStreaming ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
-                        </Button>
-                      </span>
-                    </div>
+                    <ChatComposerInput
+                      showMentions={Boolean(activeMention)}
+                      mentionSuggestions={mentionSuggestions}
+                      onInsertMention={insertFolderMention}
+                      draftInputRef={draftInputRef}
+                      draft={draft}
+                      onChangeDraft={(value, cursor) => {
+                        setDraft(value);
+                        setDraftCursor(cursor);
+                      }}
+                      onMoveCursor={setDraftCursor}
+                      offline={loadState === "offline"}
+                      modeling3dEnabled={modeling3dEnabled}
+                      sendButtonTitle={sendButtonTitle}
+                      sendDisabled={sendDisabled}
+                      isStreaming={isStreaming}
+                    />
                   </div>
                 </form>
               </section>
