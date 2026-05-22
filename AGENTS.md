@@ -24,6 +24,12 @@ Este repositório pode ser trabalhado por Codex, Claude Code, Devin e humanos. N
 - Não aceite decisões arquiteturais apenas porque uma IA anterior sugeriu; valide contra código, docs e specs.
 - Quando continuar trabalho iniciado por outro agente, leia primeiro a spec relevante, `tasks.md`, o handoff mais recente e o diff atual.
 
+## Constituição e SDD (Spec Kit)
+
+- A camada curta de invariantes vive em `.specify/memory/constitution.md` (princípios P1–P9). Este `AGENTS.md` é o "como trabalhar" detalhado; a constituição é "o inegociável". Em conflito, vale a constituição + a ordem de prioridade de contexto acima.
+- O repositório segue o padrão **GitHub Spec Kit**: specs em `specs/NNN-<slug>/` (ver `specs/README.md`), templates em `.specify/templates/`, scripts em `.specify/scripts/`, e as fases SDD como skills do Claude Code em `.claude/skills/speckit-*` (constitution → specify → clarify → plan → analyze → tasks → implement). Codex, Devin e humanos seguem os mesmos templates/constituição (agnósticos de agente).
+- Toda frente que exceda ajuste pontual nasce de uma spec (`speckit-specify`) e passa pelo Constitution Check no `plan`.
+
 ## Princípios obrigatórios
 
 - Preserve a arquitetura atual antes de propor reescritas.

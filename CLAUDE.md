@@ -4,7 +4,9 @@
 
 ## Claude Code
 
-Use este arquivo apenas como adaptador para Claude Code. As regras principais do repositório vivem em `AGENTS.md`.
+Use este arquivo apenas como adaptador para Claude Code. As regras principais do repositório vivem em `AGENTS.md` e os invariantes em `.specify/memory/constitution.md`.
+
+As fases do SDD (padrão GitHub Spec Kit) estão disponíveis como skills em `.claude/skills/speckit-*`: `speckit-specify`, `speckit-clarify`, `speckit-plan`, `speckit-analyze`, `speckit-tasks`, `speckit-implement` (e `speckit-constitution`, `speckit-checklist`, `speckit-taskstoissues`). Templates em `.specify/templates/`; scripts em `.specify/scripts/`.
 
 ## Regras específicas
 
