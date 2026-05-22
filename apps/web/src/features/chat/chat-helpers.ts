@@ -5,12 +5,7 @@
  */
 import type { ChatMessageAttachment } from "./chat-domain";
 import { fileContentUrl } from "../files/file-domain";
-import type {
-  ChatMessage,
-  ChatSession,
-  KnowledgeBaseUpsert,
-  PlatformFile
-} from "../../types/api";
+import type { ChatMessage, ChatSession, KnowledgeBaseUpsert, PlatformFile } from "../../types/api";
 
 export type SessionLazyMeta = {
   hasMore: boolean;

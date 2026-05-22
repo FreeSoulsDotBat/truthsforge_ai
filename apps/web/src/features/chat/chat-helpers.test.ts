@@ -25,11 +25,7 @@ describe("chat-helpers (extracted from App.tsx)", () => {
   it("mergeUniqueMessages dedupes by id, keeping order", () => {
     const older = [{ id: "a" }, { id: "b" }] as never[];
     const newer = [{ id: "b" }, { id: "c" }] as never[];
-    expect(mergeUniqueMessages(older, newer).map((m) => (m as { id: string }).id)).toEqual([
-      "a",
-      "b",
-      "c"
-    ]);
+    expect(mergeUniqueMessages(older, newer).map((m) => (m as { id: string }).id)).toEqual(["a", "b", "c"]);
   });
 
   it("sessionHasEmptyDraft is true for a blank default chat", () => {
