@@ -35,4 +35,4 @@ Garantir que todos os fluxos críticos sejam auditáveis e que mudanças relevan
 
 - `docs/delivery-checklist.md`
 - `docs/implementation-plan.md`
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`

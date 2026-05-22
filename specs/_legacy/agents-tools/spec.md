@@ -37,4 +37,4 @@ Transformar JUDITE e os agentes em uma camada de orquestração multi-etapa com 
 - `AGENTS.md`
 - `docs/decisions.md`
 - `docs/implementation-plan.md`
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`

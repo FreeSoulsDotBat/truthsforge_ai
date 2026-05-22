@@ -29,4 +29,4 @@ Evoluir o pipeline de arquivos, documentos e bases mantendo escopo por projeto/a
 
 - `docs/knowledge-bases.md`
 - `docs/decisions.md`
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`

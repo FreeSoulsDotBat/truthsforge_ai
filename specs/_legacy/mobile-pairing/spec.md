@@ -28,4 +28,4 @@ Permitir Android como cliente pareado do backend desktop via QR code local, sem 
 
 - `docs/decisions.md`
 - `docs/architecture.md`
-- `specs/repo-foundation/spec.md`
+- `specs/000-repo-foundation/spec.md`
