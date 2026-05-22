@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
 import json
@@ -41,6 +40,7 @@ from app.core.contracts import (
     ModelingExecutionMode,
     ModelingPlan,
     ModelingPlanCreate,
+    ModelingPlanStatus,
     PlatformFile,
     PlatformFileCreate,
     PlatformFileUpdate,
@@ -340,6 +340,32 @@ def _sync_modeling_plan_session(store, session: ChatSession, plan: ModelingPlan)
             "is_modeling_3d": True,
             "modeling_software_preference": plan.software_choice,
             "modeling_stage": ChatModelingStage.editing,
+            "modeling_plan_id": plan.id,
+            "updated_at": now_utc(),
+        }
+    )
+    if hasattr(store, "upsert_chat_session"):
+        store.upsert_chat_session(updated)
+    return updated
+
+
+def _sync_modeling_plan_proposed(store, session: ChatSession, plan: ModelingPlan) -> ChatSession:
+    """Link a freshly proposed (not yet executed) plan to the chat and move it
+    to ``planning``.
+
+    Mirrors :func:`_sync_modeling_plan_session` but stops at ``planning``
+    instead of ``editing``: the plan is awaiting the user's decision on the
+    ModelingPlanCard. Execution only happens after an explicit approval
+    (``POST /api/3d/plans/{id}/approve`` + ``/execute``, driven by the
+    ModelingChatOrchestrator), preserving human-in-the-loop for the primary
+    plan and any high-risk step (ADR-013 / AGENTS.md).
+    """
+
+    updated = session.model_copy(
+        update={
+            "is_modeling_3d": True,
+            "modeling_software_preference": plan.software_choice,
+            "modeling_stage": ChatModelingStage.planning,
             "modeling_plan_id": plan.id,
             "updated_at": now_utc(),
         }
@@ -1471,42 +1497,31 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
                 return
 
-            execution = None
-            if payload.modeling_3d.mode != ModelingExecutionMode.plan_only:
-                try:
-                    yield _runtime_status(
-                        "modeling_3d_execute",
-                        "Executando MCP 3D",
-                        "Etapas allowlistadas serão executadas sem aprovação manual.",
-                    )
-                    execution = await asyncio.to_thread(modeling_service.execute_plan, plan.id)
-                    plan = execution.plan
-                    # Fix #7: garante que trace events do executor saiam
-                    # do buffer mesmo se executor.execute_plan tiver feito
-                    # o flush — defesa em profundidade contra regressao.
-                    _modeling_tracer.flush(current_trace_id())
-                except Exception as exc:  # noqa: BLE001 - keep plan linked on execution failure
-                    _modeling_tracer.flush(current_trace_id())  # flush antes de propagar erro
-                    _modeling_tracer.close_trace()
-                    plan_metadata = _modeling_plan_metadata(plan)
-                    session = _sync_modeling_plan_session(store, session, plan)
-                    error_message = f"Plano 3D criado, mas a execução MCP falhou: {exc}"
-                    assistant_message.content = error_message
-                    assistant_message.metadata["modeling_plan"] = plan_metadata
-                    assistant_message.metadata["modeling_plan_id"] = plan.id
-                    assistant_message.metadata["provider_error"] = str(exc)
-                    assistant_message.metadata["execution_error"] = str(exc)
-                    store.add_message(assistant_message)
-                    yield _sse("modeling_plan", {"plan": plan_metadata})
-                    yield _sse("error", {"message": error_message, "reason": str(exc)})
-                    yield _sse(
-                        "done",
-                        {"session_id": session.id, "message_id": assistant_message.id},
-                    )
-                    return
+            # ADR-013 / AGENTS.md: o plano 3D NÃO é mais executado inline no
+            # stream. Forçamos ``waiting_approval`` para o ModelingPlanCard
+            # exibir "Aprovar"/"Rejeitar"; a execução só roda quando o usuário
+            # aprova pelo card (POST /api/3d/plans/{id}/approve + /execute),
+            # ambos roteados pelo ModelingChatOrchestrator. Assim o plano
+            # primário e qualquer etapa high-risk/destrutiva ficam sob gate
+            # humano (preserva human-in-the-loop). A auto-execução fluida de
+            # edições aditivas é trabalho separado (specs/modeling-3d-fusion).
+            if plan.status not in (
+                ModelingPlanStatus.waiting_approval,
+                ModelingPlanStatus.completed,
+                ModelingPlanStatus.failed,
+                ModelingPlanStatus.rejected,
+            ):
+                plan = plan.model_copy(
+                    update={
+                        "status": ModelingPlanStatus.waiting_approval,
+                        "updated_at": now_utc(),
+                    }
+                )
+                if hasattr(store, "upsert_modeling_plan"):
+                    store.upsert_modeling_plan(plan)
 
             plan_metadata = _modeling_plan_metadata(plan)
-            session = _sync_modeling_plan_session(store, session, plan)
+            session = _sync_modeling_plan_proposed(store, session, plan)
             assistant_message.content = _modeling_plan_chat_summary(plan)
             assistant_message.metadata["modeling_plan"] = plan_metadata
             assistant_message.metadata["modeling_plan_id"] = plan.id
@@ -1532,19 +1547,14 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 yield _sse("session_title", {"session_id": session.id, "title": title})
             yield _runtime_status(
                 "modeling_3d_plan",
-                "Plano 3D pronto",
+                "Plano 3D pronto — aguardando sua aprovação",
                 (
-                    f"{len(plan.steps)} etapas para {plan.software_choice.value}; "
-                    f"status {plan.status.value}."
+                    f"{len(plan.steps)} etapas para {plan.software_choice.value}. "
+                    "Revise o card e clique em Aprovar para executar, ou Rejeitar "
+                    "para refazer."
                 ),
             )
             yield _sse("modeling_plan", {"plan": plan_metadata})
-            if execution is not None:
-                yield _runtime_status(
-                    "modeling_3d_execute",
-                    "Execução MCP 3D concluída",
-                    f"{len(execution.executed_step_ids)} etapa(s) executada(s).",
-                )
             yield _sse("token", {"content": assistant_message.content})
             yield _runtime_status("done", "Concluído")
             record_audit_event(

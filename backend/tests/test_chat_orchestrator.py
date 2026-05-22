@@ -414,3 +414,106 @@ def test_archive_chat_is_noop_for_non_modeling_chat() -> None:
 
     assert updated is chat
     assert updated.modeling_stage is None
+
+
+# ---------------------------------------------------------------------------
+# split approve / execute (chat-card two-call flow)
+# ---------------------------------------------------------------------------
+
+
+def test_approve_plan_only_advances_to_approved_without_executing() -> None:
+    orch, store, _, _ = _orchestrator(
+        planner_steps=[_safe_step(1, "blender.apply_bevel")]
+    )
+    chat = _make_chat(stage=ChatModelingStage.discovery)
+    store.chats[chat.id] = chat
+    chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
+
+    chat, approved = orch.approve_plan_only(chat, plan.id)
+
+    # Approval moves the chat to ``approved`` but must NOT execute yet — the
+    # executor only runs on the separate ``/execute`` call.
+    assert chat.modeling_stage is ChatModelingStage.approved
+    assert approved.status is ModelingPlanStatus.approved
+    assert store.plans[plan.id].status is ModelingPlanStatus.approved
+
+
+def test_execute_plan_runs_after_approve_and_lands_in_editing() -> None:
+    orch, store, _, _ = _orchestrator(
+        planner_steps=[_safe_step(1, "blender.apply_bevel")]
+    )
+    chat = _make_chat(stage=ChatModelingStage.discovery)
+    store.chats[chat.id] = chat
+    chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
+    chat, _ = orch.approve_plan_only(chat, plan.id)
+
+    chat, executed_plan, execution = orch.execute_plan(chat, plan.id)
+
+    assert chat.modeling_stage is ChatModelingStage.editing
+    assert executed_plan.status is ModelingPlanStatus.completed
+    assert execution.executed_step_ids
+
+
+def test_split_flow_matches_monolithic_approve_plan() -> None:
+    """approve_plan_only + execute_plan must land in the same end state as the
+    monolithic approve_plan (the agent-tool path)."""
+
+    orch, store, _, _ = _orchestrator(
+        planner_steps=[_safe_step(1, "blender.apply_bevel")]
+    )
+    chat = _make_chat(stage=ChatModelingStage.discovery)
+    store.chats[chat.id] = chat
+    chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
+
+    chat, _ = orch.approve_plan_only(chat, plan.id)
+    chat, executed_plan, _ = orch.execute_plan(chat, plan.id)
+
+    assert chat.modeling_stage is ChatModelingStage.editing
+    assert executed_plan.status is ModelingPlanStatus.completed
+
+
+def test_execute_plan_retry_in_editing_stays_editing() -> None:
+    orch, store, _, _ = _orchestrator(
+        planner_steps=[_safe_step(1, "blender.apply_bevel")]
+    )
+    chat = _make_chat(stage=ChatModelingStage.discovery)
+    store.chats[chat.id] = chat
+    chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
+    chat, _ = orch.approve_plan_only(chat, plan.id)
+    chat, _, _ = orch.execute_plan(chat, plan.id)
+    assert chat.modeling_stage is ChatModelingStage.editing
+
+    # Retry from editing must execute again without an illegal transition.
+    chat, _, execution = orch.execute_plan(chat, plan.id)
+
+    assert chat.modeling_stage is ChatModelingStage.editing
+    assert execution.executed_step_ids
+
+
+def test_reject_dispatches_to_reject_plan_in_planning() -> None:
+    orch, store, _, _ = _orchestrator(
+        planner_steps=[_safe_step(1, "blender.apply_bevel")]
+    )
+    chat = _make_chat(stage=ChatModelingStage.discovery)
+    store.chats[chat.id] = chat
+    chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
+
+    chat, rejected = orch.reject(chat, plan.id, reason="forma errada")
+
+    assert chat.modeling_stage is ChatModelingStage.discovery
+    assert rejected.status is ModelingPlanStatus.rejected
+
+
+def test_reject_dispatches_to_reject_edit_plan_in_editing() -> None:
+    orch, store, _, _ = _orchestrator(planner_steps=[_high_risk_step()])
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+    outcome = orch.propose_edit_plan(
+        chat, payload=ModelingPlanCreate(prompt="aplicar boolean")
+    )
+
+    chat, rejected = orch.reject(outcome.chat, outcome.plan.id, reason="não")
+
+    assert rejected.status is ModelingPlanStatus.rejected
+    assert chat.modeling_stage is ChatModelingStage.discovery

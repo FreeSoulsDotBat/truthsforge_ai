@@ -100,6 +100,93 @@ def test_client_trace_event_uses_max_sequence_lookup(monkeypatch) -> None:
     assert store.events[0].sequence == 42
 
 
+def _modeling_plan_from_sse(raw: str) -> dict[str, Any] | None:
+    """Extract the ``modeling_plan`` event payload from an SSE stream body."""
+
+    for block in raw.split("\n\n"):
+        lines = block.splitlines()
+        event = next((ln[len("event:") :].strip() for ln in lines if ln.startswith("event:")), None)
+        if event != "modeling_plan":
+            continue
+        data = next((ln[len("data:") :].strip() for ln in lines if ln.startswith("data:")), None)
+        if data:
+            return json.loads(data)["plan"]
+    return None
+
+
+def test_chat_stream_3d_gates_plan_without_executing(monkeypatch) -> None:
+    """ADR-013 / AGENTS.md regression: the 3D chat stream must PROPOSE a plan
+    in ``waiting_approval`` and NOT execute it inline. Execution only happens
+    after an explicit approval via the card endpoints."""
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "Crie um cubo simples no Blender.",
+            "title": "Cubo de teste — gate 3D",
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "safe_auto",
+                "software_override": "blender",
+            },
+        },
+    )
+    assert response.status_code == 200
+
+    plan = _modeling_plan_from_sse(response.text)
+    assert plan is not None, "stream deve emitir o evento modeling_plan"
+    # The gate: plan is awaiting approval and nothing ran inline.
+    assert plan["status"] == "waiting_approval"
+    assert all(step["status"] != "completed" for step in plan["steps"])
+
+    plan_id = plan["id"]
+    # No tool calls should have been recorded yet (nothing executed).
+    pre = client.get(f"/api/3d/tool-calls?plan_id={plan_id}").json()
+    assert pre == []
+
+    # Approve via the card endpoint -> orchestrator advances state, no exec yet.
+    approved = client.post(f"/api/3d/plans/{plan_id}/approve", json={"decision": "approve"})
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+
+    # Execute via the card endpoint -> now it runs.
+    executed = client.post(f"/api/3d/plans/{plan_id}/execute")
+    assert executed.status_code == 200
+    assert executed.json()["plan"]["status"] == "completed"
+
+
+def test_chat_stream_3d_reject_returns_plan_to_discovery(monkeypatch) -> None:
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "Crie um cubo simples no Blender.",
+            "title": "Cubo de teste — rejeição 3D",
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "safe_auto",
+                "software_override": "blender",
+            },
+        },
+    )
+    assert response.status_code == 200
+    plan = _modeling_plan_from_sse(response.text)
+    assert plan is not None
+    plan_id = plan["id"]
+
+    rejected = client.post(
+        f"/api/3d/plans/{plan_id}/approve",
+        json={"decision": "reject", "reason": "forma errada"},
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "rejected"
+
+
 def test_modeling_plan_executes_fluid_steps_without_plan_approval(monkeypatch) -> None:
     monkeypatch.setattr(FusionDesktopAdapter, "is_available", lambda self: False)
 

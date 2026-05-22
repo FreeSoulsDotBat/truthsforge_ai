@@ -137,7 +137,9 @@ def test_approved_dangerous_tool_without_runtime_returns_error_not_approval_loop
     payload = response.json()
     assert payload["status"] == "error"
     assert payload["requires_approval"] is False
-    assert "Runtime real ainda não implementado" in payload["message"]
+    # Explicit safety stub: write/execute tools are not runnable until a
+    # per-project sandbox exists (AGENTS.md); only rag.search is enabled.
+    assert "sandbox isolado por projeto" in payload["message"]
 
 
 def test_safe_rag_tool_execution_is_allowed_without_approval() -> None:
@@ -494,7 +496,9 @@ def test_chat_stream_audit_records_cost_and_context_metadata() -> None:
     )
 
 
-def test_chat_stream_can_create_modeling_plan_inline() -> None:
+def test_chat_stream_proposes_modeling_plan_for_approval() -> None:
+    # ADR-013 / AGENTS.md: the 3D stream PROPOSES a plan and waits for the
+    # card approval; it must not execute inline.
     client = TestClient(app)
     project = client.post(
         "/api/projects",
@@ -539,7 +543,9 @@ def test_chat_stream_can_create_modeling_plan_inline() -> None:
     assert session["title"].startswith("Crie no Blender")
     assert session["is_modeling_3d"] is True
     assert session["modeling_software_preference"] == "blender"
-    assert session["modeling_stage"] == "editing"
+    # Gated: the chat sits in ``planning`` awaiting the card decision, not
+    # ``editing`` (which only happens after execution).
+    assert session["modeling_stage"] == "planning"
     details = client.get(f"/api/chat/sessions/{session['id']}")
     assert details.status_code == 200
     messages = details.json()["messages"]
@@ -550,10 +556,24 @@ def test_chat_stream_can_create_modeling_plan_inline() -> None:
     assert plan["conversation_id"] == session["id"]
     assert plan["project_id"] == project_id
     assert plan["software_choice"] == "blender"
-    assert plan["status"] == "completed"
+    # The plan awaits approval and nothing ran inline.
+    assert plan["status"] == "waiting_approval"
     assert plan["steps"]
+    assert all(step["status"] != "completed" for step in plan["steps"])
     assert all(step["tool_name"] != "project_store.create_snapshot" for step in plan["steps"])
     assert all(step["approval_required"] is False for step in plan["steps"])
+
+    # End-to-end: approving via the card endpoints executes through the
+    # orchestrator and advances the chat to ``editing``.
+    plan_id = plan["id"]
+    approved = client.post(f"/api/3d/plans/{plan_id}/approve", json={"decision": "approve"})
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+    executed = client.post(f"/api/3d/plans/{plan_id}/execute")
+    assert executed.status_code == 200
+    assert executed.json()["plan"]["status"] == "completed"
+    refreshed = client.get(f"/api/chat/sessions/{session['id']}").json()
+    assert refreshed["modeling_stage"] == "editing"
 
 
 def test_chat_stream_promotes_empty_draft_to_modeling_chat() -> None:
@@ -606,7 +626,7 @@ def test_chat_stream_promotes_empty_draft_to_modeling_chat() -> None:
     session = details.json()
     assert session["is_modeling_3d"] is True
     assert session["modeling_software_preference"] == "blender"
-    assert session["modeling_stage"] == "editing"
+    assert session["modeling_stage"] == "planning"
     assert session["modeling_plan_id"] is not None
     assert session["messages"][-1]["metadata"]["response_mode"] == "modeling_3d"
 
@@ -663,18 +683,22 @@ def test_chat_stream_promotes_legacy_modeling_message_session() -> None:
     session = details.json()
     assert session["is_modeling_3d"] is True
     assert session["modeling_software_preference"] == "blender"
-    assert session["modeling_stage"] == "editing"
+    assert session["modeling_stage"] == "planning"
     assert session["modeling_plan_id"] is not None
 
 
-def test_chat_stream_preserves_modeling_plan_when_inline_execution_fails(monkeypatch) -> None:
+def test_chat_stream_never_executes_inline_even_if_executor_would_fail(monkeypatch) -> None:
+    # The 3D stream no longer executes inline (ADR-013 gate). Prove it by
+    # wiring a service whose ``execute_plan`` always raises: the stream must
+    # still succeed and propose a ``waiting_approval`` plan, because it never
+    # calls execute during streaming.
     from app.api.routes import chat as chat_route
     from app.modeling import service as service_module
     from app.storage.store import get_store
 
     class FailingInlineService(service_module.ModelingService):
         def execute_plan(self, plan_id: str):
-            raise RuntimeError("falha inline simulada")
+            raise AssertionError("o stream 3D NÃO deve executar inline")
 
     failing_service = FailingInlineService(store=get_store())
     monkeypatch.setattr(chat_route, "get_modeling_service", lambda store: failing_service)
@@ -714,20 +738,21 @@ def test_chat_stream_preserves_modeling_plan_when_inline_execution_fails(monkeyp
 
     assert response.status_code == 200
     assert "event: modeling_plan" in response.text
-    assert "Plano 3D criado, mas a execução MCP falhou" in response.text
+    # No inline execution => no error event from the (failing) executor.
+    assert "execução MCP falhou" not in response.text
     sessions = client.get("/api/chat/sessions")
     session = next(item for item in sessions.json() if item["project_id"] == project_id)
     details = client.get(f"/api/chat/sessions/{session['id']}")
     session = details.json()
     assert session["is_modeling_3d"] is True
     assert session["modeling_software_preference"] == "blender"
-    assert session["modeling_stage"] == "editing"
+    assert session["modeling_stage"] == "planning"
     assert session["modeling_plan_id"] is not None
     assistant = session["messages"][-1]
     metadata = assistant["metadata"]
     assert metadata["modeling_plan_id"] == metadata["modeling_plan"]["id"]
-    assert metadata["modeling_plan"]["status"] == "approved"
-    assert metadata["execution_error"] == "falha inline simulada"
+    assert metadata["modeling_plan"]["status"] == "waiting_approval"
+    assert "execution_error" not in metadata
 
 
 def test_agent_cannot_stream_in_project_outside_runtime_scope() -> None:

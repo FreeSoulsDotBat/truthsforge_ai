@@ -122,6 +122,14 @@ def execute_tool_request(
             request.input,
         )
 
+    # Safety stub (architecture-map finding "tools de escrita ainda em stub"):
+    # only ``rag.search`` (read-only) has a real runtime today. Write/execute
+    # tools (e.g. python.run, filesystem.write) intentionally do NOT run yet —
+    # AGENTS.md requires them to operate in a per-project isolated sandbox with
+    # timeout, size limits, audit and mandatory rollback before any runtime is
+    # enabled. Until that lands they are rejected here (AFTER the permission
+    # gate above), so an enabled-but-unsandboxed tool can never execute. The
+    # rejection is audited via ``_record_tool_result``.
     return _record_tool_result(
         store,
         ToolExecutionResult(
@@ -130,7 +138,12 @@ def execute_tool_request(
             status="error",
             permission=decision.permission,
             requires_approval=False,
-            message="Runtime real ainda não implementado para esta ferramenta.",
+            message=(
+                "Ferramenta de escrita/execução ainda não habilitada: requer "
+                "sandbox isolado por projeto (timeout, limite de tamanho, "
+                "auditoria e rollback) conforme AGENTS.md. Apenas rag.search "
+                "(read-only) está disponível neste runtime."
+            ),
         ),
         request.input,
     )
