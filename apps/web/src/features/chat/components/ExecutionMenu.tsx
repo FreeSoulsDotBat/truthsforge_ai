@@ -45,8 +45,7 @@ export function ExecutionMenu({
   const imageMode = useAppStore((state) => state.responseMode) === "image";
   const reasoningLong = reasoningOverride === "long";
   const onToggleOpen = () => setExecutionMenuOpen((current) => !current);
-  const onToggleReasoningLong = () =>
-    setReasoningOverride((current) => (current === "long" ? "default" : "long"));
+  const onToggleReasoningLong = () => setReasoningOverride((current) => (current === "long" ? "default" : "long"));
   const onToggleReasoningSummary = () => setReasoningSummary((current) => !current);
   return (
     <div className="relative" ref={menuRef}>
