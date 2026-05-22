@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useShallow } from "zustand/react/shallow";
 
 import { useAppDataBootstrap } from "./app/hooks/use-app-data-bootstrap";
+import { useDocumentDraft } from "./app/hooks/use-document-draft";
 import { useProviderSettings } from "./app/hooks/use-provider-settings";
 import { useChatScopeSync } from "./app/hooks/use-chat-scope-sync";
 import { useKnowledgeScopeSync, type ProjectsStatus } from "./app/hooks/use-knowledge-scope-sync";
@@ -96,7 +97,6 @@ import type {
   KnowledgeBase,
   KnowledgeBaseDocument,
   KnowledgeBaseUpsert,
-  DocumentSearchResult,
   ModelConfig,
   ModelingPlan,
   PlatformFile,
@@ -231,12 +231,21 @@ function App() {
   const [agentEditorKey, setAgentEditorKey] = useState(0);
   const [draft, setDraft] = useState("");
   const [draftCursor, setDraftCursor] = useState(0);
-  const [documentTitle, setDocumentTitle] = useState("");
-  const [documentContent, setDocumentContent] = useState("");
-  const [documentTags, setDocumentTags] = useState("");
-  const [documentPinned, setDocumentPinned] = useState(false);
-  const [documentQuery, setDocumentQuery] = useState("");
-  const [documentResults, setDocumentResults] = useState<DocumentSearchResult[]>([]);
+  const {
+    documentTitle,
+    setDocumentTitle,
+    documentContent,
+    setDocumentContent,
+    documentTags,
+    setDocumentTags,
+    documentPinned,
+    setDocumentPinned,
+    documentQuery,
+    setDocumentQuery,
+    documentResults,
+    setDocumentResults,
+    resetDraft: resetDocumentDraft
+  } = useDocumentDraft();
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState<string | null>(null);
   const [knowledgeBaseDraft, setKnowledgeBaseDraft] = useState<KnowledgeBaseUpsert>(() =>
     createDefaultKnowledgeBaseDraft()
@@ -1653,10 +1662,7 @@ function App() {
         setKnowledgeBaseDocuments((current) => [item, ...current.filter((currentItem) => currentItem.id !== item.id)]);
       }
       setDocuments((current) => [document, ...current.filter((item) => item.id !== document.id)]);
-      setDocumentTitle("");
-      setDocumentContent("");
-      setDocumentTags("");
-      setDocumentPinned(false);
+      resetDocumentDraft();
       void refreshAppDataQuery();
     } finally {
       setIsIndexingDocument(false);
