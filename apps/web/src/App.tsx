@@ -129,9 +129,6 @@ function App() {
     imageModelId,
     reasoningSummary,
     multiAgentMode,
-    shortcutMenuOpen,
-    shortcutSubmenu,
-    executionMenuOpen,
     mobileMenuOpen,
     setActiveView,
     setActivePanel,
@@ -171,9 +168,6 @@ function App() {
       imageModelId: state.imageModelId,
       reasoningSummary: state.reasoningSummary,
       multiAgentMode: state.multiAgentMode,
-      shortcutMenuOpen: state.shortcutMenuOpen,
-      shortcutSubmenu: state.shortcutSubmenu,
-      executionMenuOpen: state.executionMenuOpen,
       mobileMenuOpen: state.mobileMenuOpen,
       setActiveView: state.setActiveView,
       setActivePanel: state.setActivePanel,
@@ -2293,13 +2287,8 @@ function App() {
                           projectLabel={`${contextProjectsLabel} · ${scopeModeLabel}`}
                           knowledgeBasesLabel={selectedContextDocsLabel}
                           executionLabel={executionLabels.length ? executionLabels.join(", ") : "padrão"}
-                          deepResearch={deepResearch}
-                          deepResearchMaxToolCalls={deepResearchMaxToolCalls}
-                          onChangeDeepResearchMaxToolCalls={setDeepResearchMaxToolCalls}
-                          imageMode={responseMode === "image"}
                           selectedImageModelId={effectiveImageModel?.id ?? ""}
                           imageCapableModels={imageCapableModels}
-                          onSelectImageModel={setImageModelId}
                           showDiagnostics={activeSessionIsModeling3D}
                           onOpenDiagnostics={() => setModelingDiagnosticsOpen(true)}
                         />
@@ -2307,15 +2296,8 @@ function App() {
                         <div className="flex items-center gap-1">
                           <ExecutionMenu
                             menuRef={executionMenuRef}
-                            open={executionMenuOpen}
-                            onToggleOpen={() => setExecutionMenuOpen((current) => !current)}
                             modeling3dEnabled={modeling3dEnabled}
-                            reasoningLong={reasoningOverride === "long"}
-                            reasoningSummary={reasoningSummary}
                             reasoningSummaryUnavailable={reasoningSummaryUnavailable}
-                            deepResearch={deepResearch}
-                            imageMode={responseMode === "image"}
-                            multiAgentMode={multiAgentMode}
                             onEnableModeling3d={() => {
                               setModelingEnableDialogOpen(true);
                               setResponseMode("text");
@@ -2323,10 +2305,6 @@ function App() {
                               setReasoningSummary(false);
                               setMultiAgentMode(false);
                             }}
-                            onToggleReasoningLong={() =>
-                              setReasoningOverride((current) => (current === "long" ? "default" : "long"))
-                            }
-                            onToggleReasoningSummary={() => setReasoningSummary((current) => !current)}
                             onToggleDeepResearch={() => {
                               setDeepResearch((current) => !current);
                               setResponseMode("text");
@@ -2349,18 +2327,6 @@ function App() {
 
                           <ShortcutMenu
                             menuRef={shortcutMenuRef}
-                            open={shortcutMenuOpen}
-                            submenu={shortcutSubmenu}
-                            onToggleOpen={() => {
-                              if (shortcutMenuOpen) {
-                                setShortcutMenuOpen(false);
-                                setShortcutSubmenu(null);
-                              } else {
-                                setShortcutMenuOpen(true);
-                                setShortcutSubmenu("agent");
-                              }
-                            }}
-                            onSelectSubmenu={setShortcutSubmenu}
                             agents={agents}
                             activeAgent={activeAgent}
                             availableContextProjects={availableContextProjects}

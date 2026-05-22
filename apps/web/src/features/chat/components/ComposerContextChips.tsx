@@ -1,3 +1,4 @@
+import { useAppStore } from "../../../app/store";
 import { ContextChip } from "../../../components/app-panels";
 import { Button } from "../../../components/ui/Button";
 import type { ModelConfig } from "../../../types/api";
@@ -7,13 +8,8 @@ export interface ComposerContextChipsProps {
   projectLabel: string;
   knowledgeBasesLabel: string;
   executionLabel: string;
-  deepResearch: boolean;
-  deepResearchMaxToolCalls: number;
-  onChangeDeepResearchMaxToolCalls: (value: number) => void;
-  imageMode: boolean;
   selectedImageModelId: string;
   imageCapableModels: ModelConfig[];
-  onSelectImageModel: (id: string | null) => void;
   showDiagnostics: boolean;
   onOpenDiagnostics: () => void;
 }
@@ -29,16 +25,16 @@ export function ComposerContextChips({
   projectLabel,
   knowledgeBasesLabel,
   executionLabel,
-  deepResearch,
-  deepResearchMaxToolCalls,
-  onChangeDeepResearchMaxToolCalls,
-  imageMode,
   selectedImageModelId,
   imageCapableModels,
-  onSelectImageModel,
   showDiagnostics,
   onOpenDiagnostics
 }: ComposerContextChipsProps) {
+  const deepResearch = useAppStore((state) => state.deepResearch);
+  const deepResearchMaxToolCalls = useAppStore((state) => state.deepResearchMaxToolCalls);
+  const onChangeDeepResearchMaxToolCalls = useAppStore((state) => state.setDeepResearchMaxToolCalls);
+  const onSelectImageModel = useAppStore((state) => state.setImageModelId);
+  const imageMode = useAppStore((state) => state.responseMode) === "image";
   return (
     <div className="flex min-w-0 flex-1 flex-wrap gap-2">
       <ContextChip label="Agente" value={agentName} />

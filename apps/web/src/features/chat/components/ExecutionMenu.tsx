@@ -1,23 +1,15 @@
 import { FileText, Plus } from "lucide-react";
 import type { MutableRefObject } from "react";
 
+import { useAppStore } from "../../../app/store";
 import { ExecutionMenuItem } from "../../../components/app-panels";
 import { Button } from "../../../components/ui/Button";
 
 export interface ExecutionMenuProps {
   menuRef: MutableRefObject<HTMLDivElement | null>;
-  open: boolean;
-  onToggleOpen: () => void;
   modeling3dEnabled: boolean;
-  reasoningLong: boolean;
-  reasoningSummary: boolean;
   reasoningSummaryUnavailable: boolean;
-  deepResearch: boolean;
-  imageMode: boolean;
-  multiAgentMode: boolean;
   onEnableModeling3d: () => void;
-  onToggleReasoningLong: () => void;
-  onToggleReasoningSummary: () => void;
   onToggleDeepResearch: () => void;
   onToggleImageMode: () => void;
   onToggleMultiAgent: () => void;
@@ -33,24 +25,29 @@ export interface ExecutionMenuProps {
  */
 export function ExecutionMenu({
   menuRef,
-  open,
-  onToggleOpen,
   modeling3dEnabled,
-  reasoningLong,
-  reasoningSummary,
   reasoningSummaryUnavailable,
-  deepResearch,
-  imageMode,
-  multiAgentMode,
   onEnableModeling3d,
-  onToggleReasoningLong,
-  onToggleReasoningSummary,
   onToggleDeepResearch,
   onToggleImageMode,
   onToggleMultiAgent,
   onEditKnowledgeBases,
   onAttachFile
 }: ExecutionMenuProps) {
+  const open = useAppStore((state) => state.executionMenuOpen);
+  const setExecutionMenuOpen = useAppStore((state) => state.setExecutionMenuOpen);
+  const reasoningOverride = useAppStore((state) => state.reasoningOverride);
+  const setReasoningOverride = useAppStore((state) => state.setReasoningOverride);
+  const reasoningSummary = useAppStore((state) => state.reasoningSummary);
+  const setReasoningSummary = useAppStore((state) => state.setReasoningSummary);
+  const deepResearch = useAppStore((state) => state.deepResearch);
+  const multiAgentMode = useAppStore((state) => state.multiAgentMode);
+  const imageMode = useAppStore((state) => state.responseMode) === "image";
+  const reasoningLong = reasoningOverride === "long";
+  const onToggleOpen = () => setExecutionMenuOpen((current) => !current);
+  const onToggleReasoningLong = () =>
+    setReasoningOverride((current) => (current === "long" ? "default" : "long"));
+  const onToggleReasoningSummary = () => setReasoningSummary((current) => !current);
   return (
     <div className="relative" ref={menuRef}>
       <Button className="h-8 w-8 px-0" onClick={onToggleOpen} aria-label="Menu de execução" title="Menu de execução">

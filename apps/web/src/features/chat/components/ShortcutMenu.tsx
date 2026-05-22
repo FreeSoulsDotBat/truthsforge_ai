@@ -1,18 +1,13 @@
 import { Check, ChevronRight, EllipsisVertical } from "lucide-react";
 import type { MutableRefObject } from "react";
 
+import { useAppStore } from "../../../app/store";
 import { Button } from "../../../components/ui/Button";
 import { projectDisplayName } from "../../projects/project-domain";
 import type { Agent, ProjectRecord } from "../../../types/api";
 
-type ShortcutSubmenu = "agent" | "scope" | null;
-
 export interface ShortcutMenuProps {
   menuRef: MutableRefObject<HTMLDivElement | null>;
-  open: boolean;
-  submenu: ShortcutSubmenu;
-  onToggleOpen: () => void;
-  onSelectSubmenu: (submenu: ShortcutSubmenu) => void;
   agents: Agent[];
   activeAgent: Agent | null;
   availableContextProjects: ProjectRecord[];
@@ -29,10 +24,6 @@ export interface ShortcutMenuProps {
  */
 export function ShortcutMenu({
   menuRef,
-  open,
-  submenu,
-  onToggleOpen,
-  onSelectSubmenu,
   agents,
   activeAgent,
   availableContextProjects,
@@ -41,6 +32,19 @@ export function ShortcutMenu({
   onSelectProject,
   onEditKnowledgeBases
 }: ShortcutMenuProps) {
+  const open = useAppStore((state) => state.shortcutMenuOpen);
+  const submenu = useAppStore((state) => state.shortcutSubmenu);
+  const setShortcutMenuOpen = useAppStore((state) => state.setShortcutMenuOpen);
+  const onSelectSubmenu = useAppStore((state) => state.setShortcutSubmenu);
+  const onToggleOpen = () => {
+    if (open) {
+      setShortcutMenuOpen(false);
+      onSelectSubmenu(null);
+    } else {
+      setShortcutMenuOpen(true);
+      onSelectSubmenu("agent");
+    }
+  };
   return (
     <div className="relative" ref={menuRef}>
       <Button className="h-8 w-8 px-0" onClick={onToggleOpen} aria-label="Menu rápido" title="Menu rápido">
