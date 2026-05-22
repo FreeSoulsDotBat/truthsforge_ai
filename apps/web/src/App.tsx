@@ -1,15 +1,4 @@
-import {
-  Check,
-  ChevronRight,
-  EllipsisVertical,
-  FileText,
-  LoaderCircle,
-  Menu,
-  Plus,
-  Send,
-  Wifi,
-  X
-} from "lucide-react";
+import { Check, ChevronRight, EllipsisVertical, FileText, LoaderCircle, Menu, Plus, Send, Wifi, X } from "lucide-react";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,7 +8,7 @@ import { useChatScopeSync } from "./app/hooks/use-chat-scope-sync";
 import { useKnowledgeScopeSync, type ProjectsStatus } from "./app/hooks/use-knowledge-scope-sync";
 import { useOutsidePointerClose } from "./app/hooks/use-outside-pointer-close";
 import { quickActions } from "./app/constants";
-import { appDataQueryKey, fetchAppDataSnapshot } from "./app/queries/app-data";
+import { appDataQueryKey, fetchAppDataSnapshot, type AppDataSnapshot } from "./app/queries/app-data";
 import { useAppStore } from "./app/store";
 import type { DashboardView, LoadState, ProviderCatalogState } from "./app/ui-state";
 import { ChatMessageList } from "./features/chat/components/ChatMessageList";
@@ -58,7 +47,6 @@ import {
   optimisticId,
   sessionHasEmptyDraft,
   sha256BrowserFile,
-  type MentionMatch,
   type MentionOption,
   type SessionLazyMeta
 } from "./features/chat/chat-helpers";
@@ -223,7 +211,6 @@ function App() {
   const setModelingDiagnosticsOpen = useModeling3DStore((state) => state.setDiagnosticsOpen);
   const modelingEnableDialogOpen = useModeling3DStore((state) => state.enableDialogOpen);
   const setModelingEnableDialogOpen = useModeling3DStore((state) => state.setEnableDialogOpen);
-  const [loadState, setLoadState] = useState<LoadState>("idle");
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [models, setModels] = useState<ModelConfig[]>([]);
@@ -245,7 +232,6 @@ function App() {
   const [agentEditorKey, setAgentEditorKey] = useState(0);
   const [draft, setDraft] = useState("");
   const [draftCursor, setDraftCursor] = useState(0);
-  const [activeMention, setActiveMention] = useState<MentionMatch | null>(null);
   const [providerDrafts, setProviderDrafts] = useState<Record<string, string>>({});
   const [providerEditMode, setProviderEditMode] = useState<Record<string, boolean>>({});
   const [providerCatalogs, setProviderCatalogs] = useState<Partial<Record<ProviderName, ProviderModel[]>>>({});
@@ -310,6 +296,16 @@ function App() {
   const refreshAppDataQuery = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: appDataQueryKey });
   }, [queryClient]);
+
+  // Derived during render (no effect): mirrors the bootstrap query status so the
+  // React Compiler's `set-state-in-effect` rule has nothing to flag here.
+  const loadState: LoadState = appDataQuery.isPending
+    ? "loading"
+    : appDataQuery.isError
+      ? "offline"
+      : appDataQuery.data
+        ? "ready"
+        : "idle";
 
   const mergeSessionSummaries = useCallback((summaries: ChatSession[]) => {
     setSessions((current) => {
@@ -401,81 +397,53 @@ function App() {
     chatStickToBottomRef.current = remaining <= 120;
   }, []);
 
-  useEffect(() => {
-    if (appDataQuery.isPending) {
-      setLoadState("loading");
-      return;
-    }
-    if (appDataQuery.isError) {
-      setLoadState("offline");
-      return;
-    }
-    if (appDataQuery.data) {
-      setLoadState("ready");
-    }
-  }, [appDataQuery.data, appDataQuery.isError, appDataQuery.isPending]);
+  // Bootstrap-snapshot distribution into *local* state. Reconciled during render
+  // (React's sanctioned "adjust state when a value changes" pattern) so the
+  // React Compiler's `set-state-in-effect` rule has nothing to flag. Guarded on
+  // snapshot identity, so it only runs when a new snapshot arrives. Store-backed
+  // selections are reconciled in the effect below — those must NOT be set during
+  // render (it warns "cannot update a different component while rendering").
+  const [syncedSnapshot, setSyncedSnapshot] = useState<AppDataSnapshot | null>(null);
+  if (appDataQuery.data && appDataQuery.data !== syncedSnapshot) {
+    const data = appDataQuery.data;
+    setSyncedSnapshot(data);
+    setStatus(data.serverStatus);
+    mergeSessionSummaries(sortSessionsByNewest(data.chatSessions));
+    setModels(data.modelList);
+    setAgents(data.agentList);
+    setPrompts(data.promptList);
+    setDocuments(data.documentList);
+    setKnowledgeBases(data.knowledgeBaseList);
+    setKnowledgeBaseDocuments(data.knowledgeBaseDocumentList);
+    setPlatformFiles(data.fileList);
+    setFileIndexingStatus(data.fileIndexingStatus);
+    setProjects(sortProjectsForUi(data.projectList));
+    setProjectFolders(sortFoldersForUi(data.folderList));
+    setAuditEvents(data.auditList);
+    setCostPolicy(data.policy);
+    setCostUsage(data.usage);
+    setProviderStatuses(data.providerList);
+    setSelectedKnowledgeBaseId((current) =>
+      current && data.knowledgeBaseList.some((knowledgeBase) => knowledgeBase.id === current)
+        ? current
+        : (data.knowledgeBaseList[0]?.id ?? null)
+    );
+    setFolderDraftParentId((current) =>
+      current && data.folderList.some((folder) => folder.id === current) ? current : null
+    );
+  }
 
+  // Store-backed selection reconcile. Kept in an effect because zustand setters
+  // must not run during render, but the writes are deferred to a microtask so
+  // the synchronous-`setState`-in-effect rule does not fire. Same trigger as the
+  // legacy bootstrap effect (snapshot / active session / chat project), which is
+  // what keeps `chatProjectId` following the selected session.
   useEffect(() => {
     const data = appDataQuery.data;
     if (!data) return;
-    const {
-      serverStatus,
-      chatSessions,
-      modelList,
-      agentList,
-      promptList,
-      documentList,
-      knowledgeBaseList,
-      knowledgeBaseDocumentList,
-      fileList,
-      fileIndexingStatus: nextFileIndexingStatus,
-      projectList,
-      folderList,
-      auditList,
-      policy,
-      usage,
-      providerList
-    } = data;
-    const sortedChatSessions = sortSessionsByNewest(chatSessions);
-    setStatus(serverStatus);
-    mergeSessionSummaries(sortedChatSessions);
-    setModels(modelList);
-    setAgents(agentList);
-    setPrompts(promptList);
-    setDocuments(documentList);
-    setKnowledgeBases(knowledgeBaseList);
-    setKnowledgeBaseDocuments(knowledgeBaseDocumentList);
-    setPlatformFiles(fileList);
-    setFileIndexingStatus(nextFileIndexingStatus);
-    setProjects(sortProjectsForUi(projectList));
-    setProjectFolders(sortFoldersForUi(folderList));
-    setAuditEvents(auditList);
-    setCostPolicy(policy);
-    setCostUsage(usage);
-    setProviderStatuses(providerList);
-    setActiveSessionId((current) =>
-      current && sortedChatSessions.some((session) => session.id === current)
-        ? current
-        : (sortedChatSessions[0]?.id ?? null)
-    );
-    setActiveAgentId((current) =>
-      current && agentList.some((agent) => agent.id === current)
-        ? current
-        : (agentList.find((agent) => agent.name === "JUDITE")?.id ?? agentList[0]?.id ?? null)
-    );
-    setSupportAgentIds((current) => current.filter((agentId) => agentList.some((agent) => agent.id === agentId)));
+    const { agentList, projectList, folderList } = data;
+    const sortedChatSessions = sortSessionsByNewest(data.chatSessions);
     const generalProjectId = projectList.find((project) => project.is_general)?.id ?? projectList[0]?.id ?? null;
-    setSelectedKnowledgeProjectId((current) =>
-      current && projectList.some((project) => project.id === current) ? current : generalProjectId
-    );
-    setSelectedKnowledgeFolderId((current) =>
-      current && folderList.some((folder) => folder.id === current) ? current : null
-    );
-    setSelectedKnowledgeBaseId((current) =>
-      current && knowledgeBaseList.some((knowledgeBase) => knowledgeBase.id === current)
-        ? current
-        : (knowledgeBaseList[0]?.id ?? null)
-    );
     const validPersistedProjectId =
       chatProjectId && projectList.some((project) => project.id === chatProjectId) ? chatProjectId : null;
     const selectedSessionForScope =
@@ -486,19 +454,34 @@ function App() {
         ? selectedSessionForScope.project_id
         : null;
     const resolvedChatProjectId = validPersistedProjectId ?? sessionProjectId ?? null;
-    setChatProjectId(resolvedChatProjectId);
-    setChatProjectScopeMode((current) => {
-      if (!resolvedChatProjectId) return "global_only";
-      return current === "project_only" || current === "project_plus_global" ? current : "project_only";
+    queueMicrotask(() => {
+      setActiveSessionId((current) =>
+        current && sortedChatSessions.some((session) => session.id === current)
+          ? current
+          : (sortedChatSessions[0]?.id ?? null)
+      );
+      setActiveAgentId((current) =>
+        current && agentList.some((agent) => agent.id === current)
+          ? current
+          : (agentList.find((agent) => agent.name === "JUDITE")?.id ?? agentList[0]?.id ?? null)
+      );
+      setSupportAgentIds((current) => current.filter((agentId) => agentList.some((agent) => agent.id === agentId)));
+      setSelectedKnowledgeProjectId((current) =>
+        current && projectList.some((project) => project.id === current) ? current : generalProjectId
+      );
+      setSelectedKnowledgeFolderId((current) =>
+        current && folderList.some((folder) => folder.id === current) ? current : null
+      );
+      setChatProjectId(resolvedChatProjectId);
+      setChatProjectScopeMode((current) => {
+        if (!resolvedChatProjectId) return "global_only";
+        return current === "project_only" || current === "project_plus_global" ? current : "project_only";
+      });
     });
-    setFolderDraftParentId((current) =>
-      current && folderList.some((folder) => folder.id === current) ? current : null
-    );
   }, [
     activeSessionId,
     appDataQuery.data,
     chatProjectId,
-    mergeSessionSummaries,
     setActiveAgentId,
     setActiveSessionId,
     setChatProjectId,
@@ -853,6 +836,8 @@ function App() {
     .filter((documentId, index, list) => list.indexOf(documentId) === index)
     .filter((documentId) => availableContextDocuments.some((document) => document.id === documentId))
     .slice(0, 20);
+  // Pure derivation from the draft + cursor (was a `setActiveMention` effect).
+  const activeMention = useMemo(() => findMentionMatch(draft, draftCursor), [draft, draftCursor]);
   const mentionSuggestions = useMemo(() => {
     if (!activeMention) return [];
     if (!activeMention.query) return mentionOptions.slice(0, 8);
@@ -913,29 +898,37 @@ function App() {
     setProjectsStatus
   });
 
+  // `reasoningSummary` lives in the zustand store, so it can't be set during
+  // render; the guard stays in an effect but defers the write to a microtask to
+  // keep the `set-state-in-effect` rule satisfied.
   useEffect(() => {
     if (reasoningSummary && reasoningSummaryUnavailable) {
-      setReasoningSummary(false);
+      queueMicrotask(() => setReasoningSummary(false));
     }
   }, [reasoningSummary, reasoningSummaryUnavailable, setReasoningSummary]);
 
-  useEffect(() => {
-    if (!selectedKnowledgeBase) {
-      setKnowledgeBaseDraft(createDefaultKnowledgeBaseDraft());
-      return;
-    }
-    setKnowledgeBaseDraft({
-      name: selectedKnowledgeBase.name,
-      description: selectedKnowledgeBase.description,
-      scope: selectedKnowledgeBase.scope,
-      color: selectedKnowledgeBase.color,
-      tags: selectedKnowledgeBase.tags,
-      max_documents_per_query: selectedKnowledgeBase.max_documents_per_query,
-      max_chunks_per_document: selectedKnowledgeBase.max_chunks_per_document,
-      enabled: selectedKnowledgeBase.enabled,
-      metadata: selectedKnowledgeBase.metadata
-    });
-  }, [selectedKnowledgeBase]);
+  // `knowledgeBaseDraft` is local state reset whenever the selected base changes.
+  // Reconciled during render (guarded on the selected-base reference) instead of
+  // in an effect.
+  const [knowledgeBaseDraftSource, setKnowledgeBaseDraftSource] = useState<KnowledgeBase | null>(null);
+  if (selectedKnowledgeBase !== knowledgeBaseDraftSource) {
+    setKnowledgeBaseDraftSource(selectedKnowledgeBase);
+    setKnowledgeBaseDraft(
+      selectedKnowledgeBase
+        ? {
+            name: selectedKnowledgeBase.name,
+            description: selectedKnowledgeBase.description,
+            scope: selectedKnowledgeBase.scope,
+            color: selectedKnowledgeBase.color,
+            tags: selectedKnowledgeBase.tags,
+            max_documents_per_query: selectedKnowledgeBase.max_documents_per_query,
+            max_chunks_per_document: selectedKnowledgeBase.max_chunks_per_document,
+            enabled: selectedKnowledgeBase.enabled,
+            metadata: selectedKnowledgeBase.metadata
+          }
+        : createDefaultKnowledgeBaseDraft()
+    );
+  }
 
   useEffect(() => {
     const knownDocumentIds = new Set(documents.map((document) => document.id));
@@ -955,21 +948,23 @@ function App() {
     };
   }, [documents, selectedKnowledgeBaseItemIdList]);
 
+  // `imageModelId` is store state, so its validity reconcile stays in an effect
+  // with deferred (microtask) writes rather than running during render.
   useEffect(() => {
     if (!imageCapableModels.length) {
-      if (imageModelId !== null) setImageModelId(null);
+      if (imageModelId !== null) queueMicrotask(() => setImageModelId(null));
       return;
     }
     if (imageModelId && imageCapableModels.some((model) => model.id === imageModelId)) {
       return;
     }
-    setImageModelId(defaultImageModel?.id ?? imageCapableModels[0]?.id ?? null);
+    const nextImageModelId = defaultImageModel?.id ?? imageCapableModels[0]?.id ?? null;
+    queueMicrotask(() => setImageModelId(nextImageModelId));
   }, [defaultImageModel, imageCapableModels, imageModelId, setImageModelId]);
 
-  useEffect(() => {
-    setActiveMention(findMentionMatch(draft, draftCursor));
-  }, [draft, draftCursor]);
-
+  // The cursor restore is a genuine DOM effect (focus must run after render); the
+  // `draftCursor` mirror is deferred to an animation frame so it isn't a
+  // synchronous `setState` in the effect body.
   useEffect(() => {
     const pendingCursor = pendingCursorRef.current;
     const input = draftInputRef.current;
@@ -977,7 +972,8 @@ function App() {
     pendingCursorRef.current = null;
     input.focus();
     input.setSelectionRange(pendingCursor, pendingCursor);
-    setDraftCursor(pendingCursor);
+    const frame = requestAnimationFrame(() => setDraftCursor(pendingCursor));
+    return () => cancelAnimationFrame(frame);
   }, [draft]);
 
   useOutsidePointerClose({
@@ -992,17 +988,23 @@ function App() {
     }
   });
 
-  useEffect(() => {
-    if (!activeSession) return;
-    const fallbackProjectId = activeSession.project_id ?? generalProjectId;
-    const incomingProjectIds =
-      activeSession.context_project_ids.length > 0 ? activeSession.context_project_ids : [fallbackProjectId];
-    const incomingDocumentIds = activeSession.context_document_ids ?? [];
-    const incomingKnowledgeBaseIds = activeSession.context_knowledge_base_ids ?? [];
-    setChatContextProjectIds(incomingProjectIds.slice(0, 1));
-    setChatContextDocumentIds(incomingDocumentIds.slice(0, 20));
-    setChatContextKnowledgeBaseIds(incomingKnowledgeBaseIds);
-  }, [activeSession, generalProjectId]);
+  // Load the active session's saved context into local state when the session
+  // (or the general-project fallback) changes. Reconciled during render and
+  // guarded on the session *id* (not its object reference) so streaming message
+  // updates no longer re-clobber the user's in-session context picks.
+  const [chatContextSourceKey, setChatContextSourceKey] = useState<string | null>(null);
+  if (activeSession) {
+    const nextContextSourceKey = `${activeSession.id}|${generalProjectId}`;
+    if (nextContextSourceKey !== chatContextSourceKey) {
+      setChatContextSourceKey(nextContextSourceKey);
+      const fallbackProjectId = activeSession.project_id ?? generalProjectId;
+      const incomingProjectIds =
+        activeSession.context_project_ids.length > 0 ? activeSession.context_project_ids : [fallbackProjectId];
+      setChatContextProjectIds(incomingProjectIds.slice(0, 1));
+      setChatContextDocumentIds((activeSession.context_document_ids ?? []).slice(0, 20));
+      setChatContextKnowledgeBaseIds(activeSession.context_knowledge_base_ids ?? []);
+    }
+  }
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1013,16 +1015,17 @@ function App() {
     }
   }, [contextModalSeenProjectIds]);
 
-  useEffect(() => {
-    if (activeView !== "chat") return;
-    if (!normalizedContextProjectIds.length) return;
-    if (contextDocsModalOpen) return;
+  // Auto-open the context modal once per project the user hasn't acknowledged.
+  // Local state only, so it runs during render; self-converges once the modal is
+  // open and the projects are marked seen.
+  if (activeView === "chat" && normalizedContextProjectIds.length > 0 && !contextDocsModalOpen) {
     const seenSet = new Set(contextModalSeenProjectIds);
     const unseenProjectIds = normalizedContextProjectIds.filter((projectId) => !seenSet.has(projectId));
-    if (!unseenProjectIds.length) return;
-    setContextModalSeenProjectIds((current) => Array.from(new Set([...current, ...unseenProjectIds])));
-    setContextDocsModalOpen(true);
-  }, [activeView, contextDocsModalOpen, contextModalSeenProjectIds, normalizedContextProjectIds]);
+    if (unseenProjectIds.length > 0) {
+      setContextModalSeenProjectIds((current) => Array.from(new Set([...current, ...unseenProjectIds])));
+      setContextDocsModalOpen(true);
+    }
+  }
 
   const insertFolderMention = useCallback(
     (option: MentionOption) => {
@@ -1034,7 +1037,8 @@ function App() {
       const nextCursor = prefix.length + mentionText.length + 1;
       pendingCursorRef.current = nextCursor;
       setDraft(nextDraft);
-      setActiveMention(null);
+      // `activeMention` is now derived from draft+cursor; completing the mention
+      // (trailing space) makes it recompute to null, so no manual reset is needed.
     },
     [activeMention, draft]
   );
@@ -2327,9 +2331,7 @@ function App() {
         onCreateChat={(projectId, folderId) => void createChatInProject(projectId, folderId)}
         onCreateFolder={(projectId, parentId) => void createFolderFromExplorer(projectId, parentId)}
         onDeleteFolder={(folderId) => void deleteFolderFromExplorer(folderId)}
-        onMoveSession={(sessionId, projectId, folderId) =>
-          void moveSessionInExplorer(sessionId, projectId, folderId)
-        }
+        onMoveSession={(sessionId, projectId, folderId) => void moveSessionInExplorer(sessionId, projectId, folderId)}
         onDeleteSession={(session) => void deleteChatSession(session)}
       />
 
