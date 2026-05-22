@@ -51,6 +51,15 @@ class Settings(BaseModel):
     redis_url: str = Field(
         default_factory=lambda: os.getenv("TRUTHS_FORGE_REDIS_URL", "redis://127.0.0.1:6379/0")
     )
+    # Backend das filas de trabalho (índice/import). ``memory`` (default)
+    # mantém a fila em processo — adequada para dev/single-replica. ``redis``
+    # ou ``valkey`` usam o servidor em ``redis_url`` (stack local preferencial
+    # do AGENTS.md), permitindo compartilhar a fila entre réplicas do backend.
+    # Se o backend Redis/Valkey estiver indisponível no startup, a fila cai
+    # graciosamente para memória (ver app/workers/job_queue.py).
+    queue_backend: str = Field(
+        default_factory=lambda: os.getenv("TRUTHS_FORGE_QUEUE_BACKEND", "memory").lower()
+    )
     storage_backend: str = Field(
         default_factory=lambda: os.getenv("TRUTHS_FORGE_STORAGE_BACKEND", "auto")
     )

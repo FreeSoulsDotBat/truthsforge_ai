@@ -1,30 +1,28 @@
 from __future__ import annotations
 
-from queue import Empty, Queue
 from threading import Lock, Thread
 
 from app.core.contracts import JobStatus
 from app.importers.chatgpt_jobs import process_chatgpt_import_job
 from app.storage.store import get_store
+from app.workers.job_queue import create_job_queue
 
-_queue: Queue[str] = Queue()
+# Queue backend chosen by settings.queue_backend (memory|redis|valkey). All
+# import jobs share priority 0, so this behaves as FIFO on both backends.
+_queue = create_job_queue("import")
 _thread_lock = Lock()
-_enqueued_ids: set[str] = set()
 _worker_thread: Thread | None = None
 
 
 def _worker_loop() -> None:
     while True:
-        try:
-            job_id = _queue.get(timeout=0.5)
-        except Empty:
+        job_id = _queue.get(timeout=0.5)
+        if job_id is None:
             continue
         try:
             process_chatgpt_import_job(job_id)
         finally:
-            with _thread_lock:
-                _enqueued_ids.discard(job_id)
-            _queue.task_done()
+            _queue.release(job_id)
 
 
 def _ensure_worker_thread() -> None:
@@ -46,10 +44,7 @@ def enqueue_chatgpt_import_job(job_id: str | None) -> None:
     if not job_id:
         return
     _ensure_worker_thread()
-    with _thread_lock:
-        if job_id in _enqueued_ids:
-            return
-        _enqueued_ids.add(job_id)
+    # ``put`` is dedup-guarded (no-op if the job is already queued/in flight).
     _queue.put(job_id)
 
 

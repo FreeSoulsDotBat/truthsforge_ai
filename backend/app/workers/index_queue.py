@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from queue import Empty, PriorityQueue
 from threading import Lock, Thread
 from time import monotonic
 
 from app.core.contracts import JobStatus, PlatformFileIndexingStatus, now_utc
 from app.rag.indexing import ensure_document_for_platform_file, process_platform_file_index
 from app.storage.store import get_store
+from app.workers.job_queue import create_job_queue
 
-_queue: PriorityQueue[tuple[int, str]] = PriorityQueue()
+# Queue backend chosen by settings.queue_backend (memory|redis|valkey). The
+# WORKER stays an in-process thread; only the QUEUE can move to Valkey/Redis
+# so multiple backend replicas share one backlog (BZPOPMIN is atomic).
+_queue = create_job_queue("index")
 _thread_lock = Lock()
-_enqueued_ids: set[str] = set()
 _worker_thread: Thread | None = None
 _last_recovery_at: float = 0
 _last_backfill_at: float = 0
@@ -101,9 +103,8 @@ def _mark_document_running_for_file_id(file_id: str) -> None:
 def _worker_loop() -> None:
     global _last_recovery_at, _last_backfill_at
     while True:
-        try:
-            _priority, file_id = _queue.get(timeout=0.5)
-        except Empty:
+        file_id = _queue.get(timeout=0.5)
+        if file_id is None:
             now = monotonic()
             if now - _last_recovery_at >= _RECOVERY_INTERVAL_SECONDS:
                 try:
@@ -127,15 +128,14 @@ def _worker_loop() -> None:
                     attempts = int(metadata.get("index_attempts", 1))
                     retryable = bool(metadata.get("index_retryable", False))
                     if retryable and attempts < 3:
-                        _queue.put((INDEX_PRIORITY_BACKGROUND + attempts, file_id))
+                        # Retry: re-add without releasing the dedup marker.
+                        _queue.requeue(file_id, INDEX_PRIORITY_BACKGROUND + attempts)
                         retry_scheduled = True
             except Exception:
                 pass
         finally:
-            with _thread_lock:
-                if not retry_scheduled:
-                    _enqueued_ids.discard(file_id)
-            _queue.task_done()
+            if not retry_scheduled:
+                _queue.release(file_id)
 
 
 def _ensure_worker_thread() -> None:
@@ -157,13 +157,12 @@ def enqueue_platform_file_index(file_id: str | None, priority: int = INDEX_PRIOR
     if not file_id:
         return
     _ensure_worker_thread()
-    with _thread_lock:
-        if file_id in _enqueued_ids:
-            return
-        _enqueued_ids.add(file_id)
+    # ``put`` is dedup-guarded: returns False when the file is already queued
+    # or in flight, so we don't double-mark it running or re-enqueue it.
+    if not _queue.put(file_id, priority):
+        return
     if priority <= INDEX_PRIORITY_NORMAL:
         _mark_document_running_for_file_id(file_id)
-    _queue.put((priority, file_id))
 
 
 def enqueue_platform_file_indexes(
