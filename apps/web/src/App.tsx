@@ -4,11 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useShallow } from "zustand/react/shallow";
 
+import { useAppDataBootstrap } from "./app/hooks/use-app-data-bootstrap";
 import { useChatScopeSync } from "./app/hooks/use-chat-scope-sync";
 import { useKnowledgeScopeSync, type ProjectsStatus } from "./app/hooks/use-knowledge-scope-sync";
 import { useOutsidePointerClose } from "./app/hooks/use-outside-pointer-close";
 import { quickActions } from "./app/constants";
-import { appDataQueryKey, fetchAppDataSnapshot, type AppDataSnapshot } from "./app/queries/app-data";
+import { appDataQueryKey, fetchAppDataSnapshot } from "./app/queries/app-data";
 import { useAppStore } from "./app/store";
 import type { DashboardView, LoadState, ProviderCatalogState } from "./app/ui-state";
 import { ChatMessageList } from "./features/chat/components/ChatMessageList";
@@ -397,99 +398,39 @@ function App() {
     chatStickToBottomRef.current = remaining <= 120;
   }, []);
 
-  // Bootstrap-snapshot distribution into *local* state. Reconciled during render
-  // (React's sanctioned "adjust state when a value changes" pattern) so the
-  // React Compiler's `set-state-in-effect` rule has nothing to flag. Guarded on
-  // snapshot identity, so it only runs when a new snapshot arrives. Store-backed
-  // selections are reconciled in the effect below — those must NOT be set during
-  // render (it warns "cannot update a different component while rendering").
-  const [syncedSnapshot, setSyncedSnapshot] = useState<AppDataSnapshot | null>(null);
-  if (appDataQuery.data && appDataQuery.data !== syncedSnapshot) {
-    const data = appDataQuery.data;
-    setSyncedSnapshot(data);
-    setStatus(data.serverStatus);
-    mergeSessionSummaries(sortSessionsByNewest(data.chatSessions));
-    setModels(data.modelList);
-    setAgents(data.agentList);
-    setPrompts(data.promptList);
-    setDocuments(data.documentList);
-    setKnowledgeBases(data.knowledgeBaseList);
-    setKnowledgeBaseDocuments(data.knowledgeBaseDocumentList);
-    setPlatformFiles(data.fileList);
-    setFileIndexingStatus(data.fileIndexingStatus);
-    setProjects(sortProjectsForUi(data.projectList));
-    setProjectFolders(sortFoldersForUi(data.folderList));
-    setAuditEvents(data.auditList);
-    setCostPolicy(data.policy);
-    setCostUsage(data.usage);
-    setProviderStatuses(data.providerList);
-    setSelectedKnowledgeBaseId((current) =>
-      current && data.knowledgeBaseList.some((knowledgeBase) => knowledgeBase.id === current)
-        ? current
-        : (data.knowledgeBaseList[0]?.id ?? null)
-    );
-    setFolderDraftParentId((current) =>
-      current && data.folderList.some((folder) => folder.id === current) ? current : null
-    );
-  }
-
-  // Store-backed selection reconcile. Kept in an effect because zustand setters
-  // must not run during render, but the writes are deferred to a microtask so
-  // the synchronous-`setState`-in-effect rule does not fire. Same trigger as the
-  // legacy bootstrap effect (snapshot / active session / chat project), which is
-  // what keeps `chatProjectId` following the selected session.
-  useEffect(() => {
-    const data = appDataQuery.data;
-    if (!data) return;
-    const { agentList, projectList, folderList } = data;
-    const sortedChatSessions = sortSessionsByNewest(data.chatSessions);
-    const generalProjectId = projectList.find((project) => project.is_general)?.id ?? projectList[0]?.id ?? null;
-    const validPersistedProjectId =
-      chatProjectId && projectList.some((project) => project.id === chatProjectId) ? chatProjectId : null;
-    const selectedSessionForScope =
-      sortedChatSessions.find((session) => session.id === (activeSessionId ?? sortedChatSessions[0]?.id ?? "")) ?? null;
-    const sessionProjectId =
-      selectedSessionForScope?.project_id &&
-      projectList.some((project) => project.id === selectedSessionForScope.project_id)
-        ? selectedSessionForScope.project_id
-        : null;
-    const resolvedChatProjectId = validPersistedProjectId ?? sessionProjectId ?? null;
-    queueMicrotask(() => {
-      setActiveSessionId((current) =>
-        current && sortedChatSessions.some((session) => session.id === current)
-          ? current
-          : (sortedChatSessions[0]?.id ?? null)
-      );
-      setActiveAgentId((current) =>
-        current && agentList.some((agent) => agent.id === current)
-          ? current
-          : (agentList.find((agent) => agent.name === "JUDITE")?.id ?? agentList[0]?.id ?? null)
-      );
-      setSupportAgentIds((current) => current.filter((agentId) => agentList.some((agent) => agent.id === agentId)));
-      setSelectedKnowledgeProjectId((current) =>
-        current && projectList.some((project) => project.id === current) ? current : generalProjectId
-      );
-      setSelectedKnowledgeFolderId((current) =>
-        current && folderList.some((folder) => folder.id === current) ? current : null
-      );
-      setChatProjectId(resolvedChatProjectId);
-      setChatProjectScopeMode((current) => {
-        if (!resolvedChatProjectId) return "global_only";
-        return current === "project_only" || current === "project_plus_global" ? current : "project_only";
-      });
-    });
-  }, [
+  // Distributes the bootstrap snapshot into state and keeps the active
+  // selections valid. See `useAppDataBootstrap` for why the local mirrors are
+  // reconciled during render while the store selections are deferred.
+  useAppDataBootstrap({
+    snapshot: appDataQuery.data,
     activeSessionId,
-    appDataQuery.data,
     chatProjectId,
-    setActiveAgentId,
+    mergeSessionSummaries,
+    setStatus,
+    setModels,
+    setAgents,
+    setPrompts,
+    setDocuments,
+    setKnowledgeBases,
+    setKnowledgeBaseDocuments,
+    setPlatformFiles,
+    setFileIndexingStatus,
+    setProjects,
+    setProjectFolders,
+    setAuditEvents,
+    setCostPolicy,
+    setCostUsage,
+    setProviderStatuses,
+    setSelectedKnowledgeBaseId,
+    setFolderDraftParentId,
     setActiveSessionId,
-    setChatProjectId,
-    setChatProjectScopeMode,
-    setSelectedKnowledgeFolderId,
+    setActiveAgentId,
+    setSupportAgentIds,
     setSelectedKnowledgeProjectId,
-    setSupportAgentIds
-  ]);
+    setSelectedKnowledgeFolderId,
+    setChatProjectId,
+    setChatProjectScopeMode
+  });
 
   useEffect(() => {
     if (loadState !== "ready") return;
