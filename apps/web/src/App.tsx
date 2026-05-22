@@ -1,6 +1,5 @@
 import {
   Activity,
-  Bot,
   Check,
   ChevronRight,
   Database,
@@ -36,7 +35,7 @@ import { infraLinks, quickActions } from "./app/constants";
 import { appDataQueryKey, fetchAppDataSnapshot } from "./app/queries/app-data";
 import { useAppStore } from "./app/store";
 import type { LoadState, ProviderCatalogState } from "./app/ui-state";
-import { MessageBubble } from "./components/app-chat";
+import { ChatMessageList } from "./features/chat/components/ChatMessageList";
 import {
   ContextChip,
   DashboardNavButton,
@@ -1062,6 +1061,14 @@ function App() {
     },
     [activeMention, draft]
   );
+
+  function handleQuickAction(action: string) {
+    if (action.includes("agentes")) {
+      editAgent(activeAgent ?? null);
+      return;
+    }
+    setDraft(action);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2487,68 +2494,18 @@ function App() {
           {activeView === "chat" ? (
             <>
               <section className="flex min-w-0 flex-1 flex-col">
-                <div
-                  ref={chatScrollRef}
+                <ChatMessageList
+                  activeSession={activeSession}
+                  activeSessionLazy={activeSessionLazy}
+                  platformFilesById={platformFilesById}
+                  isModeling3D={activeSessionIsModeling3D}
+                  modelingPlanActions={modelingPlanActions}
+                  scrollRef={chatScrollRef}
+                  loadOlderRef={chatLoadOlderRef}
                   onScroll={handleChatScroll}
-                  className="scrollbar-slim min-h-0 flex-1 overflow-y-auto px-4 py-5"
-                >
-                  <div className="mx-auto flex max-w-3xl flex-col gap-4">
-                    {!!activeSession?.messages.length && activeSessionLazy?.hasMore && (
-                      <div
-                        ref={chatLoadOlderRef}
-                        className="flex h-7 items-center justify-center text-xs text-forge-muted"
-                      >
-                        {activeSessionLazy.loadingOlder ? (
-                          <span className="inline-flex items-center gap-2">
-                            <LoaderCircle size={14} className="animate-spin" />
-                            Carregando mensagens antigas...
-                          </span>
-                        ) : (
-                          "Role para cima para carregar mais"
-                        )}
-                      </div>
-                    )}
-                    {(activeSession?.messages.length ? activeSession.messages : []).map((message) => (
-                      <MessageBubble
-                        key={message.id}
-                        message={message}
-                        platformFilesById={platformFilesById}
-                        modelingPlanActions={activeSessionIsModeling3D ? modelingPlanActions : undefined}
-                      />
-                    ))}
-
-                    {!activeSession?.messages.length && (
-                      <div className="mx-auto mt-12 w-full max-w-2xl">
-                        <div className="mb-6 text-center">
-                          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-md border border-forge-line bg-[#171716]">
-                            <Bot size={28} className="text-forge-amber" />
-                          </div>
-                          <h3 className="text-xl font-semibold">Como posso ajudar agora?</h3>
-                          <p className="mt-2 text-sm leading-6 text-forge-muted">
-                            Escolha um ponto de partida ou escreva direto para a JUDITE.
-                          </p>
-                        </div>
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          {quickActions.map((action) => (
-                            <button
-                              key={action}
-                              className="min-h-12 rounded-md border border-forge-line bg-[#141615] px-3 py-2 text-left text-sm text-forge-text transition hover:border-forge-amber/60 hover:bg-[#1b1d1b]"
-                              onClick={() => {
-                                if (action.includes("agentes")) {
-                                  editAgent(activeAgent ?? null);
-                                  return;
-                                }
-                                setDraft(action);
-                              }}
-                            >
-                              {action}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                  quickActions={quickActions}
+                  onQuickAction={handleQuickAction}
+                />
 
                 <form onSubmit={handleSubmit} className="border-t border-forge-line bg-[#0c0d0f] p-3">
                   <div className="mx-auto max-w-3xl rounded-md border border-forge-line bg-[#171716] p-2">
