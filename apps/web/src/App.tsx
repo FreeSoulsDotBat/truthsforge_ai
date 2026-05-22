@@ -1,4 +1,4 @@
-import { LoaderCircle, Menu, Send, Wifi, X } from "lucide-react";
+import { LoaderCircle, Menu, Send, Wifi } from "lucide-react";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -14,6 +14,7 @@ import { useAppStore } from "./app/store";
 import type { DashboardView, LoadState, ProviderCatalogState } from "./app/ui-state";
 import { ChatMessageList } from "./features/chat/components/ChatMessageList";
 import { ChatRightPanel } from "./features/chat/components/ChatRightPanel";
+import { ComposerAttachments } from "./features/chat/components/ComposerAttachments";
 import { ComposerContextChips } from "./features/chat/components/ComposerContextChips";
 import { ExecutionMenu } from "./features/chat/components/ExecutionMenu";
 import { ShortcutMenu } from "./features/chat/components/ShortcutMenu";
@@ -2464,61 +2465,22 @@ function App() {
                         }}
                       />
                     </div>
-                    {(attachedFiles.length > 0 ||
-                      attachedPlatformFileIds.length > 0 ||
-                      attachedDocumentIds.length > 0) && (
-                      <div className="mb-2 flex flex-wrap gap-2 text-xs text-forge-muted">
-                        {attachedFiles.map((file, index) => (
-                          <button
-                            key={`${file.name}:${file.size}:${index}`}
-                            type="button"
-                            className="inline-flex h-7 items-center gap-1 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted transition hover:text-forge-text"
-                            onClick={() =>
-                              setAttachedFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))
-                            }
-                            title={`Remover ${file.name}`}
-                          >
-                            <span className="max-w-40 truncate">{file.name}</span>
-                            <X size={12} />
-                          </button>
-                        ))}
-                        {attachedPlatformFileIds.map((fileId) => {
-                          const platformFile = platformFiles.find((item) => item.id === fileId);
-                          return (
-                            <button
-                              key={fileId}
-                              type="button"
-                              className="inline-flex h-7 items-center gap-1 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted transition hover:text-forge-text"
-                              onClick={() =>
-                                setAttachedPlatformFileIds((current) => current.filter((itemId) => itemId !== fileId))
-                              }
-                              title={`Remover ${platformFile ? platformFileLabel(platformFile) : "arquivo"}`}
-                            >
-                              <span className="max-w-40 truncate">
-                                {platformFile ? platformFileLabel(platformFile) : "arquivo"}
-                              </span>
-                              <X size={12} />
-                            </button>
-                          );
-                        })}
-                        {attachedDocumentIds.map((documentId) => (
-                          <button
-                            key={documentId}
-                            type="button"
-                            className="inline-flex h-7 items-center gap-1 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted transition hover:text-forge-text"
-                            onClick={() =>
-                              setAttachedDocumentIds((current) => current.filter((itemId) => itemId !== documentId))
-                            }
-                            title={`Remover ${documents.find((document) => document.id === documentId)?.title ?? "contexto"}`}
-                          >
-                            <span className="max-w-40 truncate">
-                              {documents.find((document) => document.id === documentId)?.title ?? "contexto"}
-                            </span>
-                            <X size={12} />
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                    <ComposerAttachments
+                      attachedFiles={attachedFiles}
+                      attachedPlatformFileIds={attachedPlatformFileIds}
+                      attachedDocumentIds={attachedDocumentIds}
+                      platformFiles={platformFiles}
+                      documents={documents}
+                      onRemoveFile={(index) =>
+                        setAttachedFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                      }
+                      onRemovePlatformFile={(fileId) =>
+                        setAttachedPlatformFileIds((current) => current.filter((itemId) => itemId !== fileId))
+                      }
+                      onRemoveDocument={(documentId) =>
+                        setAttachedDocumentIds((current) => current.filter((itemId) => itemId !== documentId))
+                      }
+                    />
                     {activeMention && mentionSuggestions.length > 0 && (
                       <div className="mb-2 rounded-md border border-forge-line bg-[#0f1011] p-1">
                         <div className="px-2 pb-1 pt-0.5 text-[11px] text-forge-muted">Pastas de contexto</div>
