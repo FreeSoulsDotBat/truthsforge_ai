@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import json
 import re
 from collections.abc import AsyncIterator
 from typing import Any
@@ -12,6 +11,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.api.routes.chat_sse import DEFAULT_CHAT_TITLES, _runtime_status, _sse
 from app.audit.service import record_audit_event
 from app.chat.session_cleanup import (
     delete_chat_session_with_files,
@@ -87,7 +87,6 @@ IMAGE_EXTENSIONS = {
     "image/svg+xml": ".svg",
     "image/webp": ".webp",
 }
-DEFAULT_CHAT_TITLES = {"novo chat", "new chat"}
 MAX_CONTEXT_PROJECTS = 3
 MAX_CONTEXT_DOCUMENTS = 20
 FOLDER_MENTION_PATTERN = re.compile(r"@([A-Za-z0-9_./-]+)")
@@ -336,9 +335,7 @@ def _promote_modeling_session(
     return updated
 
 
-def _sync_modeling_plan_proposed(
-    store, session: ChatSession, plan: ModelingPlan
-) -> ChatSession:
+def _sync_modeling_plan_proposed(store, session: ChatSession, plan: ModelingPlan) -> ChatSession:
     """P1: liga o plano proposto ao chat e move para ``planning``.
 
     O plano NÃO foi executado — está aguardando a aprovação humana via card
@@ -1150,10 +1147,6 @@ def update_session_context(
     return ChatSessionWithMessages(**updated.model_dump(), messages=session.messages)
 
 
-def _sse(event: str, payload: dict) -> str:
-    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
 def _cost_metadata(
     *,
     preflight_estimated_cost_brl: float,
@@ -1210,13 +1203,6 @@ def _context_audit_metadata(
         "attached_file_ids": attached_file_ids,
         "generated_file_ids": generated_file_ids or [],
     }
-
-
-def _runtime_status(stage: str, label: str, detail: str | None = None) -> str:
-    payload = {"stage": stage, "label": label}
-    if detail:
-        payload["detail"] = detail
-    return _sse("status", payload)
 
 
 def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
@@ -1322,9 +1308,7 @@ def _force_plan_new_document(store, plan: ModelingPlan) -> ModelingPlan:
 def _plan_has_high_risk(plan: ModelingPlan) -> bool:
     """True quando alguma etapa é high-risk ou exige aprovação (destrutiva)."""
 
-    return any(
-        step.approval_required or step.risk_level.value == "high" for step in plan.steps
-    )
+    return any(step.approval_required or step.risk_level.value == "high" for step in plan.steps)
 
 
 def _format_intent_question() -> str:
@@ -1333,7 +1317,7 @@ def _format_intent_question() -> str:
     return (
         "Esse pedido é uma **edição do modelo atual** ou você quer **começar "
         "um modelo do zero** (descartando o atual)?\n\n"
-        "Responda \"editar\" ou \"novo\" para eu seguir."
+        'Responda "editar" ou "novo" para eu seguir.'
     )
 
 
@@ -1344,16 +1328,14 @@ def _format_clarification(assessment) -> str:
         "Pode detalhar a geometria e as dimensões principais em milímetros?"
     ]
     lines = [
-        "Antes de montar o plano, preciso entender melhor o que você quer "
-        "modelar:",
+        "Antes de montar o plano, preciso entender melhor o que você quer modelar:",
         "",
     ]
     lines.extend(f"{i}. {question}" for i, question in enumerate(questions, start=1))
     lines.extend(
         [
             "",
-            "Responda e eu proponho o plano (você ainda aprova antes de "
-            "qualquer execução).",
+            "Responda e eu proponho o plano (você ainda aprova antes de qualquer execução).",
         ]
     )
     return "\n".join(lines)
@@ -1574,9 +1556,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
             reset_document = False
             has_existing_model = session.modeling_stage == ChatModelingStage.editing
             if settings.modeling_discovery_enabled:
-                history = _modeling_chat_history(
-                    store, session.id, exclude_message=payload.message
-                )
+                history = _modeling_chat_history(store, session.id, exclude_message=payload.message)
                 assessment = await modeling_service.assess_request_async(
                     payload.message,
                     history=history,
@@ -1585,9 +1565,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                 )
                 _modeling_tracer.flush(current_trace_id())
 
-                ambiguous_intent = (
-                    has_existing_model and assessment.intent == "ambiguous"
-                )
+                ambiguous_intent = has_existing_model and assessment.intent == "ambiguous"
                 if not assessment.ready_to_plan or ambiguous_intent:
                     keep_stage = (
                         ChatModelingStage.editing
@@ -1709,9 +1687,7 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
                         "Modo fluido: executando edição",
                         "Edição aditiva sem etapas high-risk; executo sem card.",
                     )
-                    execution = await asyncio.to_thread(
-                        modeling_service.execute_plan, plan.id
-                    )
+                    execution = await asyncio.to_thread(modeling_service.execute_plan, plan.id)
                     plan = execution.plan
                     _modeling_tracer.flush(current_trace_id())
                 except Exception as exc:  # noqa: BLE001 - surface execution failure
