@@ -113,12 +113,8 @@ class ModelingChatOrchestrator:
             return chat
         if chat.modeling_stage is not None:
             return chat
-        next_stage = transition(
-            chat.modeling_stage, ChatModelingEvent.CHAT_CREATED_AS_MODELING_3D
-        )
-        updated = chat.model_copy(
-            update={"modeling_stage": next_stage, "updated_at": now_utc()}
-        )
+        next_stage = transition(chat.modeling_stage, ChatModelingEvent.CHAT_CREATED_AS_MODELING_3D)
+        updated = chat.model_copy(update={"modeling_stage": next_stage, "updated_at": now_utc()})
         self.store.upsert_chat_session(updated)
         self._audit(
             "modeling.chat.discovery_started",
@@ -140,12 +136,8 @@ class ModelingChatOrchestrator:
         """
 
         self._require_modeling_chat(chat)
-        next_stage = transition(
-            chat.modeling_stage, ChatModelingEvent.CLARIFICATION_ASKED
-        )
-        updated = chat.model_copy(
-            update={"modeling_stage": next_stage, "updated_at": now_utc()}
-        )
+        next_stage = transition(chat.modeling_stage, ChatModelingEvent.CLARIFICATION_ASKED)
+        updated = chat.model_copy(update={"modeling_stage": next_stage, "updated_at": now_utc()})
         self.store.upsert_chat_session(updated)
         self._audit(
             "modeling.chat.clarification_asked",
@@ -189,9 +181,7 @@ class ModelingChatOrchestrator:
             }
         )
         plan = self.planner.create_plan(primary_payload)
-        next_stage = transition(
-            chat.modeling_stage, ChatModelingEvent.PLAN_PROPOSED
-        )
+        next_stage = transition(chat.modeling_stage, ChatModelingEvent.PLAN_PROPOSED)
         updated = chat.model_copy(
             update={
                 "modeling_stage": next_stage,
@@ -335,6 +325,10 @@ class ModelingChatOrchestrator:
         approval = payload or ModelingApprovalRequest(
             decision=ModelingApprovalDecision.approve, reason=""
         )
+        if approval.decision != ModelingApprovalDecision.approve:
+            raise ValueError(
+                "approve_plan_only only accepts approve decisions; use reject() for rejections."
+            )
         plan = self._get_plan_or_raise(plan_id)
         approved_plan = self._approve_plan_record(plan, approval)
         if chat.modeling_stage is ChatModelingStage.editing:
@@ -381,6 +375,15 @@ class ModelingChatOrchestrator:
         )
 
         plan = self._get_plan_or_raise(plan_id)
+        # ADR-013 gate: never execute a plan the user hasn't approved. Guards
+        # the split two-call flow against a direct ``execute`` that skips
+        # ``approve_plan_only``. ``completed`` is allowed so a retry in
+        # ``editing`` can re-run. See AGENTS.md "Preserve human-in-the-loop".
+        if plan.status not in (ModelingPlanStatus.approved, ModelingPlanStatus.completed):
+            raise ValueError(
+                f"Plano {plan_id!r} não está aprovado (status={plan.status.value!r}); "
+                "aprove antes de executar."
+            )
         if chat.modeling_stage is ChatModelingStage.approved:
             chat = self._set_stage(
                 chat,
@@ -459,14 +462,10 @@ class ModelingChatOrchestrator:
 
         self._require_modeling_chat(chat)
         plan = self._get_plan_or_raise(plan_id)
-        rejection = ModelingApprovalRequest(
-            decision=ModelingApprovalDecision.reject, reason=reason
-        )
+        rejection = ModelingApprovalRequest(decision=ModelingApprovalDecision.reject, reason=reason)
         rejected = self._approve_plan_record(plan, rejection)
 
-        next_stage = transition(
-            chat.modeling_stage, ChatModelingEvent.PLAN_REJECTED
-        )
+        next_stage = transition(chat.modeling_stage, ChatModelingEvent.PLAN_REJECTED)
         updated = chat.model_copy(
             update={
                 "modeling_stage": next_stage,
@@ -523,9 +522,7 @@ class ModelingChatOrchestrator:
                 audit="modeling.chat.edit_high_risk_requested",
                 extra={"plan_id": plan.id},
             )
-            return EditPlanOutcome(
-                chat=updated, plan=plan, execution=None, requires_approval=True
-            )
+            return EditPlanOutcome(chat=updated, plan=plan, execution=None, requires_approval=True)
 
         # Auto-approve every step that the planner left as
         # ``waiting_approval`` (only a non-high-risk plan can reach this
@@ -588,9 +585,7 @@ class ModelingChatOrchestrator:
         plan = self._get_plan_or_raise(plan_id)
         rejected = self._approve_plan_record(
             plan,
-            ModelingApprovalRequest(
-                decision=ModelingApprovalDecision.reject, reason=reason
-            ),
+            ModelingApprovalRequest(decision=ModelingApprovalDecision.reject, reason=reason),
         )
         updated = self._set_stage(
             chat,
@@ -610,9 +605,7 @@ class ModelingChatOrchestrator:
         if not chat.is_modeling_3d:
             return chat
         next_stage = transition(chat.modeling_stage, ChatModelingEvent.CHAT_ARCHIVED)
-        updated = chat.model_copy(
-            update={"modeling_stage": next_stage, "updated_at": now_utc()}
-        )
+        updated = chat.model_copy(update={"modeling_stage": next_stage, "updated_at": now_utc()})
         self.store.upsert_chat_session(updated)
         self._audit("modeling.chat.archived", chat_id=updated.id)
         return updated
@@ -704,9 +697,7 @@ class ModelingChatOrchestrator:
         extra: dict[str, Any] | None = None,
     ) -> ChatSession:
         next_stage = transition(chat.modeling_stage, event)
-        updated = chat.model_copy(
-            update={"modeling_stage": next_stage, "updated_at": now_utc()}
-        )
+        updated = chat.model_copy(update={"modeling_stage": next_stage, "updated_at": now_utc()})
         self.store.upsert_chat_session(updated)
         metadata = {"chat_id": updated.id, "stage": next_stage.value}
         if extra:
@@ -760,9 +751,7 @@ class InvalidEditStage(ValueError):
 
     def __init__(self, stage: ChatModelingStage | None) -> None:
         stage_str = stage.value if stage is not None else "<none>"
-        super().__init__(
-            f"propose_edit_plan requires modeling_stage='editing', got {stage_str!r}."
-        )
+        super().__init__(f"propose_edit_plan requires modeling_stage='editing', got {stage_str!r}.")
         self.stage = stage
 
 

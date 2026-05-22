@@ -157,12 +157,14 @@ def enqueue_platform_file_index(file_id: str | None, priority: int = INDEX_PRIOR
     if not file_id:
         return
     _ensure_worker_thread()
-    # ``put`` is dedup-guarded: returns False when the file is already queued
-    # or in flight, so we don't double-mark it running or re-enqueue it.
-    if not _queue.put(file_id, priority):
-        return
+    # Mark the document "running" BEFORE the item becomes visible on the queue,
+    # so a worker blocked on ``_queue.get`` can't start processing before the
+    # status is set (re-marking an already-queued file is harmless).
     if priority <= INDEX_PRIORITY_NORMAL:
         _mark_document_running_for_file_id(file_id)
+    # ``put`` is dedup-guarded: returns False when the file is already queued
+    # or in flight, so we don't re-enqueue it.
+    _queue.put(file_id, priority)
 
 
 def enqueue_platform_file_indexes(

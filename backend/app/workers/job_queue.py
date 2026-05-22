@@ -121,9 +121,19 @@ class RedisJobQueue(JobQueue):
         return priority * _PRIORITY_SCALE + seq
 
     def put(self, item: str, priority: int = 0) -> bool:
+        # ``sadd`` (dedup marker) and ``zadd`` (work set) are separate commands.
+        # If ``zadd`` fails after ``sadd`` succeeded, roll the dedup marker back
+        # so the item isn't permanently orphaned (the marker would otherwise
+        # block every future enqueue, including recovery, with no work entry to
+        # pop). Order is kept ``sadd`` -> ``zadd`` so an in-flight item (already
+        # in the dedup set) is never re-queued.
         if not self._client.sadd(self._enqueued, item):
             return False
-        self._client.zadd(self._zset, {item: self._score(priority)})
+        try:
+            self._client.zadd(self._zset, {item: self._score(priority)})
+        except Exception:
+            self._client.srem(self._enqueued, item)
+            raise
         return True
 
     def get(self, timeout: float) -> str | None:
@@ -155,9 +165,7 @@ def create_job_queue(namespace: str) -> JobQueue:
 
             client = redis.Redis.from_url(settings.redis_url)
             client.ping()
-            logger.info(
-                "job queue %s: backend %s (%s)", namespace, backend, settings.redis_url
-            )
+            logger.info("job queue %s: backend %s (%s)", namespace, backend, settings.redis_url)
             return RedisJobQueue(client, namespace)
         except Exception as exc:  # noqa: BLE001 - degrade gracefully to memory
             logger.warning(
