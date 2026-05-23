@@ -1,10 +1,8 @@
 import {
   Activity,
-  Bot,
   BrainCircuit,
   Clipboard,
   LoaderCircle,
-  MessageSquare,
   Paperclip,
   Search,
   ShieldCheck,
@@ -13,6 +11,10 @@ import {
 import type { ReactNode } from "react";
 
 import { ModelingEditCard, ModelingPlanCard } from "../features/modeling-3d/components";
+import { ImagePreview } from "../features/chat/components/ImagePreview";
+import { cn } from "../lib/utils";
+import { Avatar } from "./ui/Avatar";
+import { Mono } from "./ui/Mono";
 import { fileContentUrl, isImagePlatformFile, platformFileLabel } from "../features/files/file-domain";
 import { type ChatMessageAttachment, messageMetadata } from "../features/chat/chat-domain";
 import { imageUrlsFromMarkdown, renderMarkdown, stripImageMarkdown } from "../lib/message-content";
@@ -26,7 +28,7 @@ function OfficialReasoningSummary({ isActive, summary }: { isActive: boolean; su
 
   return (
     <details
-      className="mb-3 rounded-md border border-forge-amber/30 bg-[#18150f] p-2 text-xs"
+      className="mb-3 rounded-sm border border-forge-amber/30 bg-[color-mix(in_srgb,var(--ember)_8%,var(--bg-ink))] p-2 text-xs"
       open={isActive || !!summary}
     >
       <summary className="cursor-pointer font-medium text-forge-amber">Resumo oficial do raciocínio</summary>
@@ -54,7 +56,7 @@ function ReasoningTrack({ statuses, isActive }: { statuses: StreamStatusEvent[];
   const visibleStatuses = statuses.slice(-5);
 
   return (
-    <div className="mb-3 rounded-md border border-forge-line bg-[#0c0d0f] p-2">
+    <div className="mb-3 rounded-sm border border-forge-line-soft bg-forge-panel p-2">
       <div className="mb-2 flex items-center gap-2 text-xs font-medium text-forge-muted">
         {isActive ? <LoaderCircle size={13} className="animate-spin text-forge-amber" /> : <BrainCircuit size={13} />}
         <span>Trilha de raciocínio</span>
@@ -66,8 +68,8 @@ function ReasoningTrack({ statuses, isActive }: { statuses: StreamStatusEvent[];
             <div
               key={`${status.stage}:${index}`}
               className={[
-                "flex items-start gap-2 rounded px-2 py-1 text-xs",
-                isLast ? "bg-[#171716] text-forge-text" : "text-forge-muted"
+                "flex items-start gap-2 rounded-sm px-2 py-1 text-xs",
+                isLast ? "bg-forge-hover text-forge-text" : "text-forge-muted"
               ].join(" ")}
             >
               <span className={isLast ? "mt-0.5 text-forge-amber" : "mt-0.5 text-forge-muted"}>
@@ -202,132 +204,124 @@ export function MessageBubble({
     imageUrls.length === 0 &&
     attachmentFiles.length === 0;
 
+  const timeLabel = message.created_at
+    ? new Date(message.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+    : null;
+
   return (
-    <div
-      className={[
-        "max-w-[92%] rounded-md border px-4 py-3 text-sm leading-6 shadow-soft",
-        isUser ? "ml-auto border-[#315473] bg-[#153047]" : "mr-auto border-forge-line bg-[#141615]"
-      ].join(" ")}
-    >
-      <div className="mb-1 flex items-center justify-between gap-3 text-xs text-forge-muted">
-        <span className="flex items-center gap-2">
-          {isUser ? <MessageSquare size={14} /> : <Bot size={14} />}
-          {isUser ? "Você" : "JUDITE"}
-        </span>
-        <button
-          className="rounded p-1 text-forge-muted transition hover:bg-[#222a2f] hover:text-forge-text"
-          onClick={() => void navigator.clipboard?.writeText(message.content)}
-          aria-label="Copiar mensagem"
-          title="Copiar mensagem"
-        >
-          <Clipboard size={13} />
-        </button>
-      </div>
-      {showRuntimePlaceholder ? (
-        <>
-          <ReasoningTrack statuses={statuses} isActive={isActive} />
-          <OfficialReasoningSummary isActive={reasoningSummaryEnabled && isActive} summary={reasoningSummary} />
-          <div className="flex items-center gap-2 text-forge-muted">
-            <LoaderCircle size={16} className="animate-spin text-forge-amber" />
-            <span>{latestStatus?.label ?? "Pensando"}</span>
-          </div>
-        </>
-      ) : (
-        <>
-          {!isUser && statuses.length > 0 && <ReasoningTrack statuses={statuses} isActive={isActive} />}
-          {!isUser && (
-            <OfficialReasoningSummary isActive={reasoningSummaryEnabled && isActive} summary={reasoningSummary} />
+    <div className="group flex gap-3.5 py-1">
+      <Avatar kind={isUser ? "user" : "judite"} size={28} />
+      <div className="min-w-0 flex-1">
+        <div className="mb-1.5 flex items-center gap-2">
+          <span className="text-[12.5px] font-semibold text-forge-text">{isUser ? "Você" : "JUDITE"}</span>
+          {timeLabel && (
+            <Mono size={10} className="text-forge-faint">
+              {timeLabel}
+            </Mono>
           )}
-          {markdownText ? <div className="leading-6">{renderMarkdown(markdownText)}</div> : null}
-          {!isUser && metadata.modeling_plan ? (
-            metadata.modeling_plan.kind === "edit" &&
-            metadata.modeling_plan.status !== "waiting_approval" ? (
-              <ModelingEditCard plan={metadata.modeling_plan} />
-            ) : (
-              <ModelingPlanCard
-                plan={metadata.modeling_plan}
-                isBusy={modelingPlanActions?.isBusy}
-                onApprove={
-                  modelingPlanActions?.onApprove
-                    ? () =>
-                        modelingPlanActions.onApprove?.(
-                          metadata.modeling_plan!.id
-                        )
-                    : undefined
-                }
-                onReject={
-                  modelingPlanActions?.onReject
-                    ? (reason: string) =>
-                        modelingPlanActions.onReject?.(
-                          metadata.modeling_plan!.id,
-                          reason
-                        )
-                    : undefined
-                }
-                onRetry={
-                  modelingPlanActions?.onRetry
-                    ? () =>
-                        modelingPlanActions.onRetry?.(
-                          metadata.modeling_plan!.id
-                        )
-                    : undefined
-                }
-                onRevise={
-                  modelingPlanActions?.onRevise
-                    ? () =>
-                        modelingPlanActions.onRevise?.(
-                          metadata.modeling_plan!.id
-                        )
-                    : undefined
-                }
-                onEditPlan={
-                  modelingPlanActions?.onEditPlan
-                    ? (payload) =>
-                        modelingPlanActions.onEditPlan?.(
-                          metadata.modeling_plan!.id,
-                          payload
-                        )
-                    : undefined
-                }
-              />
-            )
-          ) : null}
-          {imageUrls.length > 0 ? (
-            <div className={[markdownText ? "mt-3" : "", "grid gap-2"].join(" ").trim()}>
-              {imageUrls.map((url) => (
-                <img
-                  key={url}
-                  src={url}
-                  alt="Prévia de imagem"
-                  className="max-h-[520px] w-full rounded-md object-contain"
+          {!isUser && message.model_id && (
+            <>
+              <span className="h-0.5 w-0.5 shrink-0 rounded-full bg-forge-faint" />
+              <Mono size={10} className="max-w-[160px] truncate text-forge-faint">
+                {message.model_id}
+              </Mono>
+            </>
+          )}
+          <span className="flex-1" />
+          <button
+            className="rounded-sm p-1 text-forge-muted opacity-0 transition hover:bg-forge-hover hover:text-forge-text focus:opacity-100 group-hover:opacity-100"
+            onClick={() => void navigator.clipboard?.writeText(message.content)}
+            aria-label="Copiar mensagem"
+            title="Copiar mensagem"
+          >
+            <Clipboard size={13} />
+          </button>
+        </div>
+        {showRuntimePlaceholder ? (
+          <>
+            <ReasoningTrack statuses={statuses} isActive={isActive} />
+            <OfficialReasoningSummary isActive={reasoningSummaryEnabled && isActive} summary={reasoningSummary} />
+            <div className="flex items-center gap-2 text-forge-muted">
+              <LoaderCircle size={16} className="animate-spin text-forge-amber" />
+              <span>{latestStatus?.label ?? "Pensando"}</span>
+            </div>
+          </>
+        ) : (
+          <>
+            {!isUser && statuses.length > 0 && <ReasoningTrack statuses={statuses} isActive={isActive} />}
+            {!isUser && (
+              <OfficialReasoningSummary isActive={reasoningSummaryEnabled && isActive} summary={reasoningSummary} />
+            )}
+            {markdownText ? (
+              <div className={cn("text-[14px] leading-relaxed", isUser ? "text-forge-text-soft" : "text-forge-text")}>
+                {renderMarkdown(markdownText)}
+              </div>
+            ) : null}
+            {!isUser && metadata.modeling_plan ? (
+              metadata.modeling_plan.kind === "edit" && metadata.modeling_plan.status !== "waiting_approval" ? (
+                <ModelingEditCard plan={metadata.modeling_plan} />
+              ) : (
+                <ModelingPlanCard
+                  plan={metadata.modeling_plan}
+                  isBusy={modelingPlanActions?.isBusy}
+                  onApprove={
+                    modelingPlanActions?.onApprove
+                      ? () => modelingPlanActions.onApprove?.(metadata.modeling_plan!.id)
+                      : undefined
+                  }
+                  onReject={
+                    modelingPlanActions?.onReject
+                      ? (reason: string) => modelingPlanActions.onReject?.(metadata.modeling_plan!.id, reason)
+                      : undefined
+                  }
+                  onRetry={
+                    modelingPlanActions?.onRetry
+                      ? () => modelingPlanActions.onRetry?.(metadata.modeling_plan!.id)
+                      : undefined
+                  }
+                  onRevise={
+                    modelingPlanActions?.onRevise
+                      ? () => modelingPlanActions.onRevise?.(metadata.modeling_plan!.id)
+                      : undefined
+                  }
+                  onEditPlan={
+                    modelingPlanActions?.onEditPlan
+                      ? (payload) => modelingPlanActions.onEditPlan?.(metadata.modeling_plan!.id, payload)
+                      : undefined
+                  }
                 />
-              ))}
-            </div>
-          ) : null}
-          {attachmentFiles.length > 0 ? (
-            <div className={[markdownText || imageUrls.length ? "mt-3" : "", "flex flex-wrap gap-2"].join(" ").trim()}>
-              {attachmentFiles.map((attachment) => (
-                <a
-                  key={attachment.id}
-                  href={attachment.url ?? "#"}
-                  target={attachment.url ? "_blank" : undefined}
-                  rel={attachment.url ? "noreferrer" : undefined}
-                  className={[
-                    "inline-flex h-7 items-center gap-1 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs",
-                    attachment.url ? "text-forge-amber hover:bg-[#171716]" : "cursor-default text-forge-muted"
-                  ].join(" ")}
-                  onClick={(event) => {
-                    if (!attachment.url) event.preventDefault();
-                  }}
-                >
-                  <Paperclip size={12} />
-                  <span className="max-w-44 truncate">{attachment.label}</span>
-                </a>
-              ))}
-            </div>
-          ) : null}
-        </>
-      )}
+              )
+            ) : null}
+            {imageUrls.length > 0 ? (
+              <ImagePreview urls={imageUrls} className={markdownText ? "mt-3" : undefined} />
+            ) : null}
+            {attachmentFiles.length > 0 ? (
+              <div
+                className={[markdownText || imageUrls.length ? "mt-3" : "", "flex flex-wrap gap-2"].join(" ").trim()}
+              >
+                {attachmentFiles.map((attachment) => (
+                  <a
+                    key={attachment.id}
+                    href={attachment.url ?? "#"}
+                    target={attachment.url ? "_blank" : undefined}
+                    rel={attachment.url ? "noreferrer" : undefined}
+                    className={[
+                      "inline-flex h-7 items-center gap-1 rounded-sm border border-forge-line-soft bg-forge-panel px-2 text-xs",
+                      attachment.url ? "text-forge-amber hover:bg-forge-hover" : "cursor-default text-forge-muted"
+                    ].join(" ")}
+                    onClick={(event) => {
+                      if (!attachment.url) event.preventDefault();
+                    }}
+                  >
+                    <Paperclip size={12} />
+                    <span className="max-w-44 truncate">{attachment.label}</span>
+                  </a>
+                ))}
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
     </div>
   );
 }

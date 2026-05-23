@@ -37,12 +37,12 @@ export function ComposerContextChips({
   const imageMode = useAppStore((state) => state.responseMode) === "image";
   return (
     <div className="flex min-w-0 flex-1 flex-wrap gap-2">
-      <ContextChip label="Agente" value={agentName} />
+      <ContextChip label="Agente" value={agentName} dot />
       <ContextChip label="Projeto" value={projectLabel} />
       <ContextChip label="Bases" value={knowledgeBasesLabel} />
       <ContextChip label="Execução" value={executionLabel} />
       {deepResearch && (
-        <label className="inline-flex h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted">
+        <label className="inline-flex h-8 items-center gap-2 rounded-md border border-forge-line-soft bg-forge-ink-deep px-2 text-xs text-forge-muted">
           <span>Chamadas</span>
           <input
             type="number"
@@ -52,19 +52,19 @@ export function ComposerContextChips({
             onChange={(event) =>
               onChangeDeepResearchMaxToolCalls(Math.max(1, Math.min(100, Number(event.target.value) || 1)))
             }
-            className="h-6 w-14 rounded border border-forge-line bg-[#080908] px-2 text-forge-text"
+            className="h-6 w-14 rounded border border-forge-line-soft bg-forge-ink-deep px-2 text-forge-text"
             aria-label="Limite de chamadas de ferramenta"
             title="Limite de chamadas de ferramenta"
           />
         </label>
       )}
       {imageMode && (
-        <label className="inline-flex h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted">
+        <label className="inline-flex h-8 items-center gap-2 rounded-md border border-forge-line-soft bg-forge-ink-deep px-2 text-xs text-forge-muted">
           <span>Modelo imagem</span>
           <select
             value={selectedImageModelId}
             onChange={(event) => onSelectImageModel(event.target.value || null)}
-            className="h-6 min-w-44 rounded border border-forge-line bg-[#080908] px-2 text-forge-text"
+            className="h-6 min-w-44 rounded border border-forge-line-soft bg-forge-ink-deep px-2 text-forge-text"
             aria-label="Modelo de geração de imagem"
             title="Modelo de geração de imagem"
           >

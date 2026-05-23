@@ -55,12 +55,14 @@ function ChatRow({
   onMoveSession: (sessionId: string, projectId: string, folderId: string | null) => void;
 }) {
   return (
-    <div className="space-y-1 rounded-md border border-forge-line/60 bg-[#0c0d0f] p-2">
+    <div className="space-y-1 rounded-md border border-forge-line-soft bg-forge-ink-deep p-2">
       <button
         type="button"
         className={[
           "w-full truncate rounded px-2 py-1 text-left text-xs transition",
-          session.id === activeSessionId ? "bg-[#202722] text-forge-text" : "text-forge-muted hover:bg-[#181b1e]"
+          session.id === activeSessionId
+            ? "bg-[color-mix(in_srgb,var(--ember)_12%,transparent)] text-forge-text"
+            : "text-forge-muted hover:bg-forge-hover"
         ].join(" ")}
         onClick={() => onSelectSession(session.id)}
       >
@@ -70,7 +72,7 @@ function ChatRow({
         </span>
       </button>
       <select
-        className="h-7 w-full rounded border border-forge-line bg-[#0e0f0e] px-2 text-[11px] text-forge-muted"
+        className="h-7 w-full rounded border border-forge-line-soft bg-forge-ink-deep px-2 text-[11px] text-forge-muted"
         value={session.folder_id ?? ""}
         onChange={(event) => onMoveSession(session.id, projectId, event.target.value || null)}
       >
@@ -102,7 +104,7 @@ function FolderNode({
   const isExpanded = expandedKeys[key] ?? true;
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 py-1.5">
+      <div className="flex items-center justify-between gap-2 rounded-md border border-forge-line-soft bg-forge-ink-deep px-2 py-1.5">
         <button type="button" className="flex min-w-0 items-center gap-1 text-sm" onClick={() => onToggleExpanded(key)}>
           {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           <FolderOpen size={14} className="text-forge-amber" />
@@ -204,7 +206,7 @@ export function ProjectExplorerSection({
     <div className="space-y-2">
       <button
         type="button"
-        className="flex w-full items-center justify-between text-xs uppercase text-forge-muted"
+        className="flex w-full items-center justify-between font-mono text-[10px] uppercase tracking-[0.14em] text-forge-faint transition hover:text-forge-muted"
         onClick={onToggleCollapsed}
       >
         <span>Projetos</span>
@@ -225,7 +227,7 @@ export function ProjectExplorerSection({
                 .map((folder) => ({ id: folder.id, label: folder.path }))
             ];
             return (
-              <section key={project.id} className="rounded-md border border-forge-line bg-[#0f1011] p-2">
+              <section key={project.id} className="rounded-md border border-forge-line-soft bg-forge-panel p-2">
                 <div className="flex items-center justify-between gap-2">
                   <button
                     type="button"

@@ -1,5 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 
+import { CodeBlock } from "./code-block";
+
 const imageMarkdownPatternSource =
   "!\\[[^\\]]*\\]\\((data:image\\/[^)\\s]+|https?:\\/\\/[^)\\s]+|blob:[^)\\s]+|\\/[^)\\s]+)\\)";
 const markdownLinkPattern = /\[([^\]]+)]\((https?:\/\/[^)\s]+)\)/g;
@@ -95,7 +97,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
       nodes.push(
         <code
           key={`${keyPrefix}:code:${tokenIndex}`}
-          className="rounded bg-[#0e0f0e] px-1.5 py-0.5 font-mono text-xs text-forge-amber"
+          className="rounded bg-forge-ink-deep px-1.5 py-0.5 font-mono text-xs text-forge-amber"
         >
           {token.slice(1, -1)}
         </code>
@@ -154,6 +156,7 @@ export function renderMarkdown(content: string): ReactNode {
     }
 
     if (fenceStartPattern.test(line)) {
+      const lang = line.replace(/^\s*```/, "").trim();
       cursor += 1;
       const codeLines: string[] = [];
       while (cursor < lines.length && !fenceStartPattern.test(lines[cursor])) {
@@ -161,14 +164,7 @@ export function renderMarkdown(content: string): ReactNode {
         cursor += 1;
       }
       if (cursor < lines.length) cursor += 1;
-      nodes.push(
-        <pre
-          key={`block:${blockIndex}:code`}
-          className="mb-3 overflow-x-auto rounded-md border border-forge-line bg-[#0e0f0e] p-3"
-        >
-          <code className="font-mono text-xs text-forge-text">{codeLines.join("\n")}</code>
-        </pre>
-      );
+      nodes.push(<CodeBlock key={`block:${blockIndex}:code`} lang={lang} code={codeLines.join("\n")} />);
       blockIndex += 1;
       continue;
     }

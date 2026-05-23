@@ -31,22 +31,20 @@ function iconFor(plan: ModelingPlan) {
     return <XCircle size={13} className="text-forge-red" aria-hidden />;
   }
   if (plan.status === "completed") {
-    return <CheckCircle2 size={13} className="text-emerald-300" aria-hidden />;
+    return <CheckCircle2 size={13} className="text-forge-green" aria-hidden />;
   }
   return <Pencil size={13} className="text-forge-amber" aria-hidden />;
 }
 
 export function ModelingEditCard({ plan }: ModelingEditCardProps) {
   const summary = summaryText(plan);
-  const executedCount = plan.steps.filter(
-    (step) => step.status === "completed"
-  ).length;
+  const executedCount = plan.steps.filter((step) => step.status === "completed").length;
   const failedCount = plan.steps.filter((step) => step.status === "failed").length;
 
   return (
     <section
       data-testid="modeling-edit-card"
-      className="mt-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2.5 py-2 text-[11px]"
+      className="mt-2 rounded-md border border-[color-mix(in_srgb,var(--ember)_28%,transparent)] bg-[color-mix(in_srgb,var(--ember)_4%,var(--bg-card))] px-2.5 py-2 text-[11px]"
       aria-label="Edição de plano 3D"
     >
       <header className="flex flex-wrap items-center justify-between gap-2">
@@ -63,8 +61,7 @@ export function ModelingEditCard({ plan }: ModelingEditCardProps) {
       <p className="mt-1 line-clamp-2 text-forge-muted">{summary}</p>
       <p className="mt-1 text-forge-muted">
         {executedCount} etapa(s) executada(s)
-        {failedCount > 0 ? ` · ${failedCount} com falha` : ""} · sem aprovação
-        adicional (allowlist segura).
+        {failedCount > 0 ? ` · ${failedCount} com falha` : ""} · sem aprovação adicional (allowlist segura).
       </p>
     </section>
   );

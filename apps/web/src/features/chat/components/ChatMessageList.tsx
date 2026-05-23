@@ -1,9 +1,19 @@
-import { Bot, LoaderCircle } from "lucide-react";
-import type { MutableRefObject } from "react";
+import { ArrowUpRight, Boxes, Library, Lightbulb, LoaderCircle, Scale, Users } from "lucide-react";
+import type { ComponentType, MutableRefObject } from "react";
 
 import { MessageBubble, type ModelingPlanCardActions } from "../../../components/app-chat";
+import { Mono } from "../../../components/ui/Mono";
+import type { QuickAction, QuickActionIcon } from "../../../app/constants";
 import type { ChatMessage, ChatSession, PlatformFile } from "../../../types/api";
 import type { SessionLazyMeta } from "../chat-helpers";
+
+const QUICK_ACTION_ICONS: Record<QuickActionIcon, ComponentType<{ size?: number | string }>> = {
+  boxes: Boxes,
+  lightbulb: Lightbulb,
+  users: Users,
+  library: Library,
+  scale: Scale
+};
 
 export interface ChatMessageListProps {
   activeSession: ChatSession | null;
@@ -14,8 +24,12 @@ export interface ChatMessageListProps {
   scrollRef: MutableRefObject<HTMLDivElement | null>;
   loadOlderRef: MutableRefObject<HTMLDivElement | null>;
   onScroll: () => void;
-  quickActions: readonly string[];
+  quickActions: readonly QuickAction[];
   onQuickAction: (action: string) => void;
+  /** Resumo do rodapé do empty-state (dados reais). */
+  sessionsCount: number;
+  documentsCount: number;
+  monthlySpendBrl: number | null;
 }
 
 /**
@@ -33,7 +47,10 @@ export function ChatMessageList({
   loadOlderRef,
   onScroll,
   quickActions,
-  onQuickAction
+  onQuickAction,
+  sessionsCount,
+  documentsCount,
+  monthlySpendBrl
 }: ChatMessageListProps) {
   const messages: ChatMessage[] = activeSession?.messages.length ? activeSession.messages : [];
   return (
@@ -61,26 +78,67 @@ export function ChatMessageList({
         ))}
 
         {!activeSession?.messages.length && (
-          <div className="mx-auto mt-12 w-full max-w-2xl">
-            <div className="mb-6 text-center">
-              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-md border border-forge-line bg-[#171716]">
-                <Bot size={28} className="text-forge-amber" />
-              </div>
-              <h3 className="text-xl font-semibold">Como posso ajudar agora?</h3>
-              <p className="mt-2 text-sm leading-6 text-forge-muted">
-                Escolha um ponto de partida ou escreva direto para a JUDITE.
-              </p>
+          <div className="mx-auto mt-10 flex w-full max-w-2xl flex-col items-center">
+            <div className="mb-6 flex items-center gap-2.5">
+              <span className="h-px w-8 bg-forge-line" />
+              <Mono size={10} className="uppercase tracking-[0.2em] text-forge-faint">
+                {new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" })}
+              </Mono>
+              <span className="h-px w-8 bg-forge-line" />
             </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {quickActions.map((action) => (
-                <button
-                  key={action}
-                  className="min-h-12 rounded-md border border-forge-line bg-[#141615] px-3 py-2 text-left text-sm text-forge-text transition hover:border-forge-amber/60 hover:bg-[#1b1d1b]"
-                  onClick={() => onQuickAction(action)}
-                >
-                  {action}
-                </button>
-              ))}
+            <h1 className="text-center font-display text-4xl uppercase leading-none tracking-[0.005em] text-forge-text sm:text-5xl">
+              Onde se descansa,
+              <br />
+              <span className="font-serif lowercase italic tracking-tight text-forge-amber">forja-se</span> a verdade.
+            </h1>
+            <p className="mt-4 max-w-md text-center text-sm leading-relaxed text-forge-muted">
+              Escolha um ponto de partida ou escreva direto para a JUDITE.
+            </p>
+            <div className="mt-9 grid w-full gap-2.5 sm:grid-cols-2">
+              {quickActions.map((action) => {
+                const ActionIcon = QUICK_ACTION_ICONS[action.icon];
+                return (
+                  <button
+                    key={action.label}
+                    className="flex items-center gap-3.5 rounded border border-forge-line-soft bg-forge-panel px-4 py-3.5 text-left transition hover:border-forge-amber/40"
+                    onClick={() => onQuickAction(action.label)}
+                  >
+                    <span
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-forge-amber"
+                      style={{
+                        background: "color-mix(in srgb, var(--ember) 10%, var(--bg-ink))",
+                        border: "1px solid color-mix(in srgb, var(--ember) 20%, transparent)"
+                      }}
+                    >
+                      <ActionIcon size={16} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13.5px] font-medium text-forge-text">{action.label}</span>
+                      <Mono size={10} className="mt-0.5 block text-forge-faint">
+                        {action.hint}
+                      </Mono>
+                    </span>
+                    <ArrowUpRight size={14} className="shrink-0 text-forge-faint" />
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-8 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5">
+              <Mono size={10} className="text-forge-faint">
+                {sessionsCount} chats
+              </Mono>
+              {monthlySpendBrl != null && (
+                <>
+                  <span className="h-0.5 w-0.5 rounded-full bg-forge-faint" />
+                  <Mono size={10} className="text-forge-faint">
+                    R$ {monthlySpendBrl.toFixed(2).replace(".", ",")} gastos no mês
+                  </Mono>
+                </>
+              )}
+              <span className="h-0.5 w-0.5 rounded-full bg-forge-faint" />
+              <Mono size={10} className="text-forge-faint">
+                {documentsCount} documentos
+              </Mono>
             </div>
           </div>
         )}

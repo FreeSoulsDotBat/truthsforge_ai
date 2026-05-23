@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Truth's Forge AI · Visual Identity Manual v4</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Inter:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        background: oklch(0.155 0.014 50);
+        color: oklch(0.96 0.012 75);
+        font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+      html { scroll-behavior: smooth; }
+      * { box-sizing: border-box; }
+      *::-webkit-scrollbar { width: 8px; height: 8px; }
+      *::-webkit-scrollbar-track { background: transparent; }
+      *::-webkit-scrollbar-thumb { background: rgba(247, 147, 30, 0.18); border-radius: 4px; }
+      *::-webkit-scrollbar-thumb:hover { background: rgba(247, 147, 30, 0.32); }
+
+      @keyframes tfPulse {
+        0%, 100% { opacity: 0.6; transform: scale(1); }
+        50% { opacity: 0; transform: scale(2.4); }
+      }
+      @keyframes tfBlink {
+        0%, 50% { opacity: 1; }
+        50.01%, 100% { opacity: 0; }
+      }
+      @keyframes tfShimmer {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+      }
+      @keyframes tfDot {
+        0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+        30% { opacity: 1; transform: translateY(-2px); }
+      }
+      @keyframes tfSpin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+    </style>
+
+    <script
+      src="https://unpkg.com/react@18.3.1/umd/react.development.js"
+      integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"
+      integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
+      integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y"
+      crossorigin="anonymous"
+    ></script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!-- Shared primitives (from v3) -->
+    <script type="text/babel" src="frames/themes.jsx"></script>
+    <script type="text/babel" src="frames/icons.jsx"></script>
+    <script type="text/babel" src="frames/parts.jsx"></script>
+    <script type="text/babel" src="frames/sidebar.jsx"></script>
+    <script type="text/babel" src="frames/chat.jsx"></script>
+    <script type="text/babel" src="frames/dashboards.jsx"></script>
+    <script type="text/babel" src="frames/panel.jsx"></script>
+    <script type="text/babel" src="frames/modals.jsx"></script>
+    <script type="text/babel" src="frames/minor-components.jsx"></script>
+    <script type="text/babel" src="frames/forms.jsx"></script>
+    <script type="text/babel" src="frames/image-preview.jsx"></script>
+    <script type="text/babel" src="frames/modeling-cards.jsx"></script>
+    <script type="text/babel" src="frames/shell.jsx"></script>
+    <script type="text/babel" src="frames/tweaks-panel.jsx"></script>
+
+    <!-- Doc primitives (from v3) -->
+    <script type="text/babel" src="tutorial/doc-parts.jsx"></script>
+
+    <!-- v4 — bilingual additions, inconsistency resolutions, P1/P2 + new findings, dashboards -->
+    <script type="text/babel" src="tutorial/v4-shared.jsx"></script>
+    <script type="text/babel" src="tutorial/v4-tokens.jsx"></script>
+    <script type="text/babel" src="tutorial/v4-atoms.jsx"></script>
+    <script type="text/babel" src="tutorial/v4-molecules.jsx"></script>
+    <script type="text/babel" src="tutorial/v4-organisms.jsx"></script>
+    <script type="text/babel" src="tutorial/v4-patterns.jsx"></script>
+    <script type="text/babel" src="tutorial/v4-dashboards.jsx"></script>
+    <script type="text/babel" src="tutorial/v4-llm.jsx"></script>
+    <script type="text/babel" src="tutorial/v4-app.jsx"></script>
+
+    <script type="text/babel">
+      const v4Root = ReactDOM.createRoot(document.getElementById("root"));
+      v4Root.render(<V4App />);
+    </script>
+  </body>
+</html>

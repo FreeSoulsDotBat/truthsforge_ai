@@ -52,7 +52,7 @@ export function ShortcutMenu({
       </Button>
       {open && (
         <div
-          className="absolute right-0 z-50 w-[460px] rounded-md border border-forge-line bg-[#111313] p-1 shadow-2xl"
+          className="absolute right-0 z-50 w-[460px] rounded-md border border-forge-line bg-forge-panel p-1 shadow-2xl"
           style={{ top: "auto", bottom: "calc(100% + 4px)" }}
         >
           <div className="grid grid-cols-[170px_minmax(0,1fr)]">
@@ -62,8 +62,8 @@ export function ShortcutMenu({
                 className={[
                   "flex h-8 w-full items-center justify-between rounded px-2 text-xs transition",
                   submenu === "agent"
-                    ? "bg-[#1b1f22] text-forge-text"
-                    : "text-forge-muted hover:bg-[#1b1f22] hover:text-forge-text"
+                    ? "bg-forge-hover text-forge-text"
+                    : "text-forge-muted hover:bg-forge-hover hover:text-forge-text"
                 ].join(" ")}
                 onClick={() => onSelectSubmenu("agent")}
               >
@@ -75,8 +75,8 @@ export function ShortcutMenu({
                 className={[
                   "flex h-8 w-full items-center justify-between rounded px-2 text-xs transition",
                   submenu === "scope"
-                    ? "bg-[#1b1f22] text-forge-text"
-                    : "text-forge-muted hover:bg-[#1b1f22] hover:text-forge-text"
+                    ? "bg-forge-hover text-forge-text"
+                    : "text-forge-muted hover:bg-forge-hover hover:text-forge-text"
                 ].join(" ")}
                 onClick={() => onSelectSubmenu("scope")}
               >
@@ -94,7 +94,7 @@ export function ShortcutMenu({
                       <button
                         key={agent.id}
                         type="button"
-                        className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
+                        className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-forge-hover hover:text-forge-text"
                         onClick={() => onSelectAgent(agent.id)}
                       >
                         <span className="truncate">{agent.name}</span>
@@ -110,7 +110,7 @@ export function ShortcutMenu({
                     <button
                       key={project.id}
                       type="button"
-                      className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
+                      className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-forge-hover hover:text-forge-text"
                       onClick={() => onSelectProject(project)}
                     >
                       <span className="truncate">{projectDisplayName(project)}</span>
@@ -122,7 +122,7 @@ export function ShortcutMenu({
                   </div>
                   <button
                     type="button"
-                    className="mt-1 flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
+                    className="mt-1 flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-forge-hover hover:text-forge-text"
                     onClick={onEditKnowledgeBases}
                   >
                     <span>Editar bases de conhecimento atreladas</span>

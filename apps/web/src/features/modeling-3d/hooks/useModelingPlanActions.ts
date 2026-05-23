@@ -45,8 +45,7 @@ export interface UseModelingPlanActionsResult {
   reset: () => void;
 }
 
-const DEFAULT_REVISE_REASON =
-  "Usuário pediu para revisar o plano; voltando para descoberta.";
+const DEFAULT_REVISE_REASON = "Usuário pediu para revisar o plano; voltando para descoberta.";
 
 export function useModelingPlanActions(): UseModelingPlanActionsResult {
   const [busy, setBusy] = useState(false);
@@ -54,22 +53,19 @@ export function useModelingPlanActions(): UseModelingPlanActionsResult {
   const [lastPlan, setLastPlan] = useState<ModelingPlan | null>(null);
   const [lastExecution, setLastExecution] = useState<ModelingExecutionResult | null>(null);
 
-  const wrap = useCallback(
-    async <T,>(op: () => Promise<T>): Promise<T | null> => {
-      setBusy(true);
-      setError(null);
-      try {
-        return await op();
-      } catch (exc) {
-        const message = exc instanceof Error ? exc.message : "Falha de rede.";
-        setError(message);
-        return null;
-      } finally {
-        setBusy(false);
-      }
-    },
-    []
-  );
+  const wrap = useCallback(async <T>(op: () => Promise<T>): Promise<T | null> => {
+    setBusy(true);
+    setError(null);
+    try {
+      return await op();
+    } catch (exc) {
+      const message = exc instanceof Error ? exc.message : "Falha de rede.";
+      setError(message);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const approve = useCallback(
     async (planId: string) =>

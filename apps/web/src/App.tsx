@@ -2260,6 +2260,10 @@ function App() {
         onDeleteFolder={(folderId) => void deleteFolderFromExplorer(folderId)}
         onMoveSession={(sessionId, projectId, folderId) => void moveSessionInExplorer(sessionId, projectId, folderId)}
         onDeleteSession={(session) => void deleteChatSession(session)}
+        online={loadState === "ready"}
+        agentModelLabel={activeAgentModelLabel}
+        costUsage={costUsage}
+        onOpenSettings={() => handleSelectView("agents")}
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
@@ -2288,11 +2292,14 @@ function App() {
                   onScroll={handleChatScroll}
                   quickActions={quickActions}
                   onQuickAction={handleQuickAction}
+                  sessionsCount={sessions.length}
+                  documentsCount={documents.length}
+                  monthlySpendBrl={costUsage?.estimated_spend_brl ?? null}
                 />
 
-                <form onSubmit={handleSubmit} className="border-t border-forge-line bg-[#0c0d0f] p-3">
-                  <div className="mx-auto max-w-3xl rounded-md border border-forge-line bg-[#171716] p-2">
-                    <div className="mb-2 space-y-2 border-b border-forge-line pb-2">
+                <form onSubmit={handleSubmit} className="border-t border-forge-line-soft bg-forge-ink p-3">
+                  <div className="mx-auto max-w-3xl rounded-lg border border-forge-line bg-forge-panel p-3 shadow-soft">
+                    <div className="mb-2 space-y-2 border-b border-forge-line-soft pb-2">
                       <div className="flex items-start justify-between gap-3">
                         <ComposerContextChips
                           agentName={activeAgent?.name ?? "Sem agente"}
@@ -2418,6 +2425,10 @@ function App() {
               <ChatRightPanel
                 activePanel={activePanel}
                 onSelectPanel={setActivePanel}
+                reasoningSummaryUnavailable={reasoningSummaryUnavailable}
+                onDisableModeling3d={() => {
+                  if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
+                }}
                 status={status}
                 costUsage={costUsage}
                 costPolicy={costPolicy}

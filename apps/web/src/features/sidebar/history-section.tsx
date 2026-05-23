@@ -30,7 +30,7 @@ export function HistorySection({
     <div className="space-y-2">
       <button
         type="button"
-        className="flex w-full items-center justify-between text-xs uppercase text-forge-muted"
+        className="flex w-full items-center justify-between font-mono text-[10px] uppercase tracking-[0.14em] text-forge-faint transition hover:text-forge-muted"
         onClick={onToggleCollapsed}
       >
         <span>Histórico (geral)</span>
@@ -47,8 +47,8 @@ export function HistorySection({
                 className={[
                   "min-w-0 flex-1 rounded-md px-3 py-2 text-left text-sm transition",
                   session.id === activeSessionId
-                    ? "bg-[#202722] text-forge-text"
-                    : "text-forge-muted hover:bg-[#181b1e]"
+                    ? "bg-[color-mix(in_srgb,var(--ember)_12%,transparent)] text-forge-text"
+                    : "text-forge-muted hover:bg-forge-hover"
                 ].join(" ")}
                 onClick={() => onSelectSession(session.id)}
               >
@@ -61,7 +61,7 @@ export function HistorySection({
                 type="button"
                 className={[
                   "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-forge-line text-forge-muted transition",
-                  "hover:border-forge-red/60 hover:bg-[#261315] hover:text-forge-red",
+                  "hover:border-forge-red/60 hover:bg-[color-mix(in_srgb,var(--err)_14%,transparent)] hover:text-forge-red",
                   "opacity-0 group-hover:opacity-100 focus:opacity-100",
                   deletingSessionId === session.id ? "cursor-wait opacity-100" : ""
                 ].join(" ")}

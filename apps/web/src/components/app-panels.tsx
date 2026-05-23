@@ -19,7 +19,7 @@ export function DuplicateFileModal({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-      <div className="w-full max-w-lg rounded-md border border-forge-line bg-[#141615] p-4 shadow-2xl">
+      <div className="w-full max-w-lg rounded-md border border-forge-line bg-forge-panel p-4 shadow-2xl">
         <div className="flex items-start justify-between gap-3 border-b border-forge-line pb-3">
           <div>
             <p className="text-xs uppercase text-forge-muted">Arquivo duplicado</p>
@@ -30,12 +30,12 @@ export function DuplicateFileModal({
           </Button>
         </div>
         <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
-          <div className="rounded-md border border-forge-line bg-[#0e0f0e] p-3">
+          <div className="rounded-md border border-forge-line bg-forge-ink-deep p-3">
             <p className="text-xs uppercase text-forge-muted">Novo envio</p>
             <p className="mt-2 truncate font-medium">{pending.file.name}</p>
             <p className="mt-1 text-xs text-forge-muted">{formatBytes(pending.file.size)}</p>
           </div>
-          <div className="rounded-md border border-forge-line bg-[#0e0f0e] p-3">
+          <div className="rounded-md border border-forge-line bg-forge-ink-deep p-3">
             <p className="text-xs uppercase text-forge-muted">Existente</p>
             <p className="mt-2 truncate font-medium">{platformFileLabel(pending.duplicate)}</p>
             <p className="mt-1 text-xs text-forge-muted">
@@ -63,35 +63,16 @@ export function DuplicateFileModal({
   );
 }
 
-export function DashboardNavButton({
-  active,
-  icon,
-  label,
-  onClick
-}: {
-  active: boolean;
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
+export function ContextChip({ label, value, dot = false }: { label: string; value: string; dot?: boolean }) {
   return (
-    <button
-      type="button"
-      className={[
-        "flex h-9 items-center justify-start gap-2 rounded px-3 text-sm transition",
-        active ? "bg-[#24211b] text-forge-text" : "text-forge-muted hover:bg-[#181b1e] hover:text-forge-text"
-      ].join(" ")}
-      onClick={onClick}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
-  );
-}
-
-export function ContextChip({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="inline-flex min-h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs">
+    <div className="inline-flex min-h-8 items-center gap-2 rounded-md border border-forge-line-soft bg-forge-ink-deep px-2 text-xs">
+      {dot && (
+        <span
+          aria-hidden
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-forge-amber"
+          style={{ boxShadow: "0 0 6px var(--ember-glow)" }}
+        />
+      )}
       <span className="uppercase text-forge-muted">{label}</span>
       <span className="max-w-60 truncate text-forge-text">{value}</span>
     </div>
@@ -118,7 +99,7 @@ export function ExecutionMenuItem({
         "flex h-8 w-full items-center justify-between rounded px-2 text-xs transition",
         disabled
           ? "cursor-not-allowed text-forge-muted/40"
-          : "text-forge-muted hover:bg-[#1b1f22] hover:text-forge-text"
+          : "text-forge-muted hover:bg-forge-hover hover:text-forge-text"
       ].join(" ")}
       disabled={disabled}
       title={title}
@@ -134,46 +115,11 @@ export function SearchIcon() {
   return <Library size={18} />;
 }
 
-export function PanelStack({ children }: { children: ReactNode }) {
-  return (
-    <div className="scrollbar-slim flex max-h-[calc(100vh-112px)] flex-col gap-4 overflow-y-auto pb-8 pr-1">
-      {children}
-    </div>
-  );
-}
-
-export function PanelButton({
-  active,
-  icon,
-  label,
-  onClick
-}: {
-  active: boolean;
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={[
-        "flex h-9 items-center justify-center rounded border text-forge-muted transition",
-        active ? "border-forge-amber/60 bg-[#24211b] text-forge-text" : "border-transparent hover:bg-[#181b1e]"
-      ].join(" ")}
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-    >
-      {icon}
-    </button>
-  );
-}
-
 export function PanelTitle({ icon, title }: { icon: ReactNode; title: string }) {
   return (
-    <div className="flex items-center gap-2 border-b border-forge-line pb-2 text-sm font-semibold">
-      {icon}
-      <span>{title}</span>
+    <div className="flex items-center gap-2 pt-1">
+      <span className="text-forge-amber [&_svg]:h-3.5 [&_svg]:w-3.5">{icon}</span>
+      <span className="font-mono text-[10.5px] uppercase tracking-[0.12em] text-forge-text-soft">{title}</span>
     </div>
   );
 }
@@ -187,15 +133,6 @@ export function InfoRow({ label, value }: { label: string; value: string }) {
         {label}
       </span>
       <span className="min-w-0 truncate text-right">{value}</span>
-    </div>
-  );
-}
-
-export function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-md border border-forge-line bg-[#171716] p-2">
-      <p className="text-forge-muted">{label}</p>
-      <p className="text-lg font-semibold">{value}</p>
     </div>
   );
 }

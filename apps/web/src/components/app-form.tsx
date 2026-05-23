@@ -14,7 +14,7 @@ export function InfoTip({ text }: { text: string }) {
   return (
     <span className="group relative inline-flex text-forge-muted" tabIndex={0} aria-label={text}>
       <Info size={13} className="cursor-help transition group-hover:text-forge-amber group-focus:text-forge-amber" />
-      <span className="pointer-events-none absolute left-1/2 top-5 z-30 hidden w-64 -translate-x-1/2 rounded-md border border-forge-line bg-[#080908] p-2 text-left text-xs normal-case leading-5 text-forge-text shadow-soft group-hover:block group-focus:block">
+      <span className="pointer-events-none absolute left-1/2 top-5 z-30 hidden w-64 -translate-x-1/2 rounded-md border border-forge-line bg-forge-ink-deep p-2 text-left text-xs normal-case leading-5 text-forge-text shadow-soft group-hover:block group-focus:block">
         {text}
       </span>
     </span>
@@ -109,7 +109,7 @@ export function AgentLLMNumberInput({
         value={draftValue}
         onBlur={() => commitDraft(draftValue, true)}
         onChange={(event) => handleChange(event.target.value)}
-        className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+        className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
       />
     </Field>
   );
@@ -137,7 +137,7 @@ export function AgentLLMSelect({
       <select
         value={value}
         onChange={(event) => onChange(field, event.target.value || null)}
-        className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-sm text-forge-text"
+        className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-2 text-sm text-forge-text"
       >
         {options.map((option) => (
           <option key={option || "default"} value={option}>
