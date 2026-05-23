@@ -1,7 +1,8 @@
-import { Bot, LoaderCircle } from "lucide-react";
+import { ArrowUpRight, Flame, LoaderCircle } from "lucide-react";
 import type { MutableRefObject } from "react";
 
 import { MessageBubble, type ModelingPlanCardActions } from "../../../components/app-chat";
+import { Mono } from "../../../components/ui/Mono";
 import type { ChatMessage, ChatSession, PlatformFile } from "../../../types/api";
 import type { SessionLazyMeta } from "../chat-helpers";
 
@@ -61,24 +62,40 @@ export function ChatMessageList({
         ))}
 
         {!activeSession?.messages.length && (
-          <div className="mx-auto mt-12 w-full max-w-2xl">
-            <div className="mb-6 text-center">
-              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-md border border-forge-line bg-[#171716]">
-                <Bot size={28} className="text-forge-amber" />
-              </div>
-              <h3 className="text-xl font-semibold">Como posso ajudar agora?</h3>
-              <p className="mt-2 text-sm leading-6 text-forge-muted">
-                Escolha um ponto de partida ou escreva direto para a JUDITE.
-              </p>
+          <div className="mx-auto mt-10 flex w-full max-w-2xl flex-col items-center">
+            <div className="mb-6 flex items-center gap-2.5">
+              <span className="h-px w-8 bg-forge-line" />
+              <Mono size={10} className="uppercase tracking-[0.2em] text-forge-faint">
+                {new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" })}
+              </Mono>
+              <span className="h-px w-8 bg-forge-line" />
             </div>
-            <div className="grid gap-2 sm:grid-cols-2">
+            <h1 className="text-center font-display text-4xl uppercase leading-none tracking-[0.005em] text-forge-text sm:text-5xl">
+              Onde se descansa,
+              <br />
+              <span className="font-serif lowercase italic tracking-tight text-forge-amber">forja-se</span> a verdade.
+            </h1>
+            <p className="mt-4 max-w-md text-center text-sm leading-relaxed text-forge-muted">
+              Escolha um ponto de partida ou escreva direto para a JUDITE.
+            </p>
+            <div className="mt-9 grid w-full gap-2.5 sm:grid-cols-2">
               {quickActions.map((action) => (
                 <button
                   key={action}
-                  className="min-h-12 rounded-md border border-forge-line bg-[#141615] px-3 py-2 text-left text-sm text-forge-text transition hover:border-forge-amber/60 hover:bg-[#1b1d1b]"
+                  className="flex items-center gap-3.5 rounded border border-forge-line-soft bg-forge-panel px-4 py-3.5 text-left transition hover:border-forge-amber/40"
                   onClick={() => onQuickAction(action)}
                 >
-                  {action}
+                  <span
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-forge-amber"
+                    style={{
+                      background: "color-mix(in srgb, var(--ember) 10%, var(--bg-ink))",
+                      border: "1px solid color-mix(in srgb, var(--ember) 20%, transparent)"
+                    }}
+                  >
+                    <Flame size={16} />
+                  </span>
+                  <span className="min-w-0 flex-1 text-[13.5px] font-medium text-forge-text">{action}</span>
+                  <ArrowUpRight size={14} className="shrink-0 text-forge-faint" />
                 </button>
               ))}
             </div>
