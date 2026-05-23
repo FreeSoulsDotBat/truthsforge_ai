@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { Avatar } from "./Avatar";
+import { BrandSymbol } from "./BrandSymbol";
 import { Chip } from "./Chip";
 import { Divider } from "./Divider";
 import { KBD } from "./KBD";
@@ -73,5 +74,13 @@ describe("foundational primitives", () => {
     expect(a.firstChild).toBeTruthy();
     const { container: b } = render(<Pulse />);
     expect(b.firstChild).toBeTruthy();
+  });
+
+  it("BrandSymbol renders a decorative svg sized from its prop", () => {
+    const { container } = render(<BrandSymbol size={40} />);
+    const svg = container.querySelector("svg");
+    expect(svg).toBeTruthy();
+    expect(svg?.getAttribute("width")).toBe(String(40 * 0.55));
+    expect(container.querySelector('[aria-hidden="true"]')).toBeTruthy();
   });
 });
