@@ -2425,6 +2425,7 @@ function App() {
               <ChatRightPanel
                 activePanel={activePanel}
                 onSelectPanel={setActivePanel}
+                reasoningSummaryUnavailable={reasoningSummaryUnavailable}
                 status={status}
                 costUsage={costUsage}
                 costPolicy={costPolicy}

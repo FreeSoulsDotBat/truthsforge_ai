@@ -36,10 +36,12 @@ import type {
   ServerStatus
 } from "../../../types/api";
 import { Modeling3DSettingsSection } from "../../modeling-3d/settings";
+import { ChatExecutionModes } from "./ChatExecutionModes";
 
 export interface ChatRightPanelProps {
   activePanel: Panel;
   onSelectPanel: (panel: Panel) => void;
+  reasoningSummaryUnavailable: boolean;
   status: ServerStatus | null;
   costUsage: CostUsage | null;
   costPolicy: CostPolicy | null;
@@ -79,6 +81,7 @@ export interface ChatRightPanelProps {
 export function ChatRightPanel({
   activePanel,
   onSelectPanel,
+  reasoningSummaryUnavailable,
   status,
   costUsage,
   costPolicy,
@@ -133,6 +136,7 @@ export function ChatRightPanel({
           <div className="scrollbar-slim flex-1 space-y-4 overflow-y-auto px-4 py-4">
             {activePanel === "contexto" && (
               <>
+                <ChatExecutionModes reasoningSummaryUnavailable={reasoningSummaryUnavailable} />
                 <PanelTitle icon={<Activity size={18} />} title="Contexto" />
                 <InfoRow label="API" value={api.baseUrl} />
                 <InfoRow label="Vetores" value={status?.vector_store ?? "qdrant"} />
