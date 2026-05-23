@@ -40,9 +40,12 @@ const CARD_BUTTON_BASE =
   "inline-flex h-7 items-center justify-center gap-1 rounded-md border px-2.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-50";
 
 const CARD_BUTTON_VARIANTS = {
-  primary: "border-forge-amber/60 bg-[#241d12] text-forge-amber hover:bg-[#2e2417]",
-  ghost: "border-forge-line bg-transparent text-forge-text hover:bg-[#1a1d20]",
-  danger: "border-forge-red/60 bg-[#2a1414] text-forge-red hover:bg-[#3a1818]"
+  // Ação primária do fluxo 3D usa amethyst (cor secundária do bounded context).
+  primary:
+    "border-[color-mix(in_srgb,var(--amethyst)_50%,transparent)] bg-[color-mix(in_srgb,var(--amethyst)_16%,transparent)] text-forge-amethyst hover:bg-[color-mix(in_srgb,var(--amethyst)_24%,transparent)]",
+  ghost: "border-forge-line bg-transparent text-forge-text hover:bg-forge-hover",
+  danger:
+    "border-forge-red/60 bg-[color-mix(in_srgb,var(--err)_14%,transparent)] text-forge-red hover:bg-[color-mix(in_srgb,var(--err)_22%,transparent)]"
 } as const;
 
 /**
@@ -84,9 +87,9 @@ export interface ModelingPlanCardProps {
 }
 
 const RISK_BADGE_CLASS: Record<ModelingRiskLevel, string> = {
-  low: "bg-[#1a2417] text-emerald-300 border-emerald-500/40",
-  medium: "bg-[#241d12] text-forge-amber border-forge-amber/40",
-  high: "bg-[#2a1414] text-forge-red border-forge-red/60"
+  low: "bg-[color-mix(in_srgb,var(--ok)_12%,transparent)] text-forge-green border-forge-green/40",
+  medium: "bg-[color-mix(in_srgb,var(--ember)_12%,transparent)] text-forge-amber border-forge-amber/40",
+  high: "bg-[color-mix(in_srgb,var(--err)_12%,transparent)] text-forge-red border-forge-red/60"
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -232,13 +235,22 @@ export function ModelingPlanCard({
   return (
     <section
       data-testid="modeling-plan-card"
-      className="mt-3 rounded-md border border-forge-amber/40 bg-[#18150f] p-3 text-xs"
+      className="mt-3 rounded-md border border-[color-mix(in_srgb,var(--amethyst)_28%,transparent)] bg-[color-mix(in_srgb,var(--amethyst)_4%,var(--bg-card))] p-3 text-xs shadow-[0_12px_32px_-20px_var(--amethyst-glow)]"
       aria-label="Plano 3D MCP"
     >
       <header className="flex flex-col justify-between gap-2 md:flex-row md:items-start">
         <div>
           <div className="flex items-center gap-2 font-semibold text-forge-text">
-            <Box size={15} className="text-forge-amber" aria-hidden />
+            <span
+              aria-hidden
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white"
+              style={{
+                background:
+                  "linear-gradient(155deg, var(--amethyst), color-mix(in srgb, var(--amethyst) 40%, var(--bg-ink)))"
+              }}
+            >
+              <Box size={14} />
+            </span>
             Plano 3D MCP
           </div>
           {summary && <p className="mt-1 line-clamp-3 text-forge-muted">{summary}</p>}
@@ -253,8 +265,8 @@ export function ModelingPlanCard({
               // sinal não aparecia. Tooltip nativo mostra a razão.
               className={
                 plan.planner_source === "heuristic"
-                  ? "inline-flex items-center rounded-full border border-forge-red/60 bg-[#2a0f0f] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-forge-red"
-                  : "inline-flex items-center rounded-full border border-forge-line bg-[#171716] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-forge-muted"
+                  ? "inline-flex items-center rounded-full border border-forge-red/60 bg-[color-mix(in_srgb,var(--err)_12%,transparent)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-forge-red"
+                  : "inline-flex items-center rounded-full border border-forge-line bg-forge-chip px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-forge-muted"
               }
               title={
                 plan.planner_source === "heuristic" && plan.fallback_reason
@@ -272,7 +284,7 @@ export function ModelingPlanCard({
       {highRisk.length > 0 && (
         <div
           role="status"
-          className="mt-3 flex items-start gap-2 rounded-sm border border-forge-amber/70 bg-[#2a2110] px-2.5 py-2 text-forge-amber"
+          className="mt-3 flex items-start gap-2 rounded-sm border border-forge-amber/70 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)] px-2.5 py-2 text-forge-amber"
         >
           <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden />
           <p className="leading-snug">
@@ -284,7 +296,7 @@ export function ModelingPlanCard({
 
       <ol className="mt-3 space-y-1">
         {plan.steps.slice(0, 5).map((step) => (
-          <li key={step.id} className="rounded border border-forge-line bg-[#0e0f0e] px-2 py-1.5">
+          <li key={step.id} className="rounded border border-forge-line bg-forge-ink-deep px-2 py-1.5">
             <div className="flex items-center justify-between gap-2">
               <span className="line-clamp-1 font-medium">
                 {step.seq}. {step.title}
@@ -307,7 +319,10 @@ export function ModelingPlanCard({
       </ol>
 
       {editing && (
-        <div className="mt-3 rounded border border-forge-amber/40 bg-[#0e0f0e] p-2" data-testid="modeling-plan-editor">
+        <div
+          className="mt-3 rounded border border-[color-mix(in_srgb,var(--amethyst)_40%,transparent)] bg-forge-ink-deep p-2"
+          data-testid="modeling-plan-editor"
+        >
           <p className="mb-2 text-[11px] text-forge-muted">
             Edite as etapas (título, tool, risco e argumentos JSON). Reordene, remova ou adicione. Salvar mantém o plano
             aguardando sua aprovação.
@@ -319,7 +334,7 @@ export function ModelingPlanCard({
                   <span className="text-forge-muted">{index + 1}.</span>
                   <input
                     aria-label={`Título da etapa ${index + 1}`}
-                    className="flex-1 rounded border border-forge-line bg-[#161716] px-1.5 py-1 text-forge-text"
+                    className="flex-1 rounded border border-forge-line bg-forge-panel px-1.5 py-1 text-forge-text"
                     value={draft.title}
                     onChange={(e) => updateDraft(index, { title: e.target.value })}
                     disabled={isBusy}
@@ -355,7 +370,7 @@ export function ModelingPlanCard({
                 <div className="mt-1 flex gap-1">
                   <input
                     aria-label={`Tool da etapa ${index + 1}`}
-                    className="flex-1 rounded border border-forge-line bg-[#161716] px-1.5 py-1 font-mono text-[11px] text-forge-text"
+                    className="flex-1 rounded border border-forge-line bg-forge-panel px-1.5 py-1 font-mono text-[11px] text-forge-text"
                     value={draft.tool_name}
                     onChange={(e) => updateDraft(index, { tool_name: e.target.value })}
                     placeholder="ex.: fusion.add_box"
@@ -363,7 +378,7 @@ export function ModelingPlanCard({
                   />
                   <select
                     aria-label={`Risco da etapa ${index + 1}`}
-                    className="rounded border border-forge-line bg-[#161716] px-1 py-1 text-forge-text"
+                    className="rounded border border-forge-line bg-forge-panel px-1 py-1 text-forge-text"
                     value={draft.risk_level}
                     onChange={(e) => updateDraft(index, { risk_level: e.target.value as ModelingRiskLevel })}
                     disabled={isBusy}
@@ -375,7 +390,7 @@ export function ModelingPlanCard({
                 </div>
                 <textarea
                   aria-label={`Argumentos JSON da etapa ${index + 1}`}
-                  className="mt-1 w-full resize-y rounded border border-forge-line bg-[#161716] p-1.5 font-mono text-[11px] text-forge-text"
+                  className="mt-1 w-full resize-y rounded border border-forge-line bg-forge-panel p-1.5 font-mono text-[11px] text-forge-text"
                   rows={2}
                   value={draft.inputText}
                   onChange={(e) => updateDraft(index, { inputText: e.target.value })}
@@ -460,7 +475,7 @@ export function ModelingPlanCard({
             )}
           </div>
           {showRejectForm && (
-            <div className="rounded border border-forge-red/40 bg-[#1a0f0f] p-2">
+            <div className="rounded border border-forge-red/40 bg-[color-mix(in_srgb,var(--err)_10%,transparent)] p-2">
               <label htmlFor={rejectInputId} className="block text-[11px] text-forge-muted">
                 Motivo da rejeição (obrigatório):
               </label>
@@ -470,7 +485,7 @@ export function ModelingPlanCard({
                 onChange={(event) => setRejectReason(event.target.value)}
                 rows={2}
                 disabled={isBusy}
-                className="mt-1 w-full resize-y rounded border border-forge-line bg-[#0e0f0e] p-1.5 text-forge-text"
+                className="mt-1 w-full resize-y rounded border border-forge-line bg-forge-ink-deep p-1.5 text-forge-text"
                 placeholder="Explique o que falta ou está errado para o agente voltar para descoberta."
                 data-testid="modeling-plan-reject-reason"
               />
@@ -505,21 +520,21 @@ export function ModelingPlanCard({
       )}
 
       {showExecutingBlock && (
-        <div className="mt-3 flex items-center gap-2 rounded border border-forge-line bg-[#0e0f0e] px-2 py-2 text-forge-muted">
-          <Loader2 size={14} className="animate-spin text-forge-amber" aria-hidden />
+        <div className="mt-3 flex items-center gap-2 rounded border border-forge-line bg-forge-ink-deep px-2 py-2 text-forge-muted">
+          <Loader2 size={14} className="animate-spin text-forge-amethyst" aria-hidden />
           <span>Execução em andamento — acompanhe os passos acima.</span>
         </div>
       )}
 
       {showCompletedBlock && (
-        <div className="mt-3 flex items-center gap-2 rounded border border-emerald-500/40 bg-[#0f1a13] px-2 py-2 text-emerald-300">
+        <div className="mt-3 flex items-center gap-2 rounded border border-forge-green/40 bg-[color-mix(in_srgb,var(--ok)_10%,transparent)] px-2 py-2 text-forge-green">
           <CheckCircle2 size={14} aria-hidden />
           <span>Plano executado. Próximas mensagens viram edições no modelo.</span>
         </div>
       )}
 
       {showFailedBlock && (
-        <div className="mt-3 rounded border border-forge-red/50 bg-[#1a0f0f] p-2 text-forge-red">
+        <div className="mt-3 rounded border border-forge-red/50 bg-[color-mix(in_srgb,var(--err)_10%,transparent)] p-2 text-forge-red">
           <div className="flex items-center gap-2 font-medium">
             <XCircle size={14} aria-hidden />
             <span>Execução falhou em uma ou mais etapas.</span>

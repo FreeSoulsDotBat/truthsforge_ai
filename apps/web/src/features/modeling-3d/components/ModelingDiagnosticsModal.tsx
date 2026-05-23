@@ -95,11 +95,11 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, traceId, onC
       }}
       onKeyDown={handleKeyDown}
     >
-      <div className="flex max-h-[88vh] w-full max-w-3xl flex-col rounded-lg border border-forge-line bg-[#111312] shadow-xl">
+      <div className="flex max-h-[88vh] w-full max-w-3xl flex-col rounded-lg border border-forge-line bg-forge-elev shadow-[0_16px_36px_-20px_var(--amethyst-glow)]">
         <div className="flex items-start justify-between gap-3 border-b border-forge-line p-4">
           <div>
-            <p className="text-xs uppercase text-forge-muted">Diagnóstico MCP</p>
-            <h3 id={titleId} className="text-lg font-semibold">
+            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-forge-amethyst">Diagnóstico MCP</p>
+            <h3 id={titleId} className="mt-1 font-display text-lg uppercase tracking-[0.015em] text-forge-text">
               Modelagem 3D
             </h3>
             <p className="text-sm text-forge-muted">Adapters, tool calls, printability e artifacts do chat 3D.</p>
@@ -137,7 +137,7 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, traceId, onC
                         }
                         className={
                           active
-                            ? "rounded-full border border-forge-line bg-[#171716] px-2 py-0.5 uppercase tracking-wide text-forge-text"
+                            ? "rounded-full border border-forge-line bg-forge-panel px-2 py-0.5 uppercase tracking-wide text-forge-text"
                             : "rounded-full border border-forge-line/30 px-2 py-0.5 uppercase tracking-wide text-forge-muted/60"
                         }
                       >
@@ -151,7 +151,7 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, traceId, onC
                 <p className="text-[10px] text-forge-muted">
                   <span className="font-mono">trace_id:</span>{" "}
                   <code
-                    className="cursor-pointer rounded bg-[#171716] px-1 py-0.5 hover:text-forge-text"
+                    className="cursor-pointer rounded bg-forge-panel px-1 py-0.5 hover:text-forge-text"
                     onClick={() => navigator.clipboard?.writeText(traceId).catch(() => undefined)}
                     title="Copiar trace_id (correlaciona com docker logs do backend)"
                   >
@@ -171,10 +171,10 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, traceId, onC
                 traceQuery.data
                   .filter((evt) => traceLevelFilter.has(evt.level))
                   .map((evt) => (
-                    <details key={evt.id} className="rounded-md border border-forge-line bg-[#171716] p-2 text-xs">
+                    <details key={evt.id} className="rounded-md border border-forge-line bg-forge-panel p-2 text-xs">
                       <summary className="flex flex-wrap items-center justify-between gap-2 cursor-pointer">
                         <span className="flex items-center gap-2">
-                          <span className="rounded bg-[#0e0f0e] px-1.5 py-0.5 text-[10px] uppercase text-forge-muted">
+                          <span className="rounded bg-forge-ink-deep px-1.5 py-0.5 text-[10px] uppercase text-forge-muted">
                             {traceSourceLabel(evt.source)}
                           </span>
                           <span className={`font-medium ${traceLevelClass(evt.level)}`}>{evt.event_type}</span>
@@ -186,7 +186,7 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, traceId, onC
                       </summary>
                       {evt.message && <p className="mt-2 text-forge-muted">{evt.message}</p>}
                       {evt.payload && Object.keys(evt.payload).length > 0 && (
-                        <pre className="mt-2 max-h-48 overflow-auto rounded bg-[#0e0f0e] p-2 text-[10px] text-forge-muted">
+                        <pre className="mt-2 max-h-48 overflow-auto rounded bg-forge-ink-deep p-2 text-[10px] text-forge-muted">
                           {JSON.stringify(evt.payload, null, 2)}
                         </pre>
                       )}
@@ -201,7 +201,10 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, traceId, onC
               <section className="grid gap-2">
                 <h4 className="text-sm font-semibold">Adapters</h4>
                 {diagnostics.capabilities.adapters.map((adapter) => (
-                  <div key={adapter.software} className="rounded-md border border-forge-line bg-[#171716] p-3 text-sm">
+                  <div
+                    key={adapter.software}
+                    className="rounded-md border border-forge-line bg-forge-panel p-3 text-sm"
+                  >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-medium">{adapter.software}</span>
                       <span className="rounded-full border border-forge-line px-2 py-0.5 text-xs text-forge-muted">
@@ -217,7 +220,7 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, traceId, onC
               <section className="grid gap-2">
                 <h4 className="text-sm font-semibold">Tool calls recentes</h4>
                 {diagnostics.toolCalls.slice(0, 8).map((call) => (
-                  <div key={call.id} className="rounded-md border border-forge-line bg-[#171716] p-3 text-xs">
+                  <div key={call.id} className="rounded-md border border-forge-line bg-forge-panel p-3 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-medium text-sm">{call.tool_name}</span>
                       <span className={call.status === "ok" ? "text-forge-green" : "text-forge-red"}>
@@ -237,7 +240,7 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, traceId, onC
               <section className="grid gap-2">
                 <h4 className="text-sm font-semibold">Printability</h4>
                 {diagnostics.printabilityReports.slice(0, 4).map((report) => (
-                  <div key={report.id} className="rounded-md border border-forge-line bg-[#171716] p-3 text-xs">
+                  <div key={report.id} className="rounded-md border border-forge-line bg-forge-panel p-3 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span>{report.summary}</span>
                       <span className={riskSeverityClass(report.risk_score)}>
@@ -253,7 +256,7 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, traceId, onC
               <section className="grid gap-2">
                 <h4 className="text-sm font-semibold">Versões/exportações</h4>
                 {diagnostics.modelVersions.slice(0, 6).map((version) => (
-                  <div key={version.id} className="rounded-md border border-forge-line bg-[#171716] p-3 text-xs">
+                  <div key={version.id} className="rounded-md border border-forge-line bg-forge-panel p-3 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span>{version.label}</span>
                       <span>{version.export_format ?? version.software}</span>

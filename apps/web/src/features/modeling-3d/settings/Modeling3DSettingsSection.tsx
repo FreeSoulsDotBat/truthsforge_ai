@@ -7,9 +7,9 @@ type Modeling3DSettingsSectionProps = {
 
 export function Modeling3DSettingsSection({ software, onSoftwareChange }: Modeling3DSettingsSectionProps) {
   return (
-    <div className="rounded-md border border-forge-line bg-[#171716] p-3">
+    <div className="rounded-md border border-forge-line bg-forge-panel p-3">
       <div className="space-y-1">
-        <p className="text-xs uppercase text-forge-muted">Modelagem 3D</p>
+        <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-forge-amethyst">Modelagem 3D</p>
         <h4 className="text-sm font-semibold">Configuração do MCP 3D</h4>
         <p className="text-xs text-forge-muted">
           O chat é a experiência principal de modelagem. Esta seção define o adapter preferido para próximos chats 3D.
@@ -21,14 +21,14 @@ export function Modeling3DSettingsSection({ software, onSoftwareChange }: Modeli
           <select
             value={software}
             onChange={(event) => onSoftwareChange(event.target.value as ModelingSoftware)}
-            className="h-9 rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+            className="h-9 rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
           >
             <option value="auto">Auto</option>
             <option value="blender">Blender</option>
             <option value="fusion">Fusion 360</option>
           </select>
         </label>
-        <p className="rounded-md border border-forge-line bg-[#0e0f0e] px-3 py-2 text-xs text-forge-muted">
+        <p className="rounded-md border border-forge-line bg-forge-ink-deep px-3 py-2 text-xs text-forge-muted">
           Execução: fluida allowlistada. Adições e alterações normais podem autoexecutar; deleções, ações destrutivas e
           high-risk exigem aprovação humana.
         </p>

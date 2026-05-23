@@ -69,10 +69,10 @@ export function EnableModeling3DDialog({
       }}
       onKeyDown={handleKeyDown}
     >
-      <div className="w-full max-w-md rounded-lg border border-forge-line bg-[#111312] p-4 shadow-xl">
+      <div className="w-full max-w-md rounded-lg border border-forge-line bg-forge-panel p-4 shadow-[0_16px_36px_-20px_var(--amethyst-glow)]">
         <div className="space-y-1">
-          <p className="text-xs uppercase text-forge-muted">MCP 3D</p>
-          <h3 id={titleId} className="text-lg font-semibold">
+          <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-forge-amethyst">MCP 3D</p>
+          <h3 id={titleId} className="font-display text-lg uppercase tracking-[0.015em] text-forge-text">
             Ativar modelagem 3D no chat
           </h3>
           <p className="text-sm text-forge-muted">
@@ -86,14 +86,14 @@ export function EnableModeling3DDialog({
             <select
               value={software}
               onChange={(event) => onSoftwareChange(event.target.value as ModelingSoftware)}
-              className="h-9 rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+              className="h-9 rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
             >
               <option value="auto">Auto</option>
               <option value="blender">Blender</option>
               <option value="fusion">Fusion 360</option>
             </select>
           </label>
-          <p className="rounded-md border border-forge-line bg-[#0e0f0e] px-3 py-2 text-xs text-forge-muted">
+          <p className="rounded-md border border-forge-line bg-forge-ink-deep px-3 py-2 text-xs text-forge-muted">
             Modo: fluido allowlistado. O plano estruturado fica auditável no chat, sem etapa separada de aprovação para
             operações seguras.
           </p>
@@ -110,7 +110,7 @@ export function EnableModeling3DDialog({
           <button
             ref={confirmRef}
             type="button"
-            className="rounded-md border border-forge-amber/60 bg-[#24211b] px-3 py-2 text-sm text-forge-text"
+            className="rounded-md border border-[color-mix(in_srgb,var(--amethyst)_50%,transparent)] bg-[color-mix(in_srgb,var(--amethyst)_16%,transparent)] px-3 py-2 text-sm font-medium text-forge-amethyst transition hover:bg-[color-mix(in_srgb,var(--amethyst)_24%,transparent)]"
             onClick={onConfirm}
           >
             Ativar no próximo chat
