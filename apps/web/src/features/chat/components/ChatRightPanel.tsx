@@ -21,6 +21,7 @@ import { EmptyPanel, InfoRow, PanelTitle } from "../../../components/app-panels"
 import { Badge } from "../../../components/ui/Badge";
 import { Button } from "../../../components/ui/Button";
 import { Mono } from "../../../components/ui/Mono";
+import { Pulse } from "../../../components/ui/StatusDot";
 import { api } from "../../../lib/api";
 import { cn } from "../../../lib/utils";
 import type {
@@ -111,12 +112,42 @@ export function ChatRightPanel({
   onModeling3dSoftwareChange,
   onOpenAgentDashboard
 }: ChatRightPanelProps) {
-  const panels: { id: Panel; label: string; title: string; icon: ReactNode }[] = [
-    { id: "contexto", label: "painel · contexto", title: "O que JUDITE está olhando", icon: <Activity size={16} /> },
-    { id: "infra", label: "painel · infra", title: "Infraestrutura local", icon: <Server size={16} /> },
-    { id: "auditoria", label: "painel · auditoria", title: "Auditoria de execução", icon: <ShieldCheck size={16} /> },
-    { id: "prompts", label: "painel · prompts", title: "Biblioteca de prompts", icon: <Library size={16} /> },
-    { id: "config", label: "painel · configurações", title: "Configurações", icon: <Settings2 size={16} /> }
+  const panels: { id: Panel; label: string; title: string; desc: string; icon: ReactNode }[] = [
+    {
+      id: "contexto",
+      label: "painel · contexto",
+      title: "O que JUDITE está olhando",
+      desc: "Tudo que entra no prompt agora — contexto, custos, base e RAG.",
+      icon: <Activity size={16} />
+    },
+    {
+      id: "infra",
+      label: "painel · infra",
+      title: "Infraestrutura local",
+      desc: "Serviços locais e credenciais do ambiente.",
+      icon: <Server size={16} />
+    },
+    {
+      id: "auditoria",
+      label: "painel · auditoria",
+      title: "Auditoria de execução",
+      desc: "Eventos recentes com modelo, tokens e custo.",
+      icon: <ShieldCheck size={16} />
+    },
+    {
+      id: "prompts",
+      label: "painel · prompts",
+      title: "Biblioteca de prompts",
+      desc: "Clique em um prompt para inseri-lo no rascunho.",
+      icon: <Library size={16} />
+    },
+    {
+      id: "config",
+      label: "painel · configurações",
+      title: "Configurações",
+      desc: "Provedores, chaves e preferências de modelagem.",
+      icon: <Settings2 size={16} />
+    }
   ];
   const activeMeta = panels.find((panel) => panel.id === activePanel) ?? panels[0];
   const [asideOpen, setAsideOpen] = useState(true);
@@ -125,18 +156,29 @@ export function ChatRightPanel({
     <>
       {asideOpen && (
         <aside className="hidden w-[360px] shrink-0 flex-col border-l border-forge-line-soft bg-forge-ink-deep lg:flex">
-          <div className="border-b border-forge-line-soft px-4 py-4">
-            <Mono size={10} className="uppercase tracking-[0.14em] text-forge-faint">
-              {activeMeta.label}
-            </Mono>
-            <h2 className="mt-1.5 font-display text-[19px] uppercase leading-tight tracking-[0.015em] text-forge-text">
-              {activeMeta.title}
-            </h2>
+          <div className="flex items-start justify-between gap-2 border-b border-forge-line-soft px-4 py-4">
+            <div className="min-w-0">
+              <Mono size={10} className="uppercase tracking-[0.14em] text-forge-faint">
+                {activeMeta.label}
+              </Mono>
+              <h2 className="mt-1.5 font-display text-[19px] uppercase leading-tight tracking-[0.015em] text-forge-text">
+                {activeMeta.title}
+              </h2>
+              <p className="mt-1.5 text-xs leading-relaxed text-forge-muted">{activeMeta.desc}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAsideOpen(false)}
+              aria-label="Fechar painel"
+              title="Fechar painel"
+              className="-mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-forge-faint transition hover:bg-forge-hover hover:text-forge-text"
+            >
+              <X size={15} />
+            </button>
           </div>
           <div className="scrollbar-slim flex-1 space-y-4 overflow-y-auto px-4 py-4">
             {activePanel === "contexto" && (
               <>
-                <ChatExecutionModes reasoningSummaryUnavailable={reasoningSummaryUnavailable} />
                 <PanelTitle icon={<Activity size={18} />} title="Contexto" />
                 <InfoRow label="API" value={api.baseUrl} />
                 <InfoRow label="Vetores" value={status?.vector_store ?? "qdrant"} />
@@ -200,6 +242,7 @@ export function ChatRightPanel({
                 {documents.slice(0, 4).map((document) => (
                   <InfoRow key={document.id} label={document.title} value={document.index_status} />
                 ))}
+                <ChatExecutionModes reasoningSummaryUnavailable={reasoningSummaryUnavailable} />
               </>
             )}
 
@@ -351,16 +394,26 @@ export function ChatRightPanel({
                 }
               }}
               className={cn(
-                "flex h-9 w-9 items-center justify-center rounded-[10px] border transition-colors",
+                "relative flex h-9 w-9 items-center justify-center rounded-[10px] border transition-colors",
                 open
                   ? "border-[color-mix(in_srgb,var(--ember)_25%,transparent)] bg-[color-mix(in_srgb,var(--ember)_12%,transparent)] text-forge-amber"
                   : "border-transparent text-forge-muted hover:bg-forge-hover hover:text-forge-text"
               )}
             >
               {panel.icon}
+              {open && (
+                <span
+                  aria-hidden
+                  className="absolute -left-1.5 top-1/2 h-3.5 w-[3px] -translate-y-1/2 rounded-sm bg-forge-amber"
+                />
+              )}
             </button>
           );
         })}
+        <div className="flex-1" />
+        <span title={status ? "online" : "offline"} className="inline-flex h-8 w-8 items-center justify-center">
+          <Pulse color={status ? "var(--ok)" : "var(--faint)"} size={5} />
+        </span>
       </nav>
     </>
   );
