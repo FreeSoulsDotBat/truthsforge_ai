@@ -2237,6 +2237,8 @@ function App() {
         isCreatingNewChat={isCreatingNewChat}
         activeView={activeView}
         onSelectView={handleSelectView}
+        sessionsCount={sessions.length}
+        promptsCount={prompts.length}
         projects={nonGeneralProjects}
         folders={projectFolders}
         explorerSessions={projectExplorerSessions}
@@ -2260,6 +2262,8 @@ function App() {
         onDeleteSession={(session) => void deleteChatSession(session)}
         online={loadState === "ready"}
         agentModelLabel={activeAgentModelLabel}
+        costUsage={costUsage}
+        onOpenSettings={() => handleSelectView("agents")}
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
