@@ -63,32 +63,6 @@ export function DuplicateFileModal({
   );
 }
 
-export function DashboardNavButton({
-  active,
-  icon,
-  label,
-  onClick
-}: {
-  active: boolean;
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={[
-        "flex h-9 items-center justify-start gap-2 rounded px-3 text-sm transition",
-        active ? "bg-[#24211b] text-forge-text" : "text-forge-muted hover:bg-[#181b1e] hover:text-forge-text"
-      ].join(" ")}
-      onClick={onClick}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
-  );
-}
-
 export function ContextChip({ label, value }: { label: string; value: string }) {
   return (
     <div className="inline-flex min-h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs">
@@ -187,15 +161,6 @@ export function InfoRow({ label, value }: { label: string; value: string }) {
         {label}
       </span>
       <span className="min-w-0 truncate text-right">{value}</span>
-    </div>
-  );
-}
-
-export function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-md border border-forge-line bg-[#171716] p-2">
-      <p className="text-forge-muted">{label}</p>
-      <p className="text-lg font-semibold">{value}</p>
     </div>
   );
 }

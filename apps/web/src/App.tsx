@@ -2237,8 +2237,6 @@ function App() {
         isCreatingNewChat={isCreatingNewChat}
         activeView={activeView}
         onSelectView={handleSelectView}
-        sessionsCount={sessions.length}
-        promptsCount={prompts.length}
         projects={nonGeneralProjects}
         folders={projectFolders}
         explorerSessions={projectExplorerSessions}
@@ -2260,6 +2258,8 @@ function App() {
         onDeleteFolder={(folderId) => void deleteFolderFromExplorer(folderId)}
         onMoveSession={(sessionId, projectId, folderId) => void moveSessionInExplorer(sessionId, projectId, folderId)}
         onDeleteSession={(session) => void deleteChatSession(session)}
+        online={loadState === "ready"}
+        agentModelLabel={activeAgentModelLabel}
       />
 
       <main className="flex min-w-0 flex-1 flex-col">

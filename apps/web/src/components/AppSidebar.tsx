@@ -1,13 +1,18 @@
-import { Database, FileText, FolderTree, LoaderCircle, MessageSquare, Sparkles, Users, X } from "lucide-react";
+import { Database, FileText, FolderTree, LoaderCircle, MessageSquare, Plus, Users, X } from "lucide-react";
+import type { ReactNode } from "react";
 
 import type { DashboardView } from "../app/ui-state";
 import { isModeling3DChat } from "../features/modeling-3d/chat-domain";
 import { ChatModeling3DBadge } from "../features/modeling-3d/components";
 import { HistorySection } from "../features/sidebar/history-section";
 import { ProjectExplorerSection } from "../features/sidebar/project-explorer-section";
+import { cn } from "../lib/utils";
 import type { ChatSession, ProjectFolder, ProjectRecord } from "../types/api";
-import { DashboardNavButton, Metric } from "./app-panels";
+import { Avatar } from "./ui/Avatar";
+import { BrandSymbol } from "./ui/BrandSymbol";
 import { Button } from "./ui/Button";
+import { Mono } from "./ui/Mono";
+import { Pulse, StatusDot } from "./ui/StatusDot";
 
 export interface AppSidebarProps {
   mobileMenuOpen: boolean;
@@ -16,8 +21,6 @@ export interface AppSidebarProps {
   isCreatingNewChat: boolean;
   activeView: DashboardView;
   onSelectView: (view: DashboardView) => void;
-  sessionsCount: number;
-  promptsCount: number;
   projects: ProjectRecord[];
   folders: ProjectFolder[];
   explorerSessions: ChatSession[];
@@ -37,12 +40,48 @@ export interface AppSidebarProps {
   onDeleteFolder: (folderId: string) => void;
   onMoveSession: (sessionId: string, projectId: string, folderId: string | null) => void;
   onDeleteSession: (session: ChatSession) => void;
+  /** Estado de conexão da plataforma (rodapé JUDITE). */
+  online: boolean;
+  /** Modelo ativo do agente (rodapé JUDITE). */
+  agentModelLabel: string;
+}
+
+/** Item de navegação principal: botão acessível com o visual do NavItem v4. */
+function NavButton({
+  active,
+  icon,
+  label,
+  onClick
+}: {
+  active: boolean;
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "relative flex h-[34px] w-full items-center gap-2.5 rounded-sm px-2.5 text-left text-[13px] transition-colors",
+        active
+          ? "bg-forge-panel font-medium text-forge-text"
+          : "text-forge-muted hover:bg-forge-hover hover:text-forge-text"
+      )}
+    >
+      {active && <span className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-forge-amber" />}
+      <span className={active ? "text-forge-amber" : "text-forge-muted"}>{icon}</span>
+      <span className="flex-1">{label}</span>
+    </button>
+  );
 }
 
 /**
- * Left navigation sidebar (header, new-chat, dashboard nav, metrics, project
- * explorer + history). Extracted from App.tsx (architecture-map finding
- * "monólitos de borda"). Presentational: App composes the callbacks.
+ * Left navigation sidebar (brandmark, new-chat, primary nav, project explorer +
+ * history, JUDITE footer). Re-skin da identidade visual v4 "Hearth": 248px,
+ * fundo `--bg-ink`, marca da forja no topo e status real da JUDITE no rodapé.
+ * Apresentacional: App compõe os callbacks.
  */
 export function AppSidebar({
   mobileMenuOpen,
@@ -51,8 +90,6 @@ export function AppSidebar({
   isCreatingNewChat,
   activeView,
   onSelectView,
-  sessionsCount,
-  promptsCount,
   projects,
   folders,
   explorerSessions,
@@ -71,80 +108,98 @@ export function AppSidebar({
   onCreateFolder,
   onDeleteFolder,
   onMoveSession,
-  onDeleteSession
+  onDeleteSession,
+  online,
+  agentModelLabel
 }: AppSidebarProps) {
   const sessionBadge = (session: ChatSession) => (isModeling3DChat(session) ? <ChatModeling3DBadge compact /> : null);
 
   return (
     <aside
-      className={[
-        "fixed inset-y-0 left-0 z-30 w-[286px] border-r border-forge-line bg-[#101111] transition-transform md:static md:translate-x-0",
+      className={cn(
+        "fixed inset-y-0 left-0 z-30 flex w-[248px] flex-col border-r border-forge-line-soft bg-forge-ink-deep transition-transform md:static md:translate-x-0",
         mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
-      ].join(" ")}
+      )}
     >
-      <div className="flex h-16 items-center justify-between border-b border-forge-line px-4">
-        <div>
-          <p className="text-sm text-forge-muted">Truth's Forge AI</p>
-          <h1 className="flex items-center gap-2 text-lg font-semibold">
-            <Sparkles size={18} className="text-forge-amber" />
-            JUDITE
-          </h1>
+      <div className="flex items-center gap-3 px-4 pb-4 pt-5">
+        <BrandSymbol size={32} />
+        <div className="leading-[0.9]">
+          <div className="font-display text-[15px] font-normal uppercase tracking-[0.04em] text-forge-text">
+            Truth’s
+          </div>
+          <div className="mt-0.5 font-display text-[15px] font-normal uppercase tracking-[0.04em] text-forge-amber">
+            Forge
+          </div>
         </div>
-        <Button className="h-9 w-9 px-0 md:hidden" onClick={onCloseMobile} aria-label="Fechar menu" title="Fechar menu">
-          <X size={18} />
+        <Button
+          variant="icon"
+          className="ml-auto h-8 w-8 md:hidden"
+          onClick={onCloseMobile}
+          aria-label="Fechar menu"
+          title="Fechar menu"
+        >
+          <X size={16} />
         </Button>
       </div>
 
-      <div className="scrollbar-slim h-[calc(100vh-64px)] space-y-4 overflow-y-auto p-4 pb-8">
-        <Button
-          className="w-full justify-start border-forge-amber/50 bg-[#171717] text-forge-text hover:border-forge-amber hover:bg-[#211d16]"
+      <div className="space-y-1 px-3">
+        <button
+          type="button"
           onClick={onNewChat}
           disabled={isCreatingNewChat}
           aria-label="Novo chat"
           title="Novo chat"
+          className="flex h-[38px] w-full items-center gap-2.5 rounded-[10px] px-3 text-left text-[13px] font-medium text-forge-text transition disabled:opacity-60"
+          style={{
+            background: "color-mix(in srgb, var(--ember) 14%, var(--bg-card))",
+            border: "1px solid color-mix(in srgb, var(--ember) 25%, transparent)",
+            boxShadow:
+              "inset 0 1px 0 color-mix(in srgb, var(--ember) 10%, transparent), 0 8px 24px -16px var(--ember-glow)"
+          }}
         >
-          {isCreatingNewChat ? <LoaderCircle size={15} className="animate-spin" /> : <MessageSquare size={15} />}
-          {isCreatingNewChat ? "Criando..." : "Novo chat"}
-        </Button>
+          {isCreatingNewChat ? (
+            <LoaderCircle size={14} className="animate-spin text-forge-amber" />
+          ) : (
+            <Plus size={14} className="text-forge-amber" />
+          )}
+          <span className="flex-1">{isCreatingNewChat ? "Criando..." : "Novo chat"}</span>
+        </button>
 
-        <div className="flex flex-col gap-1 rounded-md border border-forge-line bg-[#0e0f0e] p-1">
-          <DashboardNavButton
+        <nav className="flex flex-col gap-0.5 pt-1">
+          <NavButton
             active={activeView === "chat"}
             icon={<MessageSquare size={15} />}
             label="Chat"
             onClick={() => onSelectView("chat")}
           />
-          <DashboardNavButton
+          <NavButton
             active={activeView === "agents"}
             icon={<Users size={15} />}
             label="Agentes"
             onClick={() => onSelectView("agents")}
           />
-          <DashboardNavButton
+          <NavButton
             active={activeView === "projects"}
             icon={<FolderTree size={15} />}
             label="Projetos"
             onClick={() => onSelectView("projects")}
           />
-          <DashboardNavButton
+          <NavButton
             active={activeView === "knowledge"}
             icon={<Database size={15} />}
             label="Bases"
             onClick={() => onSelectView("knowledge")}
           />
-          <DashboardNavButton
+          <NavButton
             active={activeView === "files"}
             icon={<FileText size={15} />}
             label="Arquivos"
             onClick={() => onSelectView("files")}
           />
-        </div>
+        </nav>
+      </div>
 
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <Metric label="Chats" value={sessionsCount} />
-          <Metric label="Prompts" value={promptsCount} />
-        </div>
-
+      <div className="scrollbar-slim mt-3 flex-1 space-y-4 overflow-y-auto px-3 pb-6">
         <ProjectExplorerSection
           projects={projects}
           folders={folders}
@@ -173,6 +228,21 @@ export function AppSidebar({
           onDeleteSession={onDeleteSession}
           renderSessionBadge={sessionBadge}
         />
+      </div>
+
+      <div className="border-t border-forge-line-soft px-3.5 py-3">
+        <div className="flex items-center gap-2.5">
+          <Avatar kind="judite" size={24} />
+          <div className="min-w-0 flex-1 leading-tight">
+            <div className="text-[12px] text-forge-text">JUDITE</div>
+            <div className="flex items-center gap-1.5">
+              {online ? <Pulse color="var(--ok)" size={5} /> : <StatusDot color="var(--faint)" size={5} />}
+              <Mono size={9.5} className="min-w-0 truncate">
+                {online ? `online · ${agentModelLabel}` : "offline"}
+              </Mono>
+            </div>
+          </div>
+        </div>
       </div>
     </aside>
   );

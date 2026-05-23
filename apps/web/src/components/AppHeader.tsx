@@ -46,7 +46,7 @@ export function AppHeader({
   const title = activeView === "chat" ? chatTitle : VIEW_TITLES[activeView];
   const subtitle = activeView === "chat" ? chatSubtitle : VIEW_SUBTITLES[activeView];
   return (
-    <header className="flex h-16 items-center justify-between border-b border-forge-line bg-[#0c0d0f]/95 px-4">
+    <header className="flex h-16 items-center justify-between border-b border-forge-line bg-forge-ink/95 px-4">
       <div className="flex min-w-0 items-center gap-3">
         <Button
           className="h-9 w-9 px-0 md:hidden"
