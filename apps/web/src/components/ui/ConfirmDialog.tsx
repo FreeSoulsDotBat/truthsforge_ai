@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef } from "react";
 
 import { cn } from "../../lib/utils";
 import { Button } from "./Button";
+import { ModalShell } from "./ModalShell";
 
 export type ConfirmDialogTone = "default" | "danger";
 
@@ -109,38 +110,41 @@ export function ConfirmDialog({
       }}
       onKeyDown={handleKeyDown}
     >
-      <div
-        className={cn(
-          "w-full max-w-md rounded-md border bg-[#141615] p-5 shadow-xl",
-          tone === "danger" ? "border-forge-red/60" : "border-forge-line"
-        )}
+      <ModalShell
+        className="max-w-md"
+        accent={tone === "danger" ? "danger" : "ember"}
+        eyebrow={tone === "danger" ? "ação destrutiva" : "confirmação"}
+        title={title}
+        titleId={titleId}
+        onClose={onCancel}
+        footer={
+          <>
+            <Button ref={cancelButtonRef} type="button" disabled={busy} onClick={onCancel} className="h-9">
+              {cancelLabel}
+            </Button>
+            <Button
+              ref={confirmButtonRef}
+              type="button"
+              disabled={busy}
+              onClick={onConfirm}
+              className={cn(
+                "h-9",
+                tone === "danger"
+                  ? "border-forge-red/70 bg-[color-mix(in_srgb,var(--err)_16%,transparent)] text-forge-red"
+                  : "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_14%,transparent)] text-forge-amber"
+              )}
+            >
+              {confirmLabel}
+            </Button>
+          </>
+        }
       >
-        <h2 id={titleId} className="text-base font-semibold text-forge-text">
-          {title}
-        </h2>
         {(description || children) && (
-          <div id={descriptionId} className="mt-2 text-sm leading-6 text-forge-muted">
+          <div id={descriptionId} className="text-sm leading-6 text-forge-muted">
             {children ?? description}
           </div>
         )}
-        <div className="mt-5 flex justify-end gap-2">
-          <Button ref={cancelButtonRef} type="button" disabled={busy} onClick={onCancel} className="h-9">
-            {cancelLabel}
-          </Button>
-          <Button
-            ref={confirmButtonRef}
-            type="button"
-            disabled={busy}
-            onClick={onConfirm}
-            className={cn(
-              "h-9",
-              tone === "danger" ? "border-forge-red/70 bg-[#2a1718]" : "border-forge-amber/60 bg-[#24211b]"
-            )}
-          >
-            {confirmLabel}
-          </Button>
-        </div>
-      </div>
+      </ModalShell>
     </div>
   );
 }

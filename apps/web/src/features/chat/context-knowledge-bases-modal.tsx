@@ -70,11 +70,21 @@ export function ContextKnowledgeBasesModal({
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 px-4">
-      <div className="flex max-h-[86vh] w-full max-w-3xl flex-col rounded-md border border-forge-line bg-[#141615] shadow-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-forge-line px-5 py-4">
+      <div
+        className="relative flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-forge-line bg-forge-elev"
+        style={{ boxShadow: "0 24px 80px -24px var(--amethyst-glow)" }}
+      >
+        <span
+          aria-hidden
+          className="absolute bottom-0 left-0 top-0 z-10 w-[3px]"
+          style={{ background: "var(--amethyst)", boxShadow: "0 0 12px var(--amethyst-glow)" }}
+        />
+        <div className="flex items-start justify-between gap-4 border-b border-forge-line-soft px-5 py-4">
           <div>
-            <p className="text-xs uppercase text-forge-muted">Contexto do chat</p>
-            <h3 className="text-xl font-semibold">Bases de conhecimento atreladas</h3>
+            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-forge-amethyst">Contexto do chat</p>
+            <h3 className="mt-1.5 font-display text-[22px] uppercase tracking-[0.01em] text-forge-text">
+              Bases de conhecimento atreladas
+            </h3>
             <p className="mt-1 text-sm text-forge-muted">
               Projeto ativo: {selectedProjectNames || "Geral"}. Esta seleção é opcional.
             </p>
@@ -85,7 +95,7 @@ export function ContextKnowledgeBasesModal({
         </div>
 
         <div className="space-y-3 px-5 py-4">
-          <div className="flex items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-3">
+          <div className="flex items-center gap-2 rounded-md border border-forge-line bg-forge-ink-deep px-3">
             <Search size={15} className="text-forge-muted" />
             <input
               value={query}
@@ -110,8 +120,8 @@ export function ContextKnowledgeBasesModal({
                 className={[
                   "flex w-full items-start gap-3 rounded-md border p-3 text-left transition",
                   active
-                    ? "border-forge-amber/70 bg-[#24211b]"
-                    : "border-forge-line bg-[#0e0f0e] hover:border-forge-amber/40"
+                    ? "border-[color-mix(in_srgb,var(--amethyst)_30%,transparent)] bg-[color-mix(in_srgb,var(--amethyst)_8%,transparent)]"
+                    : "border-forge-line bg-forge-ink-deep hover:border-forge-amber/40"
                 ].join(" ")}
                 onClick={() => toggleBase(knowledgeBase.id)}
               >
@@ -142,7 +152,7 @@ export function ContextKnowledgeBasesModal({
             );
           })}
           {!filteredBases.length && (
-            <div className="rounded-md border border-forge-line bg-[#0e0f0e] p-4 text-sm text-forge-muted">
+            <div className="rounded-md border border-forge-line bg-forge-ink-deep p-4 text-sm text-forge-muted">
               <span className="inline-flex items-center gap-2">
                 {query ? <Database size={16} /> : <LoaderCircle size={16} className="animate-spin" />}
                 {query ? "Nenhuma base encontrada." : "Carregando bases..."}
@@ -151,7 +161,7 @@ export function ContextKnowledgeBasesModal({
           )}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-forge-line px-5 py-4">
+        <div className="flex justify-end gap-2 border-t border-forge-line-soft px-5 py-4">
           {fileIndexingStatus && fileIndexingStatus.backlog_files > 0 && (
             <div className="mr-auto flex items-center gap-2 rounded-md border border-forge-amber/50 bg-forge-amber/10 px-3 py-2 text-xs text-forge-amber">
               <LoaderCircle size={14} className="animate-spin" />
@@ -162,7 +172,7 @@ export function ContextKnowledgeBasesModal({
             Cancelar
           </Button>
           <Button
-            className="h-9 border-forge-amber/70 bg-[#24211b]"
+            className="h-9 border-[color-mix(in_srgb,var(--amethyst)_50%,transparent)] bg-[color-mix(in_srgb,var(--amethyst)_16%,transparent)] text-forge-amethyst"
             onClick={() => onSave(selectedIds.slice(0, MAX_SELECTED_BASES))}
           >
             Editar bases de conhecimento atreladas

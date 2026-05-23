@@ -97,15 +97,24 @@ export function ChatTitleRequiredDialog({
       onKeyDown={handleKeyDown}
     >
       <form
-        className="w-full max-w-md rounded-md border border-forge-line bg-[#141615] p-5 shadow-xl"
+        className="relative w-full max-w-md overflow-hidden rounded-lg border border-forge-line bg-forge-elev p-5"
+        style={{ boxShadow: "0 24px 80px -24px var(--ember-glow)" }}
         onSubmit={(event) => {
           event.preventDefault();
           handleConfirm();
         }}
       >
+        <span
+          aria-hidden
+          className="absolute bottom-0 left-0 top-0 w-[3px]"
+          style={{ background: "var(--ember)", boxShadow: "0 0 12px var(--ember-glow)" }}
+        />
         <div className="space-y-2">
-          <p className="text-xs uppercase text-forge-muted">Novo chat</p>
-          <h2 id={titleId} className="text-base font-semibold text-forge-text">
+          <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-forge-amber">Novo chat</p>
+          <h2
+            id={titleId}
+            className="font-display text-[22px] uppercase leading-tight tracking-[0.01em] text-forge-text"
+          >
             Dê um título antes de começar
           </h2>
           <p id={descriptionId} className="text-sm leading-6 text-forge-muted">
@@ -129,7 +138,7 @@ export function ChatTitleRequiredDialog({
               event.preventDefault();
               handleConfirm();
             }}
-            className="h-10 rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text outline-none transition placeholder:text-forge-muted focus:border-forge-amber/70"
+            className="h-10 rounded-md border border-forge-line-soft bg-forge-ink-deep px-3 text-sm text-forge-text outline-none transition placeholder:text-forge-muted focus:border-forge-amber/70"
             placeholder="Ex.: Suporte de mesa para headphone"
           />
         </label>
@@ -144,7 +153,7 @@ export function ChatTitleRequiredDialog({
             ref={confirmRef}
             type="submit"
             disabled={confirmDisabled}
-            className="h-9 border-forge-amber/60 bg-[#24211b]"
+            className="h-9 border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_14%,transparent)] text-forge-amber"
           >
             <Check size={15} />
             Confirmar
