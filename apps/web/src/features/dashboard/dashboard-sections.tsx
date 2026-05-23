@@ -1172,7 +1172,7 @@ export function FilesDashboard({
                 Imagens
               </button>
             </div>
-            <label className="flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-[color-mix(in_srgb,var(--ember)_40%,transparent)] bg-[color-mix(in_srgb,var(--ember)_14%,var(--bg-card))] px-3.5 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-forge-amber transition hover:bg-[color-mix(in_srgb,var(--ember)_20%,var(--bg-card))]">
+            <label className="flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-[color-mix(in_srgb,var(--ember)_40%,transparent)] bg-[color-mix(in_srgb,var(--ember)_14%,var(--bg-card))] px-3.5 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-forge-amber shadow-[0_8px_24px_-16px_var(--ember-glow)] transition hover:bg-[color-mix(in_srgb,var(--ember)_20%,var(--bg-card))]">
               <FileText size={14} />
               <span>Enviar arquivos</span>
               <input
@@ -1263,7 +1263,9 @@ export function FilesDashboard({
                       </p>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <Badge>{isIndexed ? "em base" : platformFile.source}</Badge>
+                      <Badge className={isIndexed ? "border-forge-green text-forge-green" : undefined}>
+                        {isIndexed ? "em base" : platformFile.source}
+                      </Badge>
                       <Button
                         className="h-8 text-xs"
                         onClick={() => onCreateKnowledgeBaseFromFile(platformFile.id)}
