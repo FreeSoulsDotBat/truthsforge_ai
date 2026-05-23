@@ -208,7 +208,7 @@ export function AgentDashboard({
               Novo agente
             </Button>
             <Button
-              className="h-9 border-forge-amber/60 bg-[#24211b]"
+              className="h-9 border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
               onClick={onSaveAgent}
               disabled={!formIsValid}
               title={formIsValid ? "Salvar agente" : "Preencha os campos obrigatórios marcados com *"}
@@ -219,7 +219,7 @@ export function AgentDashboard({
         </div>
 
         <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)_280px]">
-          <section className="space-y-2 rounded-md border border-forge-line bg-[#141615] p-3">
+          <section className="space-y-2 rounded-md border border-forge-line bg-forge-panel p-3">
             <PanelTitle icon={<Users size={18} />} title="Biblioteca" />
             <div className="space-y-1">
               {agents.map((agent) => (
@@ -228,8 +228,8 @@ export function AgentDashboard({
                   className={[
                     "w-full rounded-md border px-3 py-2 text-left text-sm transition",
                     agent.id === editingAgentId
-                      ? "border-forge-amber/60 bg-[#24211b]"
-                      : "border-transparent text-forge-muted hover:bg-[#181b1e]"
+                      ? "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
+                      : "border-transparent text-forge-muted hover:bg-forge-hover"
                   ].join(" ")}
                   onClick={() => onSelectAgent(agent)}
                 >
@@ -246,7 +246,7 @@ export function AgentDashboard({
           </section>
 
           <section className="space-y-4">
-            <div className="rounded-md border border-forge-line bg-[#141615] p-4">
+            <div className="rounded-md border border-forge-line bg-forge-panel p-4">
               <PanelTitle icon={<Bot size={18} />} title="Identidade" />
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <Field
@@ -260,7 +260,7 @@ export function AgentDashboard({
                     onChange={(event) => onSetAgentDraft((current) => ({ ...current, name: event.target.value }))}
                     placeholder="JUDITE"
                     required
-                    className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+                    className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
                   />
                 </Field>
                 <Field
@@ -282,7 +282,7 @@ export function AgentDashboard({
                             handoff_triggers: nextRole === "orchestrator" ? [] : current.handoff_triggers
                           }));
                         }}
-                        className="h-10 min-w-0 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-sm text-forge-text"
+                        className="h-10 min-w-0 rounded-md border border-forge-line bg-forge-ink-deep px-2 text-sm text-forge-text"
                       >
                         <option value="orchestrator">orquestrador</option>
                         <option value="specialist">especialista</option>
@@ -303,7 +303,7 @@ export function AgentDashboard({
                             collaboration_mode: event.target.value as Agent["collaboration_mode"]
                           }))
                         }
-                        className="h-10 min-w-0 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-sm text-forge-text"
+                        className="h-10 min-w-0 rounded-md border border-forge-line bg-forge-ink-deep px-2 text-sm text-forge-text"
                       >
                         <option value="standalone">solo</option>
                         <option value="delegate">delegado</option>
@@ -325,7 +325,7 @@ export function AgentDashboard({
                     }
                     rows={3}
                     placeholder="Especialidade operacional do agente"
-                    className="min-h-24 w-full resize-none rounded-md border border-forge-line bg-[#0e0f0e] px-3 py-2 text-sm text-forge-text"
+                    className="min-h-24 w-full resize-none rounded-md border border-forge-line bg-forge-ink-deep px-3 py-2 text-sm text-forge-text"
                   />
                 </Field>
                 {agentDraft.role !== "orchestrator" && (
@@ -344,7 +344,7 @@ export function AgentDashboard({
                       }}
                       rows={3}
                       placeholder="pesquisa, revisão, código"
-                      className="min-h-24 w-full resize-none rounded-md border border-forge-line bg-[#0e0f0e] px-3 py-2 text-sm text-forge-text"
+                      className="min-h-24 w-full resize-none rounded-md border border-forge-line bg-forge-ink-deep px-3 py-2 text-sm text-forge-text"
                     />
                   </Field>
                 )}
@@ -363,7 +363,7 @@ export function AgentDashboard({
                   rows={7}
                   placeholder="Instruções centrais do agente"
                   required
-                  className="min-h-40 w-full resize-y rounded-md border border-forge-line bg-[#0e0f0e] px-3 py-2 text-sm leading-6 text-forge-text"
+                  className="min-h-40 w-full resize-y rounded-md border border-forge-line bg-forge-ink-deep px-3 py-2 text-sm leading-6 text-forge-text"
                 />
               </Field>
               <Field
@@ -380,7 +380,9 @@ export function AgentDashboard({
                         key={project.id}
                         className={[
                           "flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm transition",
-                          checked ? "border-forge-amber/60 bg-[#24211b]" : "border-forge-line bg-[#0e0f0e]"
+                          checked
+                            ? "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
+                            : "border-forge-line bg-forge-ink-deep"
                         ].join(" ")}
                       >
                         <span className="inline-flex items-center gap-2">
@@ -429,7 +431,9 @@ export function AgentDashboard({
                         key={knowledgeBase.id}
                         className={[
                           "flex cursor-pointer items-start justify-between gap-2 rounded-md border px-3 py-2 text-sm transition",
-                          checked ? "border-forge-amber/60 bg-[#24211b]" : "border-forge-line bg-[#0e0f0e]"
+                          checked
+                            ? "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
+                            : "border-forge-line bg-forge-ink-deep"
                         ].join(" ")}
                       >
                         <span className="inline-flex min-w-0 items-start gap-2">
@@ -470,7 +474,7 @@ export function AgentDashboard({
               </label>
             </div>
 
-            <div className="rounded-md border border-forge-line bg-[#141615] p-4">
+            <div className="rounded-md border border-forge-line bg-forge-panel p-4">
               <div className="flex items-center justify-between gap-3 border-b border-forge-line pb-2">
                 <span className="flex items-center gap-2 text-sm font-semibold">
                   <Settings2 size={18} />
@@ -506,7 +510,7 @@ export function AgentDashboard({
                         }
                       }));
                     }}
-                    className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-sm text-forge-text"
+                    className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-2 text-sm text-forge-text"
                   >
                     <option value="openai">OpenAI</option>
                     <option value="anthropic">Anthropic</option>
@@ -540,7 +544,7 @@ export function AgentDashboard({
                           }
                         }));
                       }}
-                      className="h-10 min-w-0 flex-1 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-sm text-forge-text"
+                      className="h-10 min-w-0 flex-1 rounded-md border border-forge-line bg-forge-ink-deep px-2 text-sm text-forge-text"
                     >
                       <option value="">{providerModels.length ? "Selecione" : "Buscar modelos"}</option>
                       {providerModels.map((providerModel) => (
@@ -685,7 +689,7 @@ export function AgentDashboard({
                     value={agentDraft.llm_config.stop_sequences.join(", ")}
                     onChange={(event) => updateLLM("stop_sequences", csvToList(event.target.value))}
                     placeholder="END, STOP"
-                    className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+                    className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
                   />
                 </Field>
               </div>
@@ -710,13 +714,13 @@ export function AgentDashboard({
             </div>
           </section>
 
-          <section className="space-y-3 rounded-md border border-forge-line bg-[#141615] p-3">
+          <section className="space-y-3 rounded-md border border-forge-line bg-forge-panel p-3">
             <PanelTitle icon={<Users size={18} />} title="Multiagente" />
             <Field label="Agente principal">
               <select
                 value={activeAgent?.id ?? ""}
                 onChange={(event) => onSetActiveAgentId(event.target.value)}
-                className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-sm text-forge-text"
+                className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-2 text-sm text-forge-text"
               >
                 {agents
                   .filter((agent) => agent.enabled)
@@ -733,7 +737,7 @@ export function AgentDashboard({
                 .map((agent) => (
                   <label
                     key={agent.id}
-                    className="flex items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-3 py-2 text-sm text-forge-muted"
+                    className="flex items-center gap-2 rounded-md border border-forge-line bg-forge-ink-deep px-3 py-2 text-sm text-forge-muted"
                   >
                     <input
                       type="checkbox"
@@ -809,7 +813,10 @@ export function ProjectsDashboard({
           </div>
           <div className="flex items-center gap-2">
             <Badge>max docs: 20</Badge>
-            <Button className="h-9 border-forge-amber/60 bg-[#24211b]" onClick={onSaveProject}>
+            <Button
+              className="h-9 border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
+              onClick={onSaveProject}
+            >
               <Save size={16} />
               {selectedProject
                 ? selectedProject.is_general
@@ -825,8 +832,8 @@ export function ProjectsDashboard({
             className={[
               "rounded-md border p-3 text-sm",
               status.type === "error"
-                ? "border-forge-red/50 bg-[#2a1112] text-forge-red"
-                : "border-forge-green/50 bg-[#11251a] text-forge-green"
+                ? "border-forge-red/50 bg-[color-mix(in_srgb,var(--err)_12%,transparent)] text-forge-red"
+                : "border-forge-green/50 bg-[color-mix(in_srgb,var(--ok)_12%,transparent)] text-forge-green"
             ].join(" ")}
           >
             {status.message}
@@ -834,13 +841,15 @@ export function ProjectsDashboard({
         )}
 
         <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
-          <section className="space-y-2 rounded-md border border-forge-line bg-[#141615] p-3">
+          <section className="space-y-2 rounded-md border border-forge-line bg-forge-panel p-3">
             <PanelTitle icon={<FolderTree size={18} />} title="Projetos" />
             <button
               type="button"
               className={[
                 "w-full rounded-md border px-3 py-2 text-left text-sm transition",
-                !selectedProject ? "border-forge-amber/60 bg-[#24211b]" : "border-forge-line bg-[#0e0f0e]"
+                !selectedProject
+                  ? "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
+                  : "border-forge-line bg-forge-ink-deep"
               ].join(" ")}
               onClick={() => onSelectProject(null)}
             >
@@ -852,8 +861,8 @@ export function ProjectsDashboard({
                 className={[
                   "w-full rounded-md border px-3 py-2 text-left text-sm transition",
                   selectedProject?.id === generalProject.id
-                    ? "border-forge-amber/60 bg-[#24211b]"
-                    : "border-forge-line bg-[#0e0f0e] hover:border-forge-amber/40"
+                    ? "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
+                    : "border-forge-line bg-forge-ink-deep hover:border-forge-amber/40"
                 ].join(" ")}
                 onClick={() => {
                   onSelectProject(generalProject.id);
@@ -876,8 +885,8 @@ export function ProjectsDashboard({
                 className={[
                   "w-full rounded-md border px-3 py-2 text-left text-sm transition",
                   selectedProject?.id === project.id
-                    ? "border-forge-amber/60 bg-[#24211b]"
-                    : "border-forge-line bg-[#0e0f0e] hover:border-forge-amber/40"
+                    ? "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
+                    : "border-forge-line bg-forge-ink-deep hover:border-forge-amber/40"
                 ].join(" ")}
                 onClick={() => {
                   onSelectProject(project.id);
@@ -893,7 +902,7 @@ export function ProjectsDashboard({
           </section>
 
           <section className="space-y-4">
-            <div className="rounded-md border border-forge-line bg-[#141615] p-4">
+            <div className="rounded-md border border-forge-line bg-forge-panel p-4">
               <PanelTitle icon={<Settings2 size={18} />} title="Projeto selecionado" />
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <Field label="Nome">
@@ -901,7 +910,7 @@ export function ProjectsDashboard({
                     value={projectDraft.name}
                     onChange={(event) => onSetProjectDraft((current) => ({ ...current, name: event.target.value }))}
                     placeholder="Ex: Produto X"
-                    className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+                    className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
                   />
                 </Field>
                 <Field label="Cor">
@@ -909,7 +918,7 @@ export function ProjectsDashboard({
                     type="color"
                     value={projectDraft.color}
                     onChange={(event) => onSetProjectDraft((current) => ({ ...current, color: event.target.value }))}
-                    className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] p-1"
+                    className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep p-1"
                     aria-label="Cor do projeto"
                     title="Cor do projeto"
                   />
@@ -923,7 +932,7 @@ export function ProjectsDashboard({
                   }
                   rows={3}
                   placeholder="Objetivo do projeto, escopo e notas."
-                  className="min-h-20 w-full resize-none rounded-md border border-forge-line bg-[#0e0f0e] px-3 py-2 text-sm text-forge-text"
+                  className="min-h-20 w-full resize-none rounded-md border border-forge-line bg-forge-ink-deep px-3 py-2 text-sm text-forge-text"
                 />
               </Field>
               <Field
@@ -942,7 +951,9 @@ export function ProjectsDashboard({
                         key={knowledgeBase.id}
                         className={[
                           "flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-sm transition",
-                          checked ? "border-forge-amber/60 bg-[#24211b]" : "border-forge-line bg-[#0e0f0e]"
+                          checked
+                            ? "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
+                            : "border-forge-line bg-forge-ink-deep"
                         ].join(" ")}
                       >
                         <input
@@ -977,7 +988,7 @@ export function ProjectsDashboard({
               </Field>
             </div>
 
-            <div className="rounded-md border border-forge-line bg-[#141615] p-4">
+            <div className="rounded-md border border-forge-line bg-forge-panel p-4">
               <PanelTitle icon={<Library size={18} />} title="Pastas do projeto" />
               {!selectedProject && (
                 <p className="mt-3 text-sm text-forge-muted">Selecione um projeto para organizar as pastas.</p>
@@ -990,14 +1001,14 @@ export function ProjectsDashboard({
                         value={folderDraftName}
                         onChange={(event) => onSetFolderDraftName(event.target.value)}
                         placeholder="Ex: Requisitos"
-                        className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+                        className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
                       />
                     </Field>
                     <Field label="Pasta mãe">
                       <select
                         value={folderDraftParentId ?? ""}
                         onChange={(event) => onSetFolderDraftParentId(event.target.value || null)}
-                        className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-sm text-forge-text"
+                        className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-2 text-sm text-forge-text"
                       >
                         <option value="">Raiz</option>
                         {projectFolders.map((folder) => (
@@ -1035,8 +1046,8 @@ export function ProjectsDashboard({
                         className={[
                           "w-full rounded-md border px-3 py-2 text-left text-sm transition",
                           selectedFolder?.id === folder.id
-                            ? "border-forge-amber/60 bg-[#24211b]"
-                            : "border-forge-line bg-[#0e0f0e] hover:border-forge-amber/40"
+                            ? "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
+                            : "border-forge-line bg-forge-ink-deep hover:border-forge-amber/40"
                         ].join(" ")}
                         onClick={() => onSelectFolder(folder.id)}
                       >
@@ -1127,12 +1138,14 @@ export function FilesDashboard({
             <h3 className="text-xl font-semibold">Biblioteca da plataforma</h3>
           </div>
           <div className="flex flex-wrap gap-2">
-            <div className="flex h-9 rounded-md border border-forge-line bg-[#0e0f0e] p-1">
+            <div className="flex h-9 rounded-md border border-forge-line bg-forge-ink-deep p-1">
               <button
                 type="button"
                 className={[
                   "flex items-center gap-2 rounded px-2 text-xs transition",
-                  viewMode === "details" ? "bg-[#24211b] text-forge-text" : "text-forge-muted hover:text-forge-text"
+                  viewMode === "details"
+                    ? "bg-[color-mix(in_srgb,var(--ember)_12%,transparent)] text-forge-text"
+                    : "text-forge-muted hover:text-forge-text"
                 ].join(" ")}
                 onClick={() => setViewMode("details")}
               >
@@ -1143,7 +1156,9 @@ export function FilesDashboard({
                 type="button"
                 className={[
                   "flex items-center gap-2 rounded px-2 text-xs transition",
-                  viewMode === "images" ? "bg-[#24211b] text-forge-text" : "text-forge-muted hover:text-forge-text"
+                  viewMode === "images"
+                    ? "bg-[color-mix(in_srgb,var(--ember)_12%,transparent)] text-forge-text"
+                    : "text-forge-muted hover:text-forge-text"
                 ].join(" ")}
                 onClick={() => setViewMode("images")}
               >
@@ -1151,7 +1166,7 @@ export function FilesDashboard({
                 Imagens
               </button>
             </div>
-            <label className="flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-forge-line bg-[#1a1d20] px-3 text-sm font-medium transition hover:bg-[#222a2f]">
+            <label className="flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-forge-line bg-forge-elev px-3 text-sm font-medium transition hover:bg-forge-hover">
               <FileText size={16} />
               <span>Enviar arquivos</span>
               <input
@@ -1169,34 +1184,34 @@ export function FilesDashboard({
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
-          <div className="rounded-md border border-forge-line bg-[#141615] p-3">
+          <div className="rounded-md border border-forge-line bg-forge-panel p-3">
             <p className="text-xs uppercase text-forge-muted">Total</p>
             <p className="mt-1 text-2xl font-semibold">{totalFiles}</p>
           </div>
-          <div className="rounded-md border border-forge-line bg-[#141615] p-3">
+          <div className="rounded-md border border-forge-line bg-forge-panel p-3">
             <p className="flex items-center gap-2 text-xs uppercase text-forge-muted">
               <ImageIcon size={14} />
               Imagens
             </p>
             <p className="mt-1 text-2xl font-semibold">{imageFiles.length}</p>
           </div>
-          <div className="rounded-md border border-forge-line bg-[#141615] p-3">
+          <div className="rounded-md border border-forge-line bg-forge-panel p-3">
             <p className="text-xs uppercase text-forge-muted">Bases</p>
             <p className="mt-1 text-2xl font-semibold">{indexedFileIds.size}</p>
           </div>
         </div>
 
-        <div className="grid gap-2 rounded-md border border-forge-line bg-[#141615] p-3 sm:grid-cols-[minmax(0,1fr)_200px]">
+        <div className="grid gap-2 rounded-md border border-forge-line bg-forge-panel p-3 sm:grid-cols-[minmax(0,1fr)_200px]">
           <input
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
             placeholder="Buscar arquivo por nome"
-            className="h-9 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+            className="h-9 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
           />
           <select
             value={sourceFilter}
             onChange={(event) => setSourceFilter(event.target.value as "all" | PlatformFile["source"])}
-            className="h-9 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-sm text-forge-text"
+            className="h-9 w-full rounded-md border border-forge-line bg-forge-ink-deep px-2 text-sm text-forge-text"
           >
             <option value="all">Todas as origens</option>
             <option value="upload">upload</option>
@@ -1212,12 +1227,15 @@ export function FilesDashboard({
             {visibleFiles.map((platformFile) => {
               const isIndexed = indexedFileIds.has(platformFile.id);
               return (
-                <div key={platformFile.id} className="overflow-hidden rounded-md border border-forge-line bg-[#141615]">
+                <div
+                  key={platformFile.id}
+                  className="overflow-hidden rounded-md border border-forge-line bg-forge-panel"
+                >
                   <a
                     href={fileContentUrl(platformFile.id)}
                     target="_blank"
                     rel="noreferrer"
-                    className="block aspect-square bg-[#0e0f0e]"
+                    className="block aspect-square bg-forge-ink-deep"
                     title={platformFileLabel(platformFile)}
                   >
                     <img
@@ -1266,7 +1284,7 @@ export function FilesDashboard({
           </div>
         )}
         {isLoadingFirstPage && (
-          <div className="rounded-md border border-forge-line bg-[#141615] px-3 py-2 text-sm text-forge-muted">
+          <div className="rounded-md border border-forge-line bg-forge-panel px-3 py-2 text-sm text-forge-muted">
             <span className="inline-flex items-center gap-2">
               <LoaderCircle size={14} className="animate-spin" />
               Carregando arquivos...
@@ -1325,7 +1343,7 @@ function FileDetailCard({
   }
 
   return (
-    <div className="rounded-md border border-forge-line bg-[#141615] p-3">
+    <div className="rounded-md border border-forge-line bg-forge-panel p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h4 className="truncate text-sm font-semibold">{platformFileLabel(platformFile)}</h4>
@@ -1341,7 +1359,7 @@ function FileDetailCard({
           href={fileContentUrl(platformFile.id)}
           target="_blank"
           rel="noreferrer"
-          className="mt-3 block aspect-[16/9] overflow-hidden rounded border border-forge-line bg-[#0e0f0e]"
+          className="mt-3 block aspect-[16/9] overflow-hidden rounded border border-forge-line bg-forge-ink-deep"
         >
           <img
             src={fileContentUrl(platformFile.id)}
@@ -1357,7 +1375,7 @@ function FileDetailCard({
           <input
             value={filenameDraft}
             onChange={(event) => setFilenameDraft(event.target.value)}
-            className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+            className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
           />
         </Field>
         <Field label="Tags">
@@ -1365,7 +1383,7 @@ function FileDetailCard({
             value={tagsDraft}
             onChange={(event) => setTagsDraft(event.target.value)}
             placeholder="import, imagem"
-            className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+            className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
           />
         </Field>
       </div>
@@ -1375,7 +1393,7 @@ function FileDetailCard({
           value={noteDraft}
           onChange={(event) => setNoteDraft(event.target.value)}
           rows={2}
-          className="min-h-16 w-full resize-none rounded-md border border-forge-line bg-[#0e0f0e] px-3 py-2 text-sm text-forge-text"
+          className="min-h-16 w-full resize-none rounded-md border border-forge-line bg-forge-ink-deep px-3 py-2 text-sm text-forge-text"
         />
       </Field>
 
@@ -1560,7 +1578,7 @@ export function KnowledgeDashboard({
 
         <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
           <section className="space-y-3">
-            <div className="rounded-md border border-forge-line bg-[#141615] p-3">
+            <div className="rounded-md border border-forge-line bg-forge-panel p-3">
               <div className="flex items-center justify-between gap-2">
                 <PanelTitle icon={<FolderTree size={18} />} title="Biblioteca de bases" />
                 <Button className="h-8 text-xs" onClick={onCreateKnowledgeBase}>
@@ -1576,8 +1594,8 @@ export function KnowledgeDashboard({
                     className={[
                       "w-full rounded-md border p-3 text-left transition",
                       selectedKnowledgeBase?.id === knowledgeBase.id
-                        ? "border-forge-amber/60 bg-[#24211b]"
-                        : "border-forge-line bg-[#0e0f0e] hover:border-forge-amber/40"
+                        ? "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
+                        : "border-forge-line bg-forge-ink-deep hover:border-forge-amber/40"
                     ].join(" ")}
                     onClick={() => onSelectKnowledgeBase(knowledgeBase)}
                   >
@@ -1600,12 +1618,12 @@ export function KnowledgeDashboard({
               </div>
             </div>
 
-            <div className="rounded-md border border-forge-line bg-[#141615] p-3">
+            <div className="rounded-md border border-forge-line bg-forge-panel p-3">
               <PanelTitle icon={<FileText size={18} />} title="Importar ChatGPT" />
               <p className="mt-3 text-xs leading-5 text-forge-muted">
                 Importe conversations.json ou ZIP exportado, até 5 GB. O histórico fica local.
               </p>
-              <label className="mt-3 flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-forge-line bg-[#1a1d20] px-3 text-sm font-medium transition hover:bg-[#222a2f]">
+              <label className="mt-3 flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-forge-line bg-forge-elev px-3 text-sm font-medium transition hover:bg-forge-hover">
                 {isImportingChatGPT ? <LoaderCircle size={16} className="animate-spin" /> : <FileText size={16} />}
                 <span>{isImportingChatGPT ? "Importando" : "Selecionar export"}</span>
                 <input
@@ -1621,12 +1639,12 @@ export function KnowledgeDashboard({
                 />
               </label>
               {chatGPTImportJob && (
-                <div className="mt-3 rounded-md border border-forge-line bg-[#0e0f0e] p-2 text-xs">
+                <div className="mt-3 rounded-md border border-forge-line bg-forge-ink-deep p-2 text-xs">
                   <div className="flex items-center justify-between gap-3">
                     <p className="min-w-0 truncate font-medium">{chatGPTImportJob.source_filename}</p>
                     <Badge>{chatGPTImportJob.status}</Badge>
                   </div>
-                  <div className="mt-2 h-2 overflow-hidden rounded bg-[#1a1d20]">
+                  <div className="mt-2 h-2 overflow-hidden rounded bg-forge-elev">
                     <div
                       className="h-full bg-forge-amber transition-all"
                       style={{ width: `${Math.max(2, chatGPTImportJob.progress_percent)}%` }}
@@ -1643,7 +1661,7 @@ export function KnowledgeDashboard({
                 </div>
               )}
               {chatGPTImportResult && (
-                <div className="mt-3 rounded-md border border-forge-line bg-[#0e0f0e] p-2 text-xs">
+                <div className="mt-3 rounded-md border border-forge-line bg-forge-ink-deep p-2 text-xs">
                   <p className="truncate font-medium">{chatGPTImportResult.source_filename}</p>
                   <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-forge-muted">
                     <InfoRow label="Conversas" value={String(chatGPTImportResult.conversations_found)} />
@@ -1658,12 +1676,12 @@ export function KnowledgeDashboard({
               )}
             </div>
 
-            <div className="rounded-md border border-forge-line bg-[#141615] p-3">
+            <div className="rounded-md border border-forge-line bg-forge-panel p-3">
               <PanelTitle icon={<FileText size={18} />} title="Adicionar de arquivos" />
               <p className="mt-3 text-xs leading-5 text-forge-muted">
                 Bases são contextos indexados. Arquivos enviados ficam na biblioteca até você escolher usar como base.
               </p>
-              <label className="mt-3 flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-forge-line bg-[#1a1d20] px-3 text-sm font-medium transition hover:bg-[#222a2f]">
+              <label className="mt-3 flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-forge-line bg-forge-elev px-3 text-sm font-medium transition hover:bg-forge-hover">
                 <FileText size={16} />
                 <span>Pegar do computador</span>
                 <input
@@ -1682,12 +1700,12 @@ export function KnowledgeDashboard({
                   value={kbFileSearch}
                   onChange={(event) => setKbFileSearch(event.target.value)}
                   placeholder="Buscar arquivo por nome"
-                  className="h-9 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+                  className="h-9 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
                 />
                 <select
                   value={kbSourceFilter}
                   onChange={(event) => setKbSourceFilter(event.target.value as "all" | PlatformFile["source"])}
-                  className="h-9 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-sm text-forge-text"
+                  className="h-9 w-full rounded-md border border-forge-line bg-forge-ink-deep px-2 text-sm text-forge-text"
                 >
                   <option value="all">Todas as origens</option>
                   <option value="upload">upload</option>
@@ -1699,7 +1717,10 @@ export function KnowledgeDashboard({
               </div>
               <div ref={knowledgeListRef} className="scrollbar-slim mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
                 {filteredKnowledgeFiles.map((platformFile) => (
-                  <div key={platformFile.id} className="rounded-md border border-forge-line bg-[#0e0f0e] p-2 text-xs">
+                  <div
+                    key={platformFile.id}
+                    className="rounded-md border border-forge-line bg-forge-ink-deep p-2 text-xs"
+                  >
                     <div className="flex items-center justify-between gap-2">
                       <span className="min-w-0 truncate font-medium">{platformFileLabel(platformFile)}</span>
                       <Badge>{platformFile.source}</Badge>
@@ -1740,7 +1761,7 @@ export function KnowledgeDashboard({
           </section>
 
           <section className="space-y-4">
-            <div className="rounded-md border border-forge-line bg-[#141615] p-4">
+            <div className="rounded-md border border-forge-line bg-forge-panel p-4">
               <div className="flex items-center justify-between gap-2 border-b border-forge-line pb-2">
                 <PanelTitle icon={<Library size={18} />} title={selectedKnowledgeBase?.name || "Nova base"} />
                 {selectedKnowledgeBase && (
@@ -1761,7 +1782,7 @@ export function KnowledgeDashboard({
                       onSetKnowledgeBaseDraft((current) => ({ ...current, name: event.target.value }))
                     }
                     placeholder="Ex: Produto, Marca, Pesquisa"
-                    className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+                    className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
                   />
                 </Field>
                 <Field label="Cor">
@@ -1771,7 +1792,7 @@ export function KnowledgeDashboard({
                     onChange={(event) =>
                       onSetKnowledgeBaseDraft((current) => ({ ...current, color: event.target.value }))
                     }
-                    className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] p-1"
+                    className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep p-1"
                     aria-label="Cor da base"
                     title="Cor da base"
                   />
@@ -1785,7 +1806,7 @@ export function KnowledgeDashboard({
                   }
                   rows={3}
                   placeholder="Explique quando esta base deve ser usada e quais assuntos ela cobre."
-                  className="min-h-20 w-full resize-none rounded-md border border-forge-line bg-[#0e0f0e] px-3 py-2 text-sm text-forge-text"
+                  className="min-h-20 w-full resize-none rounded-md border border-forge-line bg-forge-ink-deep px-3 py-2 text-sm text-forge-text"
                 />
               </Field>
               <div className="mt-3 grid gap-3 md:grid-cols-3">
@@ -1796,7 +1817,7 @@ export function KnowledgeDashboard({
                       onSetKnowledgeBaseDraft((current) => ({ ...current, tags: csvToList(event.target.value) }))
                     }
                     placeholder="produto, suporte"
-                    className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+                    className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
                   />
                 </Field>
                 <Field label="Docs por busca">
@@ -1811,7 +1832,7 @@ export function KnowledgeDashboard({
                         max_documents_per_query: Math.max(1, Math.min(20, Number(event.target.value) || 1))
                       }))
                     }
-                    className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+                    className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
                   />
                 </Field>
                 <Field label="Chunks por doc">
@@ -1826,7 +1847,7 @@ export function KnowledgeDashboard({
                         max_chunks_per_document: Math.max(1, Math.min(10, Number(event.target.value) || 1))
                       }))
                     }
-                    className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+                    className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
                   />
                 </Field>
               </div>
@@ -1841,14 +1862,17 @@ export function KnowledgeDashboard({
                   />
                   base habilitada
                 </label>
-                <Button className="h-9 border-forge-amber/60 bg-[#24211b]" onClick={onSaveKnowledgeBase}>
+                <Button
+                  className="h-9 border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
+                  onClick={onSaveKnowledgeBase}
+                >
                   <Save size={16} />
                   Salvar base
                 </Button>
               </div>
             </div>
 
-            <div className="rounded-md border border-forge-line bg-[#141615] p-4">
+            <div className="rounded-md border border-forge-line bg-forge-panel p-4">
               <PanelTitle icon={<FileText size={18} />} title="Criar contexto textual" />
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <Field label="Título">
@@ -1856,7 +1880,7 @@ export function KnowledgeDashboard({
                     value={documentTitle}
                     onChange={(event) => onSetDocumentTitle(event.target.value)}
                     placeholder="Nome do contexto"
-                    className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+                    className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
                   />
                 </Field>
                 <Field label="Tags">
@@ -1864,7 +1888,7 @@ export function KnowledgeDashboard({
                     value={documentTags}
                     onChange={(event) => onSetDocumentTags(event.target.value)}
                     placeholder="produto, arquitetura"
-                    className="h-10 w-full rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+                    className="h-10 w-full rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
                   />
                 </Field>
               </div>
@@ -1874,7 +1898,7 @@ export function KnowledgeDashboard({
                   onChange={(event) => onSetDocumentContent(event.target.value)}
                   rows={7}
                   placeholder="Cole texto, Markdown, CSV ou HTML"
-                  className="min-h-40 w-full resize-y rounded-md border border-forge-line bg-[#0e0f0e] px-3 py-2 text-sm leading-6 text-forge-text"
+                  className="min-h-40 w-full resize-y rounded-md border border-forge-line bg-forge-ink-deep px-3 py-2 text-sm leading-6 text-forge-text"
                 />
               </Field>
               <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -1896,7 +1920,7 @@ export function KnowledgeDashboard({
               </div>
             </div>
 
-            <div className="rounded-md border border-forge-line bg-[#141615] p-4">
+            <div className="rounded-md border border-forge-line bg-forge-panel p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <PanelTitle icon={<SearchIcon />} title="Busca na base" />
                 <div className="flex min-w-0 gap-2">
@@ -1904,7 +1928,7 @@ export function KnowledgeDashboard({
                     value={documentQuery}
                     onChange={(event) => onSetDocumentQuery(event.target.value)}
                     placeholder="Buscar contexto"
-                    className="h-9 min-w-0 flex-1 rounded-md border border-forge-line bg-[#0e0f0e] px-3 text-sm text-forge-text"
+                    className="h-9 min-w-0 flex-1 rounded-md border border-forge-line bg-forge-ink-deep px-3 text-sm text-forge-text"
                   />
                   <Button className="h-9" onClick={onSearchDocuments} disabled={!documentQuery.trim()}>
                     Buscar
@@ -1915,7 +1939,7 @@ export function KnowledgeDashboard({
                 {documentResults.map((result) => (
                   <button
                     key={`${result.document_id}:${String(result.metadata.chunk_index ?? "0")}`}
-                    className="rounded-md border border-forge-line bg-[#0e0f0e] p-3 text-left text-sm transition hover:border-forge-amber/60"
+                    className="rounded-md border border-forge-line bg-forge-ink-deep p-3 text-left text-sm transition hover:border-forge-amber/60"
                     onClick={() => onUseDocument(result.content)}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -1931,7 +1955,7 @@ export function KnowledgeDashboard({
 
             <div className="grid gap-3 md:grid-cols-2">
               {selectedDocuments.map((document) => (
-                <div key={document.id} className="rounded-md border border-forge-line bg-[#141615] p-3">
+                <div key={document.id} className="rounded-md border border-forge-line bg-forge-panel p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <h4 className="truncate text-sm font-semibold">{document.title}</h4>
