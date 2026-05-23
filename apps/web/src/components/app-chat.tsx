@@ -11,6 +11,7 @@ import {
 import type { ReactNode } from "react";
 
 import { ModelingEditCard, ModelingPlanCard } from "../features/modeling-3d/components";
+import { ImagePreview } from "../features/chat/components/ImagePreview";
 import { cn } from "../lib/utils";
 import { Avatar } from "./ui/Avatar";
 import { Mono } from "./ui/Mono";
@@ -292,16 +293,7 @@ export function MessageBubble({
               )
             ) : null}
             {imageUrls.length > 0 ? (
-              <div className={[markdownText ? "mt-3" : "", "grid gap-2"].join(" ").trim()}>
-                {imageUrls.map((url) => (
-                  <img
-                    key={url}
-                    src={url}
-                    alt="Prévia de imagem"
-                    className="max-h-[520px] w-full rounded-md object-contain"
-                  />
-                ))}
-              </div>
+              <ImagePreview urls={imageUrls} className={markdownText ? "mt-3" : undefined} />
             ) : null}
             {attachmentFiles.length > 0 ? (
               <div
