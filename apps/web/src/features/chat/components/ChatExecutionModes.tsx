@@ -55,8 +55,19 @@ function ModeRow({
  * Painel "Modo de execução" (frame panel.jsx): expõe os modos de execução do chat
  * — os mesmos do menu do composer (ExecutionMenu), via o mesmo `useAppStore`, então
  * os dois ficam sempre em sincronia. MCP 3D fica fora (é gatilhado por diálogo no App).
+ *
+ * `onDisableModeling3d` espelha o efeito colateral do `ExecutionMenu`: ligar pesquisa,
+ * imagem ou multiagente desliga o MCP 3D do próximo chat (a não ser que a sessão ativa
+ * já seja 3D). O estado/guarda vive no App.tsx (`nextChatIs3D` + `activeSessionIsModeling3D`),
+ * que não são alcançáveis pelo store, então o App injeta o callback.
  */
-export function ChatExecutionModes({ reasoningSummaryUnavailable }: { reasoningSummaryUnavailable: boolean }) {
+export function ChatExecutionModes({
+  reasoningSummaryUnavailable,
+  onDisableModeling3d
+}: {
+  reasoningSummaryUnavailable: boolean;
+  onDisableModeling3d: () => void;
+}) {
   const reasoningOverride = useAppStore((state) => state.reasoningOverride);
   const setReasoningOverride = useAppStore((state) => state.setReasoningOverride);
   const reasoningSummary = useAppStore((state) => state.reasoningSummary);
@@ -75,13 +86,18 @@ export function ChatExecutionModes({ reasoningSummaryUnavailable }: { reasoningS
     setDeepResearch((current) => !current);
     setResponseMode("text");
     setReasoningSummary(false);
+    onDisableModeling3d();
   };
   const toggleImage = () => {
     setResponseMode((current) => (current === "image" ? "text" : "image"));
     setDeepResearch(false);
     setReasoningSummary(false);
+    onDisableModeling3d();
   };
-  const toggleMultiAgent = () => setMultiAgentMode((current) => !current);
+  const toggleMultiAgent = () => {
+    setMultiAgentMode((current) => !current);
+    onDisableModeling3d();
+  };
 
   return (
     <div>

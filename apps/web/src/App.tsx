@@ -2426,6 +2426,9 @@ function App() {
                 activePanel={activePanel}
                 onSelectPanel={setActivePanel}
                 reasoningSummaryUnavailable={reasoningSummaryUnavailable}
+                onDisableModeling3d={() => {
+                  if (!activeSessionIsModeling3D) setModeling3dEnabled(false);
+                }}
                 status={status}
                 costUsage={costUsage}
                 costPolicy={costPolicy}

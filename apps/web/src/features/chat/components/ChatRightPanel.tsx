@@ -43,6 +43,7 @@ export interface ChatRightPanelProps {
   activePanel: Panel;
   onSelectPanel: (panel: Panel) => void;
   reasoningSummaryUnavailable: boolean;
+  onDisableModeling3d: () => void;
   status: ServerStatus | null;
   costUsage: CostUsage | null;
   costPolicy: CostPolicy | null;
@@ -83,6 +84,7 @@ export function ChatRightPanel({
   activePanel,
   onSelectPanel,
   reasoningSummaryUnavailable,
+  onDisableModeling3d,
   status,
   costUsage,
   costPolicy,
@@ -242,7 +244,10 @@ export function ChatRightPanel({
                 {documents.slice(0, 4).map((document) => (
                   <InfoRow key={document.id} label={document.title} value={document.index_status} />
                 ))}
-                <ChatExecutionModes reasoningSummaryUnavailable={reasoningSummaryUnavailable} />
+                <ChatExecutionModes
+                  reasoningSummaryUnavailable={reasoningSummaryUnavailable}
+                  onDisableModeling3d={onDisableModeling3d}
+                />
               </>
             )}
 
