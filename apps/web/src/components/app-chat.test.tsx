@@ -73,4 +73,17 @@ describe("MessageBubble modeling 3D", () => {
     expect(screen.getByText(/fusion.add_rectangle/)).toBeTruthy();
     expect(screen.getByText(/Plano executado/)).toBeTruthy();
   });
+
+  it("shows the model_id meta on assistant messages when present", () => {
+    const message: ChatMessage = {
+      id: "msg_model",
+      session_id: "session_1",
+      role: "assistant",
+      content: "Olá",
+      model_id: "gpt-4o",
+      created_at: new Date("2026-05-14T12:00:00Z").toISOString()
+    };
+    render(<MessageBubble message={message} platformFilesById={{}} />);
+    expect(screen.getByText("gpt-4o")).toBeTruthy();
+  });
 });

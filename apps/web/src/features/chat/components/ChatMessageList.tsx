@@ -17,6 +17,10 @@ export interface ChatMessageListProps {
   onScroll: () => void;
   quickActions: readonly string[];
   onQuickAction: (action: string) => void;
+  /** Resumo do rodapé do empty-state (dados reais). */
+  sessionsCount: number;
+  documentsCount: number;
+  monthlySpendBrl: number | null;
 }
 
 /**
@@ -34,7 +38,10 @@ export function ChatMessageList({
   loadOlderRef,
   onScroll,
   quickActions,
-  onQuickAction
+  onQuickAction,
+  sessionsCount,
+  documentsCount,
+  monthlySpendBrl
 }: ChatMessageListProps) {
   const messages: ChatMessage[] = activeSession?.messages.length ? activeSession.messages : [];
   return (
@@ -98,6 +105,23 @@ export function ChatMessageList({
                   <ArrowUpRight size={14} className="shrink-0 text-forge-faint" />
                 </button>
               ))}
+            </div>
+            <div className="mt-8 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5">
+              <Mono size={10} className="text-forge-faint">
+                {sessionsCount} chats
+              </Mono>
+              {monthlySpendBrl != null && (
+                <>
+                  <span className="h-0.5 w-0.5 rounded-full bg-forge-faint" />
+                  <Mono size={10} className="text-forge-faint">
+                    R$ {monthlySpendBrl.toFixed(2).replace(".", ",")} gastos no mês
+                  </Mono>
+                </>
+              )}
+              <span className="h-0.5 w-0.5 rounded-full bg-forge-faint" />
+              <Mono size={10} className="text-forge-faint">
+                {documentsCount} documentos
+              </Mono>
             </div>
           </div>
         )}

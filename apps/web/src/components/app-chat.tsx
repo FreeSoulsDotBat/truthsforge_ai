@@ -218,6 +218,14 @@ export function MessageBubble({
               {timeLabel}
             </Mono>
           )}
+          {!isUser && message.model_id && (
+            <>
+              <span className="h-0.5 w-0.5 shrink-0 rounded-full bg-forge-faint" />
+              <Mono size={10} className="max-w-[160px] truncate text-forge-faint">
+                {message.model_id}
+              </Mono>
+            </>
+          )}
           <span className="flex-1" />
           <button
             className="rounded-sm p-1 text-forge-muted opacity-0 transition hover:bg-forge-hover hover:text-forge-text focus:opacity-100 group-hover:opacity-100"

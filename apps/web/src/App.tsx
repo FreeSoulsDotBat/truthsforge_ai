@@ -2292,6 +2292,9 @@ function App() {
                   onScroll={handleChatScroll}
                   quickActions={quickActions}
                   onQuickAction={handleQuickAction}
+                  sessionsCount={sessions.length}
+                  documentsCount={documents.length}
+                  monthlySpendBrl={costUsage?.estimated_spend_brl ?? null}
                 />
 
                 <form onSubmit={handleSubmit} className="border-t border-forge-line-soft bg-forge-ink p-3">
