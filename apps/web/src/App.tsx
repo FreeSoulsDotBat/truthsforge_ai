@@ -2294,9 +2294,9 @@ function App() {
                   onQuickAction={handleQuickAction}
                 />
 
-                <form onSubmit={handleSubmit} className="border-t border-forge-line bg-[#0c0d0f] p-3">
-                  <div className="mx-auto max-w-3xl rounded-md border border-forge-line bg-[#171716] p-2">
-                    <div className="mb-2 space-y-2 border-b border-forge-line pb-2">
+                <form onSubmit={handleSubmit} className="border-t border-forge-line-soft bg-forge-ink p-3">
+                  <div className="mx-auto max-w-3xl rounded-lg border border-forge-line bg-forge-panel p-3 shadow-soft">
+                    <div className="mb-2 space-y-2 border-b border-forge-line-soft pb-2">
                       <div className="flex items-start justify-between gap-3">
                         <ComposerContextChips
                           agentName={activeAgent?.name ?? "Sem agente"}
