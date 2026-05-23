@@ -38,7 +38,7 @@ export function ComposerAttachments({
         <button
           key={`${file.name}:${file.size}:${index}`}
           type="button"
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted transition hover:text-forge-text"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-forge-line-soft bg-forge-ink-deep px-2 text-xs text-forge-muted transition hover:text-forge-text"
           onClick={() => onRemoveFile(index)}
           title={`Remover ${file.name}`}
         >
@@ -52,7 +52,7 @@ export function ComposerAttachments({
           <button
             key={fileId}
             type="button"
-            className="inline-flex h-7 items-center gap-1 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted transition hover:text-forge-text"
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-forge-line-soft bg-forge-ink-deep px-2 text-xs text-forge-muted transition hover:text-forge-text"
             onClick={() => onRemovePlatformFile(fileId)}
             title={`Remover ${platformFile ? platformFileLabel(platformFile) : "arquivo"}`}
           >
@@ -65,7 +65,7 @@ export function ComposerAttachments({
         <button
           key={documentId}
           type="button"
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs text-forge-muted transition hover:text-forge-text"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-forge-line-soft bg-forge-ink-deep px-2 text-xs text-forge-muted transition hover:text-forge-text"
           onClick={() => onRemoveDocument(documentId)}
           title={`Remover ${documents.find((document) => document.id === documentId)?.title ?? "contexto"}`}
         >

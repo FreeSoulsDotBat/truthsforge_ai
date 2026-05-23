@@ -1,10 +1,19 @@
-import { ArrowUpRight, Flame, LoaderCircle } from "lucide-react";
-import type { MutableRefObject } from "react";
+import { ArrowUpRight, Boxes, Library, Lightbulb, LoaderCircle, Scale, Users } from "lucide-react";
+import type { ComponentType, MutableRefObject } from "react";
 
 import { MessageBubble, type ModelingPlanCardActions } from "../../../components/app-chat";
 import { Mono } from "../../../components/ui/Mono";
+import type { QuickAction, QuickActionIcon } from "../../../app/constants";
 import type { ChatMessage, ChatSession, PlatformFile } from "../../../types/api";
 import type { SessionLazyMeta } from "../chat-helpers";
+
+const QUICK_ACTION_ICONS: Record<QuickActionIcon, ComponentType<{ size?: number | string }>> = {
+  boxes: Boxes,
+  lightbulb: Lightbulb,
+  users: Users,
+  library: Library,
+  scale: Scale
+};
 
 export interface ChatMessageListProps {
   activeSession: ChatSession | null;
@@ -15,7 +24,7 @@ export interface ChatMessageListProps {
   scrollRef: MutableRefObject<HTMLDivElement | null>;
   loadOlderRef: MutableRefObject<HTMLDivElement | null>;
   onScroll: () => void;
-  quickActions: readonly string[];
+  quickActions: readonly QuickAction[];
   onQuickAction: (action: string) => void;
   /** Resumo do rodapé do empty-state (dados reais). */
   sessionsCount: number;
@@ -86,25 +95,33 @@ export function ChatMessageList({
               Escolha um ponto de partida ou escreva direto para a JUDITE.
             </p>
             <div className="mt-9 grid w-full gap-2.5 sm:grid-cols-2">
-              {quickActions.map((action) => (
-                <button
-                  key={action}
-                  className="flex items-center gap-3.5 rounded border border-forge-line-soft bg-forge-panel px-4 py-3.5 text-left transition hover:border-forge-amber/40"
-                  onClick={() => onQuickAction(action)}
-                >
-                  <span
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-forge-amber"
-                    style={{
-                      background: "color-mix(in srgb, var(--ember) 10%, var(--bg-ink))",
-                      border: "1px solid color-mix(in srgb, var(--ember) 20%, transparent)"
-                    }}
+              {quickActions.map((action) => {
+                const ActionIcon = QUICK_ACTION_ICONS[action.icon];
+                return (
+                  <button
+                    key={action.label}
+                    className="flex items-center gap-3.5 rounded border border-forge-line-soft bg-forge-panel px-4 py-3.5 text-left transition hover:border-forge-amber/40"
+                    onClick={() => onQuickAction(action.label)}
                   >
-                    <Flame size={16} />
-                  </span>
-                  <span className="min-w-0 flex-1 text-[13.5px] font-medium text-forge-text">{action}</span>
-                  <ArrowUpRight size={14} className="shrink-0 text-forge-faint" />
-                </button>
-              ))}
+                    <span
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-forge-amber"
+                      style={{
+                        background: "color-mix(in srgb, var(--ember) 10%, var(--bg-ink))",
+                        border: "1px solid color-mix(in srgb, var(--ember) 20%, transparent)"
+                      }}
+                    >
+                      <ActionIcon size={16} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13.5px] font-medium text-forge-text">{action.label}</span>
+                      <Mono size={10} className="mt-0.5 block text-forge-faint">
+                        {action.hint}
+                      </Mono>
+                    </span>
+                    <ArrowUpRight size={14} className="shrink-0 text-forge-faint" />
+                  </button>
+                );
+              })}
             </div>
             <div className="mt-8 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5">
               <Mono size={10} className="text-forge-faint">

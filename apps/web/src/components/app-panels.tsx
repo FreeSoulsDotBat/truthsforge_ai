@@ -19,7 +19,7 @@ export function DuplicateFileModal({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-      <div className="w-full max-w-lg rounded-md border border-forge-line bg-[#141615] p-4 shadow-2xl">
+      <div className="w-full max-w-lg rounded-md border border-forge-line bg-forge-panel p-4 shadow-2xl">
         <div className="flex items-start justify-between gap-3 border-b border-forge-line pb-3">
           <div>
             <p className="text-xs uppercase text-forge-muted">Arquivo duplicado</p>
@@ -30,12 +30,12 @@ export function DuplicateFileModal({
           </Button>
         </div>
         <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
-          <div className="rounded-md border border-forge-line bg-[#0e0f0e] p-3">
+          <div className="rounded-md border border-forge-line bg-forge-ink-deep p-3">
             <p className="text-xs uppercase text-forge-muted">Novo envio</p>
             <p className="mt-2 truncate font-medium">{pending.file.name}</p>
             <p className="mt-1 text-xs text-forge-muted">{formatBytes(pending.file.size)}</p>
           </div>
-          <div className="rounded-md border border-forge-line bg-[#0e0f0e] p-3">
+          <div className="rounded-md border border-forge-line bg-forge-ink-deep p-3">
             <p className="text-xs uppercase text-forge-muted">Existente</p>
             <p className="mt-2 truncate font-medium">{platformFileLabel(pending.duplicate)}</p>
             <p className="mt-1 text-xs text-forge-muted">
@@ -63,9 +63,16 @@ export function DuplicateFileModal({
   );
 }
 
-export function ContextChip({ label, value }: { label: string; value: string }) {
+export function ContextChip({ label, value, dot = false }: { label: string; value: string; dot?: boolean }) {
   return (
-    <div className="inline-flex min-h-8 items-center gap-2 rounded-md border border-forge-line bg-[#0e0f0e] px-2 text-xs">
+    <div className="inline-flex min-h-8 items-center gap-2 rounded-md border border-forge-line-soft bg-forge-ink-deep px-2 text-xs">
+      {dot && (
+        <span
+          aria-hidden
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-forge-amber"
+          style={{ boxShadow: "0 0 6px var(--ember-glow)" }}
+        />
+      )}
       <span className="uppercase text-forge-muted">{label}</span>
       <span className="max-w-60 truncate text-forge-text">{value}</span>
     </div>
@@ -92,7 +99,7 @@ export function ExecutionMenuItem({
         "flex h-8 w-full items-center justify-between rounded px-2 text-xs transition",
         disabled
           ? "cursor-not-allowed text-forge-muted/40"
-          : "text-forge-muted hover:bg-[#1b1f22] hover:text-forge-text"
+          : "text-forge-muted hover:bg-forge-hover hover:text-forge-text"
       ].join(" ")}
       disabled={disabled}
       title={title}

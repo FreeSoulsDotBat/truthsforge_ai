@@ -1,9 +1,20 @@
-export const quickActions = [
-  "Planejar uma arquitetura técnica",
-  "Refinar uma ideia de produto",
-  "Configurar um time de agentes",
-  "Criar um prompt reutilizável",
-  "Revisar uma decisão do projeto"
+/** Ícone (chave lucide mapeada em ChatMessageList) de cada atalho do empty-state. */
+export type QuickActionIcon = "boxes" | "lightbulb" | "users" | "library" | "scale";
+
+export type QuickAction = {
+  /** Texto exibido e semente do draft (o handler usa o label). */
+  label: string;
+  /** Sub-rótulo mono curto, descreve o ponto de partida (não é dado dinâmico). */
+  hint: string;
+  icon: QuickActionIcon;
+};
+
+export const quickActions: readonly QuickAction[] = [
+  { label: "Planejar uma arquitetura técnica", hint: "começa um rascunho técnico", icon: "boxes" },
+  { label: "Refinar uma ideia de produto", hint: "lapida o conceito", icon: "lightbulb" },
+  { label: "Configurar um time de agentes", hint: "abre o editor de agentes", icon: "users" },
+  { label: "Criar um prompt reutilizável", hint: "modela um prompt-mãe", icon: "library" },
+  { label: "Revisar uma decisão do projeto", hint: "pesa os trade-offs", icon: "scale" }
 ];
 
 export const infraLinks = [

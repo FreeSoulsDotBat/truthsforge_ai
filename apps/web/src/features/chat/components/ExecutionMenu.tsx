@@ -54,7 +54,7 @@ export function ExecutionMenu({
       </Button>
       {open && (
         <div
-          className="scrollbar-slim absolute right-0 z-50 max-h-[55vh] w-72 overflow-y-auto rounded-md border border-forge-line bg-[#111313] p-1 shadow-2xl"
+          className="scrollbar-slim absolute right-0 z-50 max-h-[55vh] w-72 overflow-y-auto rounded-md border border-forge-line bg-forge-panel p-1 shadow-2xl"
           style={{ top: "auto", bottom: "calc(100% + 4px)" }}
         >
           <ExecutionMenuItem
@@ -80,7 +80,7 @@ export function ExecutionMenu({
           <ExecutionMenuItem label="Multiagente" active={multiAgentMode} onClick={onToggleMultiAgent} />
           <button
             type="button"
-            className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
+            className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-forge-hover hover:text-forge-text"
             onClick={onEditKnowledgeBases}
           >
             <span>Editar bases de conhecimento atreladas</span>
@@ -88,7 +88,7 @@ export function ExecutionMenu({
           <div className="mx-1 my-1 border-t border-forge-line" />
           <button
             type="button"
-            className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-[#1b1f22] hover:text-forge-text"
+            className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-forge-muted transition hover:bg-forge-hover hover:text-forge-text"
             onClick={onAttachFile}
           >
             <span className="flex items-center gap-2">
