@@ -1,5 +1,6 @@
 import {
   Bot,
+  Database,
   ExternalLink,
   FileText,
   FolderTree,
@@ -24,6 +25,9 @@ import { AgentLLMNumberInput, AgentLLMSelect, Field, InfoTip, SubFieldLabel } fr
 import { EmptyPanel, InfoRow, PanelTitle, SearchIcon } from "../../components/app-panels";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
+import { Mono } from "../../components/ui/Mono";
+import { DashboardSectionHeader, FileGlyph, GradientGlyph } from "./dashboard-chrome";
+import { glyphColorForKey } from "./dashboard-glyph";
 import { defaultLLMConfig, agentRequiredFieldsComplete } from "../agents/agent-domain";
 import {
   fileContentUrl,
@@ -195,28 +199,23 @@ export function AgentDashboard({
   return (
     <section className="scrollbar-slim min-w-0 flex-1 overflow-y-auto px-4 py-5">
       <div className="mx-auto flex max-w-6xl flex-col gap-4">
-        <div className="flex flex-col justify-between gap-3 border-b border-forge-line pb-4 sm:flex-row sm:items-center">
-          <div>
-            <p className="text-xs uppercase text-forge-muted">Agentes</p>
-            <h3 className="text-xl font-semibold">
-              {editingAgentId ? agentDraft.name || "Configurar agente" : "Novo agente"}
-            </h3>
-          </div>
-          <div className="flex gap-2">
-            <Button className="h-9" onClick={onCreateAgent}>
-              <Plus size={16} />
-              Novo agente
-            </Button>
-            <Button
-              className="h-9 border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
-              onClick={onSaveAgent}
-              disabled={!formIsValid}
-              title={formIsValid ? "Salvar agente" : "Preencha os campos obrigatórios marcados com *"}
-            >
-              Salvar agente
-            </Button>
-          </div>
-        </div>
+        <DashboardSectionHeader
+          eyebrow={`agentes · ${agents.filter((agent) => agent.enabled).length} ativos`}
+          title={editingAgentId ? agentDraft.name || "Configurar agente" : "Novo agente"}
+        >
+          <Button variant="ghost" onClick={onCreateAgent}>
+            <Plus size={14} />
+            Novo agente
+          </Button>
+          <Button
+            variant="primary"
+            onClick={onSaveAgent}
+            disabled={!formIsValid}
+            title={formIsValid ? "Salvar agente" : "Preencha os campos obrigatórios marcados com *"}
+          >
+            Salvar agente
+          </Button>
+        </DashboardSectionHeader>
 
         <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)_280px]">
           <section className="space-y-2 rounded-md border border-forge-line bg-forge-panel p-3">
@@ -226,20 +225,23 @@ export function AgentDashboard({
                 <button
                   key={agent.id}
                   className={[
-                    "w-full rounded-md border px-3 py-2 text-left text-sm transition",
+                    "flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left text-sm transition",
                     agent.id === editingAgentId
                       ? "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
                       : "border-transparent text-forge-muted hover:bg-forge-hover"
                   ].join(" ")}
                   onClick={() => onSelectAgent(agent)}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="min-w-0 truncate font-medium">{agent.name}</span>
-                    {!agent.enabled && <Badge>off</Badge>}
-                  </div>
-                  <p className="mt-1 truncate text-xs text-forge-muted">
-                    {agent.llm_config?.provider_model_id ?? agent.llm_config?.provider ?? "modelo"}
-                  </p>
+                  <GradientGlyph color={glyphColorForKey(agent.id)} label={agent.name.slice(0, 1)} size={32} />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate font-medium">{agent.name}</span>
+                      {!agent.enabled && <Badge>off</Badge>}
+                    </span>
+                    <span className="mt-0.5 block truncate text-xs text-forge-muted">
+                      {agent.llm_config?.provider_model_id ?? agent.llm_config?.provider ?? "modelo"}
+                    </span>
+                  </span>
                 </button>
               ))}
             </div>
@@ -806,26 +808,20 @@ export function ProjectsDashboard({
   return (
     <section className="scrollbar-slim min-w-0 flex-1 overflow-y-auto px-4 py-5">
       <div className="mx-auto flex max-w-6xl flex-col gap-4">
-        <div className="flex flex-col justify-between gap-3 border-b border-forge-line pb-4 sm:flex-row sm:items-center">
-          <div>
-            <p className="text-xs uppercase text-forge-muted">Projetos</p>
-            <h3 className="text-xl font-semibold">{selectedProject?.name ?? "Novo projeto"}</h3>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge>max docs: 20</Badge>
-            <Button
-              className="h-9 border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
-              onClick={onSaveProject}
-            >
-              <Save size={16} />
-              {selectedProject
-                ? selectedProject.is_general
-                  ? "Atualizar contexto geral"
-                  : "Atualizar projeto"
-                : "Criar projeto"}
-            </Button>
-          </div>
-        </div>
+        <DashboardSectionHeader
+          eyebrow={`projetos · ${projects.length} no total`}
+          title={selectedProject?.name ?? "Novo projeto"}
+        >
+          <Badge>max docs: 20</Badge>
+          <Button variant="primary" onClick={onSaveProject}>
+            <Save size={14} />
+            {selectedProject
+              ? selectedProject.is_general
+                ? "Atualizar contexto geral"
+                : "Atualizar projeto"
+              : "Criar projeto"}
+          </Button>
+        </DashboardSectionHeader>
 
         {status.type !== "idle" && (
           <div
@@ -859,7 +855,7 @@ export function ProjectsDashboard({
               <button
                 type="button"
                 className={[
-                  "w-full rounded-md border px-3 py-2 text-left text-sm transition",
+                  "flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left text-sm transition",
                   selectedProject?.id === generalProject.id
                     ? "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
                     : "border-forge-line bg-forge-ink-deep hover:border-forge-amber/40"
@@ -869,13 +865,20 @@ export function ProjectsDashboard({
                   onSelectFolder(null);
                 }}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate font-medium">Contexto geral</span>
-                  <Badge>geral</Badge>
-                </div>
-                <p className="mt-1 line-clamp-2 text-xs text-forge-muted">
-                  {generalProject.description || "Chat e arquivos sem projeto específico."}
-                </p>
+                <GradientGlyph
+                  color={generalProject.color || "var(--ember)"}
+                  icon={<FolderTree size={15} />}
+                  size={32}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate font-medium">Contexto geral</span>
+                    <Badge>geral</Badge>
+                  </span>
+                  <span className="mt-0.5 block line-clamp-2 text-xs text-forge-muted">
+                    {generalProject.description || "Chat e arquivos sem projeto específico."}
+                  </span>
+                </span>
               </button>
             )}
             {customProjects.map((project) => (
@@ -883,7 +886,7 @@ export function ProjectsDashboard({
                 key={project.id}
                 type="button"
                 className={[
-                  "w-full rounded-md border px-3 py-2 text-left text-sm transition",
+                  "flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left text-sm transition",
                   selectedProject?.id === project.id
                     ? "border-forge-amber/60 bg-[color-mix(in_srgb,var(--ember)_12%,transparent)]"
                     : "border-forge-line bg-forge-ink-deep hover:border-forge-amber/40"
@@ -893,10 +896,17 @@ export function ProjectsDashboard({
                   onSelectFolder(null);
                 }}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate font-medium">{projectDisplayName(project)}</span>
-                </div>
-                <p className="mt-1 line-clamp-2 text-xs text-forge-muted">{project.description || "Sem descrição"}</p>
+                <GradientGlyph
+                  color={project.color || glyphColorForKey(project.id)}
+                  label={projectDisplayName(project).slice(0, 1)}
+                  size={32}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{projectDisplayName(project)}</span>
+                  <span className="mt-0.5 block line-clamp-2 text-xs text-forge-muted">
+                    {project.description || "Sem descrição"}
+                  </span>
+                </span>
               </button>
             ))}
           </section>
@@ -1132,11 +1142,7 @@ export function FilesDashboard({
   return (
     <section className="scrollbar-slim min-w-0 flex-1 overflow-y-auto px-4 py-5">
       <div className="mx-auto flex max-w-6xl flex-col gap-4">
-        <div className="flex flex-col justify-between gap-3 border-b border-forge-line pb-4 sm:flex-row sm:items-center">
-          <div>
-            <p className="text-xs uppercase text-forge-muted">Arquivos</p>
-            <h3 className="text-xl font-semibold">Biblioteca da plataforma</h3>
-          </div>
+        <DashboardSectionHeader eyebrow={`arquivos · ${totalFiles} itens`} title="Biblioteca da plataforma">
           <div className="flex flex-wrap gap-2">
             <div className="flex h-9 rounded-md border border-forge-line bg-forge-ink-deep p-1">
               <button
@@ -1166,8 +1172,8 @@ export function FilesDashboard({
                 Imagens
               </button>
             </div>
-            <label className="flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-forge-line bg-forge-elev px-3 text-sm font-medium transition hover:bg-forge-hover">
-              <FileText size={16} />
+            <label className="flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-[color-mix(in_srgb,var(--ember)_40%,transparent)] bg-[color-mix(in_srgb,var(--ember)_14%,var(--bg-card))] px-3.5 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-forge-amber transition hover:bg-[color-mix(in_srgb,var(--ember)_20%,var(--bg-card))]">
+              <FileText size={14} />
               <span>Enviar arquivos</span>
               <input
                 type="file"
@@ -1181,23 +1187,27 @@ export function FilesDashboard({
               />
             </label>
           </div>
-        </div>
+        </DashboardSectionHeader>
 
         <div className="grid gap-3 sm:grid-cols-3">
-          <div className="rounded-md border border-forge-line bg-forge-panel p-3">
-            <p className="text-xs uppercase text-forge-muted">Total</p>
-            <p className="mt-1 text-2xl font-semibold">{totalFiles}</p>
+          <div className="rounded-md border border-forge-line bg-forge-panel p-3.5">
+            <Mono size={10} className="block uppercase tracking-[0.12em] text-forge-faint">
+              Total
+            </Mono>
+            <p className="mt-1.5 font-display text-2xl leading-none text-forge-text">{totalFiles}</p>
           </div>
-          <div className="rounded-md border border-forge-line bg-forge-panel p-3">
-            <p className="flex items-center gap-2 text-xs uppercase text-forge-muted">
-              <ImageIcon size={14} />
+          <div className="rounded-md border border-forge-line bg-forge-panel p-3.5">
+            <Mono size={10} className="flex items-center gap-1.5 uppercase tracking-[0.12em] text-forge-faint">
+              <ImageIcon size={12} />
               Imagens
-            </p>
-            <p className="mt-1 text-2xl font-semibold">{imageFiles.length}</p>
+            </Mono>
+            <p className="mt-1.5 font-display text-2xl leading-none text-forge-text">{imageFiles.length}</p>
           </div>
-          <div className="rounded-md border border-forge-line bg-forge-panel p-3">
-            <p className="text-xs uppercase text-forge-muted">Bases</p>
-            <p className="mt-1 text-2xl font-semibold">{indexedFileIds.size}</p>
+          <div className="rounded-md border border-forge-line bg-forge-panel p-3.5">
+            <Mono size={10} className="block uppercase tracking-[0.12em] text-forge-faint">
+              Bases
+            </Mono>
+            <p className="mt-1.5 font-display text-2xl leading-none text-forge-text">{indexedFileIds.size}</p>
           </div>
         </div>
 
@@ -1345,11 +1355,14 @@ function FileDetailCard({
   return (
     <div className="rounded-md border border-forge-line bg-forge-panel p-3">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h4 className="truncate text-sm font-semibold">{platformFileLabel(platformFile)}</h4>
-          <p className="mt-1 text-xs text-forge-muted">
-            {formatBytes(platformFile.size_bytes)} · {platformFile.content_type ?? "arquivo"}
-          </p>
+        <div className="flex min-w-0 items-start gap-3">
+          <FileGlyph filename={platformFileLabel(platformFile)} />
+          <div className="min-w-0">
+            <h4 className="truncate text-sm font-semibold">{platformFileLabel(platformFile)}</h4>
+            <p className="mt-1 text-xs text-forge-muted">
+              {formatBytes(platformFile.size_bytes)} · {platformFile.content_type ?? "arquivo"}
+            </p>
+          </div>
         </div>
         <Badge>{platformFile.source}</Badge>
       </div>
@@ -1568,13 +1581,9 @@ export function KnowledgeDashboard({
   return (
     <section className="scrollbar-slim min-w-0 flex-1 overflow-y-auto px-4 py-5">
       <div className="mx-auto flex max-w-6xl flex-col gap-4">
-        <div className="flex flex-col justify-between gap-3 border-b border-forge-line pb-4 sm:flex-row sm:items-center">
-          <div>
-            <p className="text-xs uppercase text-forge-muted">Bases</p>
-            <h3 className="text-xl font-semibold">Coleções de contexto</h3>
-          </div>
+        <DashboardSectionHeader eyebrow={`bases · ${knowledgeBases.length} coleções`} title="Coleções de contexto">
           <Badge>{knowledgeBases.length} bases</Badge>
-        </div>
+        </DashboardSectionHeader>
 
         <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
           <section className="space-y-3">
@@ -1599,19 +1608,22 @@ export function KnowledgeDashboard({
                     ].join(" ")}
                     onClick={() => onSelectKnowledgeBase(knowledgeBase)}
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="flex min-w-0 items-center gap-2 font-medium">
-                        <span
-                          className="h-3 w-3 shrink-0 rounded-sm"
-                          style={{ backgroundColor: knowledgeBase.color }}
-                        />
-                        <span className="truncate">{knowledgeBase.name}</span>
+                    <div className="flex items-start gap-3">
+                      <GradientGlyph
+                        color={knowledgeBase.color || glyphColorForKey(knowledgeBase.id)}
+                        icon={<Database size={15} />}
+                        size={34}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="truncate font-medium">{knowledgeBase.name}</span>
+                          <Badge>{documentCountByBaseId.get(knowledgeBase.id) ?? 0}</Badge>
+                        </span>
+                        <span className="mt-1 block line-clamp-2 text-xs text-forge-muted">
+                          {knowledgeBase.scope || knowledgeBase.description || "Sem escopo definido."}
+                        </span>
                       </span>
-                      <Badge>{documentCountByBaseId.get(knowledgeBase.id) ?? 0}</Badge>
                     </div>
-                    <p className="mt-2 line-clamp-2 text-xs text-forge-muted">
-                      {knowledgeBase.scope || knowledgeBase.description || "Sem escopo definido."}
-                    </p>
                   </button>
                 ))}
                 {!knowledgeBases.length && <EmptyPanel text="Nenhuma base criada ainda." />}
@@ -1722,7 +1734,10 @@ export function KnowledgeDashboard({
                     className="rounded-md border border-forge-line bg-forge-ink-deep p-2 text-xs"
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="min-w-0 truncate font-medium">{platformFileLabel(platformFile)}</span>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <FileGlyph filename={platformFileLabel(platformFile)} size={22} />
+                        <span className="min-w-0 truncate font-medium">{platformFileLabel(platformFile)}</span>
+                      </span>
                       <Badge>{platformFile.source}</Badge>
                     </div>
                     <div className="mt-2 flex items-center justify-between gap-2 text-forge-muted">
