@@ -108,46 +108,11 @@ export function SearchIcon() {
   return <Library size={18} />;
 }
 
-export function PanelStack({ children }: { children: ReactNode }) {
-  return (
-    <div className="scrollbar-slim flex max-h-[calc(100vh-112px)] flex-col gap-4 overflow-y-auto pb-8 pr-1">
-      {children}
-    </div>
-  );
-}
-
-export function PanelButton({
-  active,
-  icon,
-  label,
-  onClick
-}: {
-  active: boolean;
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={[
-        "flex h-9 items-center justify-center rounded border text-forge-muted transition",
-        active ? "border-forge-amber/60 bg-[#24211b] text-forge-text" : "border-transparent hover:bg-[#181b1e]"
-      ].join(" ")}
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-    >
-      {icon}
-    </button>
-  );
-}
-
 export function PanelTitle({ icon, title }: { icon: ReactNode; title: string }) {
   return (
-    <div className="flex items-center gap-2 border-b border-forge-line pb-2 text-sm font-semibold">
-      {icon}
-      <span>{title}</span>
+    <div className="flex items-center gap-2 pt-1">
+      <span className="text-forge-amber [&_svg]:h-3.5 [&_svg]:w-3.5">{icon}</span>
+      <span className="font-mono text-[10.5px] uppercase tracking-[0.12em] text-forge-text-soft">{title}</span>
     </div>
   );
 }
