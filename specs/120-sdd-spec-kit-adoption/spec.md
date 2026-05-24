@@ -63,7 +63,7 @@ A dívida de código é documentada (DT-xxx) por domínio para execução futura
 
 - Constituição: `.specify/memory/constitution.md`
 - Estrutura: `.specify/templates/`, `.specify/scripts/`, `.claude/skills/speckit-*`
-- Catálogo: `specs/README.md`; specs `000`–`110`; arquivo `specs/_legacy/`
+- Catálogo: `specs/README.md`; specs `000`–`130`; arquivo `specs/_legacy/`
 - Docs: `docs/decisions.md` (ADR-008 governança SDD, ADR-015 storage, ADR-016 tipos OpenAPI)
 - Entrega: PR #32 (`refactor/sdd-architecture` → `master`)
 

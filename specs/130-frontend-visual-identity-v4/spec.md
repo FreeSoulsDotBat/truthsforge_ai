@@ -1,6 +1,6 @@
 # Especificação: Identidade visual v4 "Hearth" (apps/web)
 
-**Pasta da spec**: `specs/130-frontend-visual-identity-v4/` | **Criada em**: 2026-05-22 | **Status**: Rascunho (Fase 0 implementada)
+**Pasta da spec**: `specs/130-frontend-visual-identity-v4/` | **Criada em**: 2026-05-22 | **Status**: Implementada (Fases 0–7, "Hearth") — mergeada em `master` via PR #42
 
 **Entrada**: Descrição do dono do produto: "Recriar no app React `apps/web` a identidade visual v4 desenhada no Claude Design (direção Hearth: warm/cozy/serifado), com re-skin completo de todas as superfícies e reshape estrutural."
 
@@ -22,7 +22,7 @@ Como dono do produto, abro qualquer tela do `apps/web` e vejo a identidade v4: f
 2. **Dado** um campo focado, **Quando** navego por teclado, **Então** o anel de foco é ember (`var(--ember)`), não azul.
 3. **Dado** o app, **Quando** as fontes carregam, **Então** vêm self-hosted (`@fontsource`), sem `<link>` externo a `fonts.googleapis.com`.
 
-### Histórias 2–8 — Reshape e re-skin por superfície (P2+) — **Fases 1–7 (fora do escopo desta entrega)**
+### Histórias 2–8 — Reshape e re-skin por superfície (P2+) — **Fases 1–7 (implementadas)**
 
 Primitivos/átomos, Shell+Sidebar, Chat, Aside de contexto/Dock, Dashboards, Modais/forms/ImagePreview, Cards 3D (amethyst). Detalhe em `design-reference/` e no plano aprovado (ultraplan).
 
@@ -59,7 +59,7 @@ Primitivos/átomos, Shell+Sidebar, Chat, Aside de contexto/Dock, Dashboards, Mod
 ## Premissas
 
 - Direção Hearth e escopo (re-skin completo + reshape) confirmados pelo dono.
-- Fases 1–7 são entregas subsequentes (multi-PR); esta entrega cobre só a Fase 0.
+- Fases 1–7 foram entregues após a Fase 0 (multi-PR) e consolidadas em `homolog-new-ui`; o re-skin completo foi mergeado em `master` via PR #42.
 
 ## Fontes *(obrigatória neste repo)*
 

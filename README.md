@@ -8,6 +8,8 @@ Este repositorio comeca pelo ambiente de desenvolvimento local:
 - `apps/web/`: React + Vite + TypeScript, UI responsiva mobile-first.
 - `apps/desktop/`: scaffold Tauri para empacotar o frontend no Windows.
 - `apps/mobile/`: scaffold Capacitor para Android.
+- `apps/docs/`: documentacao do produto em Docusaurus.
+- `apps/fusion-addin/`: add-in Python para Fusion 360 (modelagem 3D supervisionada); nao e pacote pnpm.
 - `infra/`: Docker Compose com PostgreSQL/pgvector, Qdrant e Valkey.
 - `specs/`: specs SDD no padrao GitHub Spec Kit (pastas `NNN-<slug>`); legado congelado em `specs/_legacy/`.
 - `.specify/`: constituicao, templates e scripts do Spec Kit.
