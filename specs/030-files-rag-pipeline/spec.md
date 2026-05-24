@@ -77,7 +77,7 @@ Conteúdo sensível é classificado (manual + heurística) e rastreável antes d
 
 - **DT-001**: Classificação sensível **não implementada** (`specs/000-repo-foundation/tasks.md` item aberto). Direção: marcação manual + heurística + flag de auditoria. Esforço: M.
 - **DT-002**: Embeddings locais simples (sentence-transformers ou hash determinístico). Direção: melhorar qualidade/consistência; busca híbrida (vetorial + filtros + boost + fallback). Esforço: M.
-- **DT-003**: Fila de indexação em memória (`rag/indexing.py`, `workers/index_queue.py`) — migrar para Valkey/Redis com volume. Esforço: M. (cruza com `040-import-workers-queues`.)
+- **DT-003**: Fila de indexação em memória por default, mas já suporta Valkey/Redis via `RedisJobQueue` (`workers/job_queue.py`, opt-in por `TRUTHS_FORGE_QUEUE_BACKEND`). Direção: tornar a fila externa o default com volume. Esforço: S. (cruza com `040-import-workers-queues`.)
 
 ## Verificação de qualidade da spec
 

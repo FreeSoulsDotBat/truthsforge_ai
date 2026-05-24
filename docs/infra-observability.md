@@ -89,10 +89,9 @@ O backend le `OPENAI_API_KEY` de `backend/.env` dentro do container. Nao coloque
 O modelo padrao foi configurado no registry local como:
 
 - `id`: `openai/default-chat`
-- `provider_model_id`: pode ser editado no Model Registry; no dev store atual o default inicial e `gpt-5-mini`
-- custo input: `0.25` USD por 1M tokens
-- custo output: `2.00` USD por 1M tokens
+- `provider_model_id`: pode ser editado no Model Registry; no dev store atual o default inicial e `gpt-4o`
+- custo input/output: **nao sao semeados** pelo dev store (ficam `None`); defina-os no Model Registry (o Cost Governor exige preco antes de usar o modelo)
 
 Esses valores alimentam o Cost Governor local. O billing real continua sendo o da OpenAI.
 
-Como o credito inicial informado foi de US$20, a politica local foi ajustada para `R$100` usando a conversao simples atual do MVP: `1 USD = 5 BRL`.
+A politica local de orcamento usa `monthly_budget_brl`, com default **R$200** (`TRUTHS_FORGE_MONTHLY_BUDGET_BRL`); a conversao simples do MVP e `1 USD = 5 BRL`.

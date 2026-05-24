@@ -10,6 +10,7 @@ Este repositorio comeca pelo ambiente de desenvolvimento local:
 - `apps/mobile/`: scaffold Capacitor para Android.
 - `apps/docs/`: documentacao do produto em Docusaurus.
 - `apps/fusion-addin/`: add-in Python para Fusion 360 (modelagem 3D supervisionada); nao e pacote pnpm.
+- `packages/`: pacotes compartilhados do workspace (`types`, `ui`); espacos reservados.
 - `infra/`: Docker Compose com PostgreSQL/pgvector, Qdrant e Valkey.
 - `specs/`: specs SDD no padrao GitHub Spec Kit (pastas `NNN-<slug>`); legado congelado em `specs/_legacy/`.
 - `.specify/`: constituicao, templates e scripts do Spec Kit.
