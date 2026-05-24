@@ -66,6 +66,7 @@ from app.modeling.discovery import heuristic_assessment
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner import (
     build_edit_context_block,
+    correct_step,
     create_heuristic_plan,
     create_llm_plan,
     create_llm_plan_async,
@@ -150,15 +151,11 @@ class ModelingPlannerService:
         """
 
         effective_threshold = (
-            threshold
-            if threshold is not None
-            else settings.modeling_discovery_confidence_threshold
+            threshold if threshold is not None else settings.modeling_discovery_confidence_threshold
         )
         model = self._resolve_planner_model()
         if model is None:
-            return heuristic_assessment(
-                prompt, history, has_existing_model=has_existing_model
-            )
+            return heuristic_assessment(prompt, history, has_existing_model=has_existing_model)
         try:
             with self._tracer.record_span(
                 "discovery.assess",
@@ -210,9 +207,37 @@ class ModelingPlannerService:
             return assessment
         except Exception as exc:  # noqa: BLE001 - fallback is intentional
             self._classify_and_record_llm_error(exc, model)
-            return heuristic_assessment(
-                prompt, history, has_existing_model=has_existing_model
-            )
+            return heuristic_assessment(prompt, history, has_existing_model=has_existing_model)
+
+    def build_corrector(self, *, max_attempts: int = 5):
+        """Fase 2: corretor de passo para o ``ModelingAgentLoop``.
+
+        Resolve o modelo do planner e devolve um callable
+        ``(step, output, attempt) -> ModelingPlanStep | None`` que usa o LLM
+        (``planner.correct_step``) para corrigir o passo. Retorna ``None``
+        quando não há modelo disponível **ou** quando a correção falha — o loop
+        então esgota as iterações e reverte (RF-011).
+        """
+
+        model = self._resolve_planner_model()
+        if model is None:
+            return None
+
+        def corrector(step: Any, output: dict[str, Any], attempt: int) -> Any:
+            try:
+                return correct_step(
+                    step,
+                    output,
+                    attempt,
+                    gateway=self.gateway,
+                    model=model,
+                    max_attempts=max_attempts,
+                )
+            except Exception as exc:  # noqa: BLE001 - falha de correção não estoura
+                self._classify_and_record_llm_error(exc, model)
+                return None
+
+        return corrector
 
     # ------------------------------------------------------------------
     # internals

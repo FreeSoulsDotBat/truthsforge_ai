@@ -7,6 +7,7 @@ de ``planner.build_correction_context`` e ``tool_schemas``.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app.core.contracts import (
@@ -20,7 +21,7 @@ from app.core.contracts import (
 from app.modeling import tool_schemas
 from app.modeling.agent_loop import MAX_CORRECTION_ITERATIONS, ModelingAgentLoop
 from app.modeling.executor import _StepOutcome
-from app.modeling.planner import build_correction_context
+from app.modeling.planner import build_correction_context, correct_step
 
 # --------------------------------------------------------------------------- doubles
 
@@ -230,3 +231,55 @@ def test_tool_schemas_unknown_tool_falls_back_to_registry() -> None:
     rendered = tool_schemas.render_tool_schema("fusion.add_cylinder")
     assert "fusion.add_cylinder" in rendered
     assert tool_schemas.tool_schema("fusion.add_cylinder") is None
+
+
+# --------------------------------------------------------------------------- wiring
+
+
+class _FakeGateway:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        self.calls = 0
+
+    async def generate_structured(self, *, model, messages, schema_name, schema):
+        self.calls += 1
+        return self.payload
+
+
+def test_correct_step_uses_llm_to_fix_step() -> None:
+    gateway = _FakeGateway(
+        {"tool_name": "fusion.hole", "input_json": json.dumps({"diameter_mm": 6, "_fixed": True})}
+    )
+    step = _step(2, "fusion.hole", diameter_mm=99)
+    output = {"ok": False, "error_code": "fusion.boom", "message": "falhou"}
+
+    fixed = correct_step(step, output, 1, gateway=gateway, model=object())
+
+    assert gateway.calls == 1
+    assert fixed.tool_name == "fusion.hole"
+    assert fixed.input_json.get("_fixed") is True
+    assert fixed.status is ModelingStepStatus.approved
+    assert fixed.error is None
+
+
+def test_orchestrator_run_execution_uses_loop_when_flag_on(monkeypatch) -> None:
+    from app.core.config import settings
+    from app.modeling.chat_orchestrator import ModelingChatOrchestrator
+
+    monkeypatch.setattr(settings, "modeling_agentic_loop_enabled", True)
+    store = _FakeStore()
+    executor = _ScriptedExecutor(store, decide=lambda step: True)
+
+    class _FakePlanner:
+        def build_corrector(self, **_kwargs):
+            return None  # sem corretor; o loop ainda executa fim-a-fim
+
+    orchestrator = ModelingChatOrchestrator(store=store, planner=_FakePlanner(), executor=executor)
+    result = orchestrator._run_execution(_plan(_step(1, "fusion.create_sketch")))
+
+    assert result.plan.status is ModelingPlanStatus.completed
+    # O caminho do loop emite o audit específico (prova que não usou o executor linear).
+    assert any(
+        getattr(event, "event_type", None) == "modeling.agent_loop_executed"
+        for event in store.audits
+    )

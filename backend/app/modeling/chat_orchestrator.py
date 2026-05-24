@@ -37,6 +37,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.config import settings
 from app.core.contracts import (
     AuditEvent,
     ChatModelingStage,
@@ -53,6 +54,7 @@ from app.core.contracts import (
     ModelingTraceSource,
     now_utc,
 )
+from app.modeling.agent_loop import ModelingAgentLoop
 from app.modeling.chat_state import (
     ChatModelingEvent,
     transition,
@@ -97,6 +99,24 @@ class ModelingChatOrchestrator:
         # store pode não ter ``record_trace_events_bulk``; o tracer aceita
         # ``None`` e vira no-op nesse caso.
         self._tracer = get_tracer(store if hasattr(store, "record_trace_events_bulk") else None)
+
+    # ------------------------------------------------------------------
+    # execution backend (linear executor × loop agêntico)
+    # ------------------------------------------------------------------
+
+    def _run_execution(self, plan: ModelingPlan) -> ModelingExecutionResult:
+        """Executa um plano aprovado.
+
+        Quando ``settings.modeling_agentic_loop_enabled`` está ligado (Fase 2),
+        usa o ``ModelingAgentLoop`` (executa→inspeciona→corrige, teto 5,
+        rollback ao esgotar) com o corretor LLM do planner. Caso contrário, o
+        executor linear de sempre. Default OFF até o gate do dono no Fusion.
+        """
+
+        if settings.modeling_agentic_loop_enabled:
+            loop = ModelingAgentLoop(self.executor, corrector=self.planner.build_corrector())
+            return loop.run(plan)
+        return self.executor.execute_plan(plan)
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -261,7 +281,7 @@ class ModelingChatOrchestrator:
             extra={"plan_id": plan_id},
         )
 
-        execution = self.executor.execute_plan(approved_plan)
+        execution = self._run_execution(approved_plan)
         outcome_event = (
             ChatModelingEvent.EXECUTION_FAILED
             if execution.plan.status == ModelingPlanStatus.failed
@@ -399,7 +419,7 @@ class ModelingChatOrchestrator:
                 extra={"plan_id": plan_id},
             )
 
-        execution = self.executor.execute_plan(plan)
+        execution = self._run_execution(plan)
 
         if chat.modeling_stage is ChatModelingStage.executing:
             outcome_event = (
@@ -563,7 +583,7 @@ class ModelingChatOrchestrator:
                 reason="edit_auto_approved",
             ),
         )
-        execution = self.executor.execute_plan(approved)
+        execution = self._run_execution(approved)
 
         updated = self._set_stage(
             chat,
@@ -596,7 +616,7 @@ class ModelingChatOrchestrator:
                 reason="edit_high_risk_approved",
             ),
         )
-        execution = self.executor.execute_plan(approved)
+        execution = self._run_execution(approved)
         updated = self._set_stage(
             chat,
             ChatModelingEvent.EDIT_HIGH_RISK_APPROVED,

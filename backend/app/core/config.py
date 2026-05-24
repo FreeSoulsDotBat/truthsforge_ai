@@ -111,6 +111,16 @@ class Settings(BaseModel):
             "TRUTHS_FORGE_MCP_SERVER_URL", "http://127.0.0.1:8787/mcp"
         )
     )
+    # Loop agêntico de auto-correção (Fase 2, RF-010/011). Quando ``true``, a
+    # execução do plano passa pelo ModelingAgentLoop (executa→inspeciona→corrige,
+    # teto 5, rollback ao esgotar) em vez do executor linear. Default OFF até o
+    # gate do dono no Fusion real (corretor LLM e read-back dependem do Fusion).
+    modeling_agentic_loop_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_AGENTIC_LOOP_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",

@@ -441,6 +441,111 @@ async def create_llm_plan_async(
     return _plan_from_llm_payload(payload, parsed)
 
 
+# Schema do corretor de passo (Fase 2): a LLM devolve SÓ o passo corrigido.
+CORRECTED_STEP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["tool_name", "input_json"],
+    "properties": {
+        "tool_name": {"type": "string", "enum": list(PLANNER_TOOLSET)},
+        # input_json JSON-encoded como string (mesma convenção do plano).
+        "input_json": {"type": "string"},
+    },
+}
+
+
+def _correction_messages(
+    step: ModelingPlanStep,
+    output: dict[str, Any],
+    attempt: int,
+    max_attempts: int,
+    verification: dict[str, Any] | None,
+) -> list[dict[str, str]]:
+    from app.modeling import tool_schemas
+
+    context = build_correction_context(
+        step, output, attempt=attempt, max_attempts=max_attempts, verification=verification
+    )
+    schema_block = tool_schemas.render_tool_schema(step.tool_name)
+    system = (
+        "Você é um motor de modelagem 3D. UM passo do plano falhou. Produza a "
+        "versão CORRIGIDA somente desse passo, com a MESMA intenção, ajustando "
+        "parâmetros/seleção para resolver o erro. Não recrie o modelo nem "
+        "adicione passos. Responda apenas com o passo corrigido."
+    )
+    user = f"{context}\n\nSchema da tool:\n{schema_block}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _corrected_step_from_payload(
+    step: ModelingPlanStep, parsed: dict[str, Any]
+) -> ModelingPlanStep:
+    tool_name = str(parsed.get("tool_name") or step.tool_name)
+    input_json = _decode_input_json(parsed.get("input_json"))
+    # Reseta o estado de execução; o passo corrigido será re-executado.
+    return step.model_copy(
+        update={
+            "tool_name": tool_name,
+            "input_json": input_json,
+            "status": ModelingStepStatus.approved,
+            "error": None,
+            "output_json": {},
+        }
+    )
+
+
+async def correct_step_async(
+    step: ModelingPlanStep,
+    output: dict[str, Any],
+    attempt: int,
+    *,
+    gateway: LLMGateway,
+    model: ModelConfig,
+    max_attempts: int = 5,
+    verification: dict[str, Any] | None = None,
+) -> ModelingPlanStep:
+    """Fase 2: gera a versão corrigida de UM passo via LLM (Structured Outputs).
+
+    Levanta a exceção do provider; o caller (loop/planner_service) deve tratar
+    e cair para "sem correção" (None) — o loop então esgota e reverte.
+    """
+
+    messages = _correction_messages(step, output, attempt, max_attempts, verification)
+    parsed = await gateway.generate_structured(
+        model=model,
+        messages=messages,
+        schema_name="modeling_corrected_step",
+        schema=CORRECTED_STEP_SCHEMA,
+    )
+    return _corrected_step_from_payload(step, parsed)
+
+
+def correct_step(
+    step: ModelingPlanStep,
+    output: dict[str, Any],
+    attempt: int,
+    *,
+    gateway: LLMGateway,
+    model: ModelConfig,
+    max_attempts: int = 5,
+    verification: dict[str, Any] | None = None,
+) -> ModelingPlanStep:
+    """Wrapper síncrono de :func:`correct_step_async` (mesmo padrão de
+    ``create_llm_plan``)."""
+
+    return asyncio.run(
+        correct_step_async(
+            step,
+            output,
+            attempt,
+            gateway=gateway,
+            model=model,
+            max_attempts=max_attempts,
+            verification=verification,
+        )
+    )
+
+
 def build_edit_context_block(parent_plan: ModelingPlan | None) -> str | None:
     """P5: monta um bloco de contexto para o planner de EDIÇÃO.
 
