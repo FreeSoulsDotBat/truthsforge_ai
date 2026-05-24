@@ -16,6 +16,31 @@ Construir o cérebro do produto: após o usuário aprovar o plano, o motor **exe
 - `observability.py` — traces; `snapshot_service.py` — snapshots/rollback.
 - **Absorvido do fidelity-roadmap** (a integrar na branch — ver `plan.md` › Pendências): `agent_loop.py` (`ModelingAgentLoop`, teto duro 5), `tool_schemas.py` (a LLM vê args/unidades/exemplos) e `planner.build_correction_context` (edit-context + falhas). O loop **existe em andaime**, mas: (a) não está ligado ao stream; (b) só corrige em `status=failed`, sem verificação geométrica; (c) bloqueia corretivo high-risk (contra a decisão do dono).
 
+## Recorte do trabalho (decidido com o dono, 2026-05-24)
+
+A Fase 2 mistura partes que **não dependem do Fusion real** (estruturais, validáveis em CI) com partes que **dependem** (loop real, verificação geométrica) — estas esperam a **convergência de branches** (assets do fidelity) **e** o gate da Fase 1. Sequência aprovada: começar pelo estrutural já.
+
+**Estrutural — agora (sem Fusion):**
+- **DT-007** (T2.11) — fallback JSON explícito (logar degradação `auto`→JSON). ✅ **feito** (`storage/store.py` + `test_store_fallback.py`).
+- **DT-008** (T2.12) — estado de falha/correção distinto em `chat_state`/`ChatModelingStage` (hoje `EXECUTION_FAILED→editing`, indistinguível de sucesso). _Mudança de contrato_ — ver design abaixo.
+- **DT-006** (T2.9) — promover o `ModelingChatOrchestrator` ao caminho vivo; enxugar `api/routes/chat_modeling.py`. _Refactor do caminho vivo_ — ver reconciliações abaixo.
+- **Executor (prep do loop)** — fatiar `execute_plan` e abrir um **ponto de extensão** para a correção, sem mudar comportamento (T2.3 vira plugável).
+
+**Depende de Fusion/convergência — adiado:** T2.2 (read-back), T2.3 (ligar `ModelingAgentLoop` ao stream), T2.3b (correção por divergência geométrica), T2.10 (snapshot nativo — DT-005), e o gate Nível 1.
+
+### DT-006 — reconciliações descobertas na leitura (rota × orchestrator)
+
+A promoção **não é troca mecânica**; há 2 divergências de comportamento a reconciliar para não regredir o chat:
+
+1. **Modo fluido (opt-in).** `orchestrator.propose_edit_plan` auto-executa **todo** edit não-high-risk; a rota só auto-executa quando `session.modeling_fluid_mode` está ligado (chat-flow-redesign: fluido é opt-in). → **Plano**: parametrizar a decisão de auto-exec por `fluid_mode` (passar flag ao orchestrator), preservando o gate de card quando fluido OFF.
+2. **Gate P1 de `waiting_approval`.** A rota força `plan.status = waiting_approval` para o card mostrar Aprovar/Rejeitar mesmo quando o planner marcou `approved`; `propose_plan` move só o **estágio do chat** (`planning`). → **Plano**: manter o gate de status do plano na borda (rota/serviço), usando o orchestrator para a transição de **estágio** (state machine única).
+
+Concerns de borda preservados na rota (SSE/mensagens/título/trace): a rota continua dona do streaming; o orchestrator passa a ser dono das **transições de estágio** (via `chat_state`) e dos eventos `modeling.chat.*`. `propose_plan`/`propose_edit_plan` são síncronos → chamar com `asyncio.to_thread` (como já se faz com `execute_plan`). Estratégia de teste: **paridade de comportamento** (discovery/clarificação, intent ambíguo, fluido ON/OFF, gate P1, título, erro) antes e depois.
+
+### DT-008 — design do estado de falha (proposto)
+
+Adicionar `ChatModelingStage.failed` (e evento `EXECUTION_FAILED` passando a apontar para `failed` em vez de `editing`). De `failed`: `→ editing` (usuário corrige/continua), `→ discovery` (recomeça) e `→ executing` (retry). **Atenção**: muda o teste `test_execution_failed_still_lands_in_editing` (comportamento hoje intencional) e pode afetar a UI que lê `modeling_stage`. Confirmar antes de codar.
+
 ## Decisões-chave
 
 1. **Oráculo de verificação**: cada `ModelingStep` carrega valores dimensionais **esperados**; após executar, o motor lê a geometria (bbox, volume, contagens, dimensões) via tool de read-back e compara. Divergência alimenta a correção (RF-012/013).
@@ -41,7 +66,7 @@ Construir o cérebro do produto: após o usuário aprovar o plano, o motor **exe
 
 - **T2.9 (DT-006, clean architecture)** — Consolidar o fluxo na `ModelingChatOrchestrator`; remover regra de negócio e a state machine duplicada de `api/routes/chat_modeling.py` (rota fica fina). Execução passa a ocorrer pelo chat (não por `card.approve`+`card.execute`).
 - **T2.10 (DT-005)** — Redesenhar snapshot/rollback para capturar **estado nativo do Fusion** (timeline/B-Rep), não cópia de filesystem — pré-condição do rollback de RF-011.
-- **T2.11 (DT-007)** — Persistência **explícita**: em produção, falha do Postgres não cai em JSON silenciosamente (logar/observar/erro claro); JSON só em dev/test.
+- **T2.11 (DT-007)** ✅ — Persistência **explícita**: falha do Postgres no modo `auto` não cai em JSON silenciosamente (loga a degradação); modo `postgres` re-levanta. Feito em `storage/store.py` + `test_store_fallback.py`.
 - **T2.12 (DT-008)** — Adicionar transição de **falha/rollback** distinta em `chat_state` (não tratar `EXECUTION_FAILED` igual a sucesso).
 
 ## Contratos / invariantes
