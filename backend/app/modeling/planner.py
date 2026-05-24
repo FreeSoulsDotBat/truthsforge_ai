@@ -20,6 +20,7 @@ from app.core.contracts import (
     ModelingStepStatus,
 )
 from app.llm_gateway.gateway import LLMGateway
+from app.modeling import tool_schemas
 from app.modeling.tool_registry import PLANNER_TOOLSET
 
 logger = logging.getLogger(__name__)
@@ -692,8 +693,8 @@ def _build_messages(
         "- Para PENTÁGONO/HEXÁGONO e afins use `fusion.add_polygon` (sides=5/6...).\n"
         "- Ordem típica de um corpo composto: create_sketch → add_<forma> → extrude/revolve.\n"
         "\n"
-        "Ferramentas disponíveis:\n"
-        + "\n".join(f"- {tool}" for tool in PLANNER_TOOLSET)
+        "Ferramentas disponíveis (com argumentos/unidades/exemplos quando conhecidos):\n"
+        + tool_schemas.render_tool_schemas(list(PLANNER_TOOLSET))
         + "\n\nResponda apenas em JSON conforme o schema modeling_execution_plan."
     )
     user_prompt = payload.prompt.strip()

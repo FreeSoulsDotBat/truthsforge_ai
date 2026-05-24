@@ -37,7 +37,6 @@ from app.core.contracts import (
     ModelingPlanStep,
     ModelingPrintabilityReport,
     ModelingPrintabilityRequest,
-    ModelingRiskLevel,
     ModelingSession,
     ModelingSessionStart,
     ModelingSnapshot,
@@ -61,7 +60,7 @@ from app.modeling.executor import (
 )
 from app.modeling.mcp_client import LocalMCPClient
 from app.modeling.planner_service import ModelingPlannerService
-from app.modeling.policy import apply_modeling_policy
+from app.modeling.policy import apply_modeling_policy, apply_plan_approval
 from app.modeling.printability import ModelingPrintabilityService
 from app.modeling.snapshot_service import ModelingSnapshotService
 from app.modeling.tool_registry import PLANNER_TOOLSET
@@ -71,9 +70,7 @@ class ModelingPlanNotEditable(Exception):
     """Plano não pode ser editado no estado atual (já aprovado/executado)."""
 
     def __init__(self, plan_id: str, status: ModelingPlanStatus) -> None:
-        super().__init__(
-            f"Plano {plan_id!r} não é editável no estado {status.value!r}."
-        )
+        super().__init__(f"Plano {plan_id!r} não é editável no estado {status.value!r}.")
         self.plan_id = plan_id
         self.status = status
 
@@ -113,9 +110,7 @@ class ModelingService:
             snapshots=self.snapshots,
             artifacts=self.artifacts,
         )
-        self.printability = ModelingPrintabilityService(
-            store=store, mcp_client=self.mcp_client
-        )
+        self.printability = ModelingPrintabilityService(store=store, mcp_client=self.mcp_client)
 
     # ------------------------------------------------------------------
     # capabilities & sessions
@@ -202,43 +197,20 @@ class ModelingService:
     # approval & step decisions (kept inline; mutate only the persisted plan)
     # ------------------------------------------------------------------
 
-    def approve_plan(
-        self, plan_id: str, payload: ModelingApprovalRequest
-    ) -> ModelingPlan:
+    def approve_plan(self, plan_id: str, payload: ModelingApprovalRequest) -> ModelingPlan:
+        # DT-006: mutação de aprovação centralizada em ``policy.apply_plan_approval``
+        # (fonte única compartilhada com o ModelingChatOrchestrator).
         plan = self._get_plan_or_raise(plan_id)
-        if payload.decision == ModelingApprovalDecision.reject:
-            rejected = plan.model_copy(
-                update={"status": ModelingPlanStatus.rejected, "updated_at": now_utc()}
+        result = apply_plan_approval(plan, payload)
+        self.store.upsert_modeling_plan(result)
+        if payload.decision != ModelingApprovalDecision.reject:
+            self.store.add_audit_event(
+                AuditEvent(
+                    event_type="modeling.plan_approved",
+                    metadata={"plan_id": result.id, "reason": payload.reason},
+                ),
             )
-            self.store.upsert_modeling_plan(rejected)
-            return rejected
-
-        steps = [
-            step.model_copy(
-                update={
-                    "status": ModelingStepStatus.approved
-                    if step.approval_required
-                    else step.status,
-                    "approved_at": now_utc() if step.approval_required else step.approved_at,
-                }
-            )
-            for step in plan.steps
-        ]
-        approved = plan.model_copy(
-            update={
-                "status": ModelingPlanStatus.approved,
-                "steps": steps,
-                "updated_at": now_utc(),
-            }
-        )
-        self.store.upsert_modeling_plan(approved)
-        self.store.add_audit_event(
-            AuditEvent(
-                event_type="modeling.plan_approved",
-                metadata={"plan_id": approved.id, "reason": payload.reason},
-            ),
-        )
-        return approved
+        return result
 
     def edit_plan(self, plan_id: str, payload: ModelingPlanEdit) -> ModelingPlan:
         """P4: edita um plano ANTES da aprovação (etapas e/ou rationale).
@@ -301,9 +273,7 @@ class ModelingService:
         # Mantém o gate da P1: a policy pode ter promovido para ``approved``
         # (sem high-risk); forçamos waiting_approval para o card continuar.
         if edited.status == ModelingPlanStatus.approved:
-            edited = edited.model_copy(
-                update={"status": ModelingPlanStatus.waiting_approval}
-            )
+            edited = edited.model_copy(update={"status": ModelingPlanStatus.waiting_approval})
         self.store.upsert_modeling_plan(edited)
         self.store.add_audit_event(
             AuditEvent(
@@ -313,9 +283,7 @@ class ModelingService:
         )
         return edited
 
-    def decide_step(
-        self, step_id: str, payload: ModelingApprovalRequest
-    ) -> ModelingPlan:
+    def decide_step(self, step_id: str, payload: ModelingApprovalRequest) -> ModelingPlan:
         plan = self.store.get_modeling_plan_by_step(step_id)
         if plan is None:
             raise KeyError(step_id)
@@ -388,17 +356,13 @@ class ModelingService:
     ) -> list[ModelingToolCall]:
         if not hasattr(self.store, "list_modeling_tool_calls"):
             return []
-        return self.store.list_modeling_tool_calls(
-            plan_id=plan_id, step_id=step_id, limit=limit
-        )
+        return self.store.list_modeling_tool_calls(plan_id=plan_id, step_id=step_id, limit=limit)
 
     # ------------------------------------------------------------------
     # printability (delegated)
     # ------------------------------------------------------------------
 
-    def run_printability(
-        self, payload: ModelingPrintabilityRequest
-    ) -> ModelingPrintabilityReport:
+    def run_printability(self, payload: ModelingPrintabilityRequest) -> ModelingPrintabilityReport:
         return self.printability.run(payload)
 
     def list_printability_reports(

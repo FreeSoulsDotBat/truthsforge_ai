@@ -62,6 +62,7 @@ from app.modeling.chat_state import (
 from app.modeling.executor import ModelingExecutorService
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner_service import ModelingPlannerService
+from app.modeling.policy import apply_plan_approval
 from app.modeling.tool_registry import is_high_risk
 
 logger = logging.getLogger(__name__)
@@ -687,55 +688,28 @@ class ModelingChatOrchestrator:
     def _approve_plan_record(
         self, plan: ModelingPlan, payload: ModelingApprovalRequest
     ) -> ModelingPlan:
-        """Mirror :meth:`ModelingService.approve_plan` without coupling to it.
+        """Aplica + persiste a decisão de aprovação e emite o audit chat-side.
 
-        The orchestrator owns the chat-side state machine; the
-        per-plan mutation (status + step approvals) still lives on the
-        planner/executor side. Duplicating the small block keeps the
-        boundary explicit without re-importing the facade.
+        DT-006: a mutação (status do plano + promoção dos steps) vive em
+        ``policy.apply_plan_approval`` — **fonte única** compartilhada com
+        ``ModelingService.approve_plan``. Aqui só persistimos e emitimos o
+        evento de auditoria (``modeling.plan_approved``/``_rejected``).
         """
 
-        if payload.decision == ModelingApprovalDecision.reject:
-            rejected = plan.model_copy(
-                update={"status": ModelingPlanStatus.rejected, "updated_at": now_utc()}
-            )
-            self.store.upsert_modeling_plan(rejected)
-            self.store.add_audit_event(
-                AuditEvent(
-                    event_type="modeling.plan_rejected",
-                    metadata={"plan_id": rejected.id, "reason": payload.reason},
-                ),
-            )
-            return rejected
-
-        steps = []
-        for step in plan.steps:
-            if step.approval_required:
-                steps.append(
-                    step.model_copy(
-                        update={
-                            "status": _next_step_status_after_approval(step.status),
-                            "approved_at": now_utc(),
-                        }
-                    )
-                )
-            else:
-                steps.append(step)
-        approved = plan.model_copy(
-            update={
-                "status": ModelingPlanStatus.approved,
-                "steps": steps,
-                "updated_at": now_utc(),
-            }
+        result = apply_plan_approval(plan, payload)
+        self.store.upsert_modeling_plan(result)
+        event_type = (
+            "modeling.plan_rejected"
+            if payload.decision == ModelingApprovalDecision.reject
+            else "modeling.plan_approved"
         )
-        self.store.upsert_modeling_plan(approved)
         self.store.add_audit_event(
             AuditEvent(
-                event_type="modeling.plan_approved",
-                metadata={"plan_id": approved.id, "reason": payload.reason},
+                event_type=event_type,
+                metadata={"plan_id": result.id, "reason": payload.reason},
             ),
         )
-        return approved
+        return result
 
     def _set_stage(
         self,
@@ -771,20 +745,6 @@ class ModelingChatOrchestrator:
 # ---------------------------------------------------------------------------
 # helpers / exceptions
 # ---------------------------------------------------------------------------
-
-
-def _next_step_status_after_approval(current_status: Any) -> Any:
-    """Mirror the small subset of statuses we need from contracts.
-
-    Imported lazily to avoid a heavy circular import; the function only
-    cares about the ``waiting_approval`` → ``approved`` transition.
-    """
-
-    from app.core.contracts import ModelingStepStatus
-
-    if current_status == ModelingStepStatus.waiting_approval:
-        return ModelingStepStatus.approved
-    return current_status
 
 
 class NotAModelingChat(ValueError):

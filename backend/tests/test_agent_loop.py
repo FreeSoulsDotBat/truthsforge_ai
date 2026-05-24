@@ -283,3 +283,22 @@ def test_orchestrator_run_execution_uses_loop_when_flag_on(monkeypatch) -> None:
         getattr(event, "event_type", None) == "modeling.agent_loop_executed"
         for event in store.audits
     )
+
+
+def test_build_dimension_verifier_compares_expected_vs_measured() -> None:
+    from app.modeling.agent_loop import build_dimension_verifier
+
+    verifier = build_dimension_verifier(tolerance_mm=0.5)
+    step = _step(1, "fusion.add_box", expected_dimensions_mm={"x": 40.0, "y": 20.0})
+
+    # Medido dentro da tolerância → conforme (None).
+    assert verifier(step, {"dimensions_mm": {"x": 40.3, "y": 20.0}}) is None
+
+    # Medido fora da tolerância → divergência detalhada.
+    divergence = verifier(step, {"dimensions_mm": {"x": 30.0, "y": 20.0}})
+    assert divergence is not None
+    assert divergence["x"] == {"expected": 40.0, "measured": 30.0, "delta": -10.0}
+    assert "y" not in divergence
+
+    # Sem dados de verificação (passo sem expected/measured) → None.
+    assert verifier(_step(2, "fusion.create_sketch"), {"ok": True}) is None

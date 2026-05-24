@@ -219,10 +219,52 @@ class ModelingAgentLoop:
             logger.error("Rollback do plano %s falhou: %s", plan.id, exc, exc_info=True)
 
 
+def build_dimension_verifier(
+    *,
+    expected_key: str = "expected_dimensions_mm",
+    measured_key: str = "dimensions_mm",
+    tolerance_mm: float = 0.5,
+) -> GeometryVerifier:
+    """Builder de ``GeometryVerifier`` por comparação de dimensões (RF-012/013).
+
+    Compara as dimensões **esperadas** (declaradas no passo em
+    ``input_json[expected_key]``) com as **medidas** retornadas no output do
+    read-back (``output[measured_key]``), por chave, com tolerância em mm.
+    Retorna o dicionário de divergências (``{chave: {expected, measured, delta}}``)
+    ou ``None`` quando conforme — ou quando não há dados de verificação.
+
+    A lógica de comparação é independente do Fusion; os **valores medidos** só
+    aparecem quando uma tool de read-back roda no Fusion real (gate do dono).
+    """
+
+    def verifier(step: ModelingPlanStep, output: dict[str, Any]) -> dict[str, Any] | None:
+        expected = (step.input_json or {}).get(expected_key)
+        measured = (output or {}).get(measured_key)
+        if not isinstance(expected, dict) or not isinstance(measured, dict):
+            return None
+        divergences: dict[str, Any] = {}
+        for key, exp in expected.items():
+            meas = measured.get(key)
+            if (
+                isinstance(exp, int | float)
+                and isinstance(meas, int | float)
+                and abs(float(exp) - float(meas)) > tolerance_mm
+            ):
+                divergences[key] = {
+                    "expected": exp,
+                    "measured": meas,
+                    "delta": round(float(meas) - float(exp), 3),
+                }
+        return divergences or None
+
+    return verifier
+
+
 __all__ = [
     "ModelingAgentLoop",
     "MAX_CORRECTION_ITERATIONS",
     "StepCorrector",
     "GeometryVerifier",
     "PlanRollback",
+    "build_dimension_verifier",
 ]
