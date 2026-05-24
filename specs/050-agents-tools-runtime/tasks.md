@@ -11,8 +11,9 @@
 ## Fase 2 — Implementação (futuro; herdada do legado + dívida)
 
 - [ ] T010 [P1] [any] Implementar sandbox por projeto p/ `python.run` e `filesystem.write` (rede/timeout/limites/rollback) (DT-001)
-- [ ] T011 [P1] [any] Implementar aprovação obrigatória p/ alteração/deleção (modelo adição/alteração/deleção)
-- [ ] T012 [P1] [any] Persistir auditoria completa por tool call e rollback de tools mutáveis
+- [x] T011 [P1] [any] Implementar aprovação obrigatória p/ alteração/deleção (modelo adição/alteração/deleção) — gate implementado e testado (`tools/runtime.py:94`; `test_runtime_routes.py:98`); execução de tools mutáveis ainda stub (ver T010)
+- [x] T012a [P1] [any] Persistir auditoria completa por tool call — FEITA e testada (`tools/runtime.py:152`)
+- [ ] T012b [P1] [any] Rollback de tools mutáveis — pendente (bloqueado pelo sandbox, T010)
 - [ ] T013 [P1] [any] Especificar e implementar memória durável de JUDITE/agentes (DT-002)
 - [ ] T014 [P2] [any] Implementar workflows LangGraph com checkpoints humanos (DT-003)
 

@@ -14,7 +14,7 @@
 - [ ] T011 [P1] [any] Validar escopo RAG por projeto/agente/base com testes
 - [ ] T012 [P1] [any] Auditar documentos usados em prompts externos
 - [ ] T013 [P2] [any] Melhorar embeddings e busca híbrida (DT-002)
-- [ ] T014 [P2] [any] Migrar fila de indexação para Valkey/Redis (DT-003)
+- [ ] T014 [P2] [any] Tornar a fila de indexação externa o default — `RedisJobQueue` já implementado/testado e usado por `index_queue.py` via `create_job_queue` quando `TRUTHS_FORGE_QUEUE_BACKEND=redis`; default ainda `memory` (DT-003)
 - [ ] T015 [P2] [any] Expor filtros de sensibilidade na UI
 
 ## Notas

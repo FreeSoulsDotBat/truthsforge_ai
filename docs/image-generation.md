@@ -12,7 +12,7 @@ O atalho `Imagem` no composer troca o envio atual para `response_mode="image"` e
 ## Compatibilidade
 
 - A implementacao real existe no `OpenAIProvider` via `POST https://api.openai.com/v1/images/generations`.
-- Anthropic e Google estao no gateway para chat, mas ainda nao implementam `generate_image`; usar modelos desses provedores para imagem retorna erro de configuracao.
+- Anthropic e Google estao no gateway para chat, mas ainda nao implementam `generate_image`. O dev store chega a semear uma entrada `google/default-image` no registry, porem selecionar qualquer modelo Anthropic/Google para imagem retorna erro de configuracao (o provider nao sobrescreve `generate_image`).
 - O frontend desliga `Pesquisa OpenAI` e `Resumo oficial` quando `Imagem` e ativado, porque esses modos sao mutuamente exclusivos no contrato `ChatStreamRequest`.
 - O backend bloqueia imagem quando o modelo selecionado nao tem `ModelCapability.image_generation`.
 

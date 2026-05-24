@@ -42,7 +42,7 @@ Importação/indexação rodam como jobs com status observável e retries.
 
 ### Requisitos não funcionais
 
-- **RNF-001**: Valkey/Redis é a infraestrutura local preparada para fila/cache; workers atuais rodam em memória (ADR-004; `docs/architecture.md`).
+- **RNF-001**: Valkey/Redis é a infraestrutura local de fila/cache; os workers já suportam fila externa via `RedisJobQueue` (`workers/job_queue.py`), selecionável por `TRUTHS_FORGE_QUEUE_BACKEND` — default ainda `memory` (ADR-004; `docs/architecture.md`).
 
 ## Critérios de sucesso
 
@@ -51,7 +51,7 @@ Importação/indexação rodam como jobs com status observável e retries.
 
 ## Premissas
 
-- A fila em memória é aceitável no MVP; migração para Valkey ocorre com volume real.
+- A fila em memória é o default aceitável no MVP; a migração para Valkey já está implementada (opt-in) e vira default com volume real.
 
 ## Fontes
 
@@ -63,7 +63,7 @@ Importação/indexação rodam como jobs com status observável e retries.
 
 ## Dívida de código documentada *(não executar nesta frente)*
 
-- **DT-001**: Workers em memória (`workers/import_queue.py`, `index_queue.py`) vs Valkey/Redis preparado e não usado. Direção: persistir filas em fila externa quando o volume crescer (OCR/indexação). Esforço: M.
+- **DT-001**: `RedisJobQueue` (Valkey/Redis) já implementado e testado, mas o default ainda é `memory` (`TRUTHS_FORGE_QUEUE_BACKEND`). Direção: tornar a fila externa o default e validar em volume (OCR/indexação). Esforço: S.
 - **DT-002**: Sem fluxo automático assistido ChatGPT → bases revisadas (decisão: fora do MVP). Direção: futura spec própria se priorizado. Esforço: L.
 
 ## Verificação de qualidade da spec

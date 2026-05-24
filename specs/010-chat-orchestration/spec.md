@@ -85,8 +85,8 @@ Deep Research, geração de imagem, reasoning summary (só OpenAI) e modelagem 3
 
 ## Dívida de código documentada *(não executar nesta frente)*
 
-- **DT-001**: `backend/app/api/routes/chat.py` é um **monólito de 2433 linhas** que mistura, no route layer, orquestração de fluxo, helpers de imagem, escopo de projeto, RAG, glue de 3D e auditoria. O split "monólitos de borda" (`chat_context/chat_images/chat_modeling/chat_scope/chat_sse`) **não existe** no código. Direção: extrair um `chat/` service layer (orquestração, contexto/RAG, SSE, modos especiais) e deixar a rota fina. Esforço: L. ADR necessário? Recomendado (padrão service layer — ver `070-storage-persistence`/futuro ADR de camadas).
-- **DT-002**: `stream_chat` acessa `get_store()` direto (`chat.py:1404`), sem injeção de dependência — dificulta teste isolado. Direção: `Depends()` + service. Esforço: M.
+- **DT-001**: `backend/app/api/routes/chat.py` (**1229 linhas**) ainda concentra, no route layer, orquestração de fluxo, glue de 3D e auditoria — embora os helpers de borda **já tenham sido extraídos** (`chat_context/chat_images/chat_modeling/chat_scope/chat_sse`, importados por `chat.py`). Dívida remanescente: extrair um `backend/app/chat/` service layer (orquestração, contexto/RAG, SSE, modos especiais) e deixar a rota fina. Esforço: M. ADR necessário? Recomendado (padrão service layer — ver `070-storage-persistence`/futuro ADR de camadas).
+- **DT-002**: `stream_chat` (e outros handlers) acessam `get_store()` direto (várias chamadas, ex.: `chat.py:545`), sem injeção de dependência — dificulta teste isolado. Direção: `Depends()` + service. Esforço: M.
 - **DT-003**: glue de 3D inline em `chat.py` (`_modeling_*`, `_promote_modeling_session`) acopla o núcleo ao bounded context 3D. Direção: mover para a fronteira do contexto 3D. Esforço: M.
 
 ## Verificação de qualidade da spec

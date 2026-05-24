@@ -60,5 +60,6 @@ Ativas (`specs/NNN-<slug>/`):
 - `specs/100-mobile-desktop-shells/` — shells desktop/mobile e pareamento.
 - `specs/110-artifacts-export/` — canvas e exports.
 - `specs/120-sdd-spec-kit-adoption/` — meta: adoção do Spec Kit e governança SDD.
+- `specs/130-frontend-visual-identity-v4/` — identidade visual v4 "Hearth" do `apps/web` (sub-spec de frontend).
 
 Legado (arquivado e congelado em `specs/_legacy/`): `agents-tools`, `rag-sensitive-data`, `observability-quality`, `mobile-pairing` — migradas para `050`/`030`/`060`/`100`, respectivamente.

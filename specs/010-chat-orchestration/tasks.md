@@ -10,7 +10,7 @@
 
 ## Fase 2 — Dívida de código (futuro; não executar nesta frente)
 
-- [ ] T010 [P2] [any] Extrair service layer de `backend/app/api/routes/chat.py` → `backend/app/chat/` (orquestração, contexto/RAG, SSE, modos especiais) preservando o contrato SSE (DT-001)
+- [ ] T010 [P2] [any] Extrair service layer de `backend/app/api/routes/chat.py` → `backend/app/chat/` (orquestração, contexto/RAG, SSE, modos especiais) preservando o contrato SSE — helpers de borda (`chat_*`) já extraídos; falta o service layer (DT-001)
 - [ ] T011 [P2] [any] Injetar store via `Depends()` em vez de `get_store()` direto (DT-002)
 - [ ] T012 [P2] [any] Mover glue de 3D inline de `chat.py` para a fronteira do bounded context 3D (DT-003)
 - [ ] T013 [P2] [human] Avaliar ADR de "padrão service layer" cobrindo chat + demais domínios
