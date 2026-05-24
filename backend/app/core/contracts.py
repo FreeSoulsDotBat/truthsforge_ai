@@ -366,9 +366,13 @@ class ChatModelingStage(StrEnum):
     * ``approved``   — user approved the plan; backend will execute every
                        step (including high_risk).
     * ``executing``  — execution in progress.
-    * ``editing``    — primary plan executed; new messages produce
+    * ``editing``    — primary plan executed OK; new messages produce
                        auto-approved mini-plans (or reopen approval if a
                        step is high_risk).
+    * ``failed``     — execution failed (DT-008). Distinct from ``editing``
+                       so the agentic loop and the UI can tell a failed run
+                       from a successful one. The user can retry/edit
+                       (→ ``editing``) or start over (→ ``discovery``).
     * ``completed``  — chat is closed/archived for modeling purposes.
 
     Non-3D chats keep ``modeling_stage = None``.
@@ -379,6 +383,7 @@ class ChatModelingStage(StrEnum):
     approved = "approved"
     executing = "executing"
     editing = "editing"
+    failed = "failed"
     completed = "completed"
 
 

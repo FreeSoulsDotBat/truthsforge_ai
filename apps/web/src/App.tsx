@@ -1250,7 +1250,12 @@ function App() {
                   ...session,
                   is_modeling_3d: true,
                   modeling_software_preference: plan.software_choice,
-                  modeling_stage: plan.status === "completed" ? "editing" : "executing",
+                  modeling_stage:
+                    plan.status === "completed"
+                      ? "editing"
+                      : plan.status === "failed"
+                        ? "failed"
+                        : "executing",
                   modeling_plan_id: plan.id,
                   messages
                 };

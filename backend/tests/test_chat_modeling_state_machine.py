@@ -44,9 +44,7 @@ def test_plan_proposed_moves_discovery_to_planning() -> None:
 
 
 def test_plan_approval_chain_moves_through_approved_executing_editing() -> None:
-    after_approval = transition(
-        ChatModelingStage.planning, ChatModelingEvent.PLAN_APPROVED
-    )
+    after_approval = transition(ChatModelingStage.planning, ChatModelingEvent.PLAN_APPROVED)
     assert after_approval is ChatModelingStage.approved
 
     after_start = transition(after_approval, ChatModelingEvent.EXECUTION_STARTED)
@@ -63,12 +61,36 @@ def test_plan_rejected_returns_to_discovery() -> None:
     )
 
 
-def test_execution_failed_still_lands_in_editing() -> None:
-    """Failed execution still moves to editing so the user can retry or edit."""
+def test_execution_failed_lands_in_failed() -> None:
+    """DT-008: failed execution moves to the distinct ``failed`` stage."""
 
     assert (
         transition(ChatModelingStage.executing, ChatModelingEvent.EXECUTION_FAILED)
+        is ChatModelingStage.failed
+    )
+
+
+def test_failed_recovers_to_editing_on_successful_edit() -> None:
+    """DT-008: a successful edit/retry from ``failed`` recovers to ``editing``."""
+
+    assert (
+        transition(ChatModelingStage.failed, ChatModelingEvent.EDIT_AUTO_EXECUTED)
         is ChatModelingStage.editing
+    )
+    assert (
+        transition(ChatModelingStage.failed, ChatModelingEvent.EDIT_HIGH_RISK_APPROVED)
+        is ChatModelingStage.editing
+    )
+
+
+def test_failed_stays_failed_on_pending_high_risk_and_resets_on_reject() -> None:
+    assert (
+        transition(ChatModelingStage.failed, ChatModelingEvent.EDIT_HIGH_RISK_REQUESTED)
+        is ChatModelingStage.failed
+    )
+    assert (
+        transition(ChatModelingStage.failed, ChatModelingEvent.EDIT_HIGH_RISK_REJECTED)
+        is ChatModelingStage.discovery
     )
 
 
@@ -81,15 +103,11 @@ def test_editing_self_loops_for_auto_executed_mini_plans() -> None:
 
 def test_editing_self_loops_for_high_risk_request_and_approval() -> None:
     assert (
-        transition(
-            ChatModelingStage.editing, ChatModelingEvent.EDIT_HIGH_RISK_REQUESTED
-        )
+        transition(ChatModelingStage.editing, ChatModelingEvent.EDIT_HIGH_RISK_REQUESTED)
         is ChatModelingStage.editing
     )
     assert (
-        transition(
-            ChatModelingStage.editing, ChatModelingEvent.EDIT_HIGH_RISK_APPROVED
-        )
+        transition(ChatModelingStage.editing, ChatModelingEvent.EDIT_HIGH_RISK_APPROVED)
         is ChatModelingStage.editing
     )
 
@@ -103,9 +121,7 @@ def test_high_risk_rejection_in_editing_reopens_discovery() -> None:
 
 def test_archive_event_is_legal_from_any_stage() -> None:
     for stage in [None, *ChatModelingStage]:
-        assert transition(stage, ChatModelingEvent.CHAT_ARCHIVED) is (
-            ChatModelingStage.completed
-        )
+        assert transition(stage, ChatModelingEvent.CHAT_ARCHIVED) is (ChatModelingStage.completed)
 
 
 def test_illegal_event_raises_with_helpful_message() -> None:
@@ -117,12 +133,8 @@ def test_illegal_event_raises_with_helpful_message() -> None:
 
 
 def test_is_valid_transition_predicate_never_raises() -> None:
-    assert is_valid_transition(
-        ChatModelingStage.planning, ChatModelingEvent.PLAN_APPROVED
-    )
-    assert not is_valid_transition(
-        ChatModelingStage.discovery, ChatModelingEvent.PLAN_APPROVED
-    )
+    assert is_valid_transition(ChatModelingStage.planning, ChatModelingEvent.PLAN_APPROVED)
+    assert not is_valid_transition(ChatModelingStage.discovery, ChatModelingEvent.PLAN_APPROVED)
     # Archive event must always be valid.
     assert is_valid_transition(None, ChatModelingEvent.CHAT_ARCHIVED)
 

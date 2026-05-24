@@ -16,12 +16,21 @@ Lifecycle::
     planning         ─→ discovery     (event: PLAN_REJECTED)
     approved         ─→ executing     (event: EXECUTION_STARTED)
     executing        ─→ editing       (event: EXECUTION_COMPLETED)
-    executing        ─→ editing       (event: EXECUTION_FAILED)
+    executing        ─→ failed        (event: EXECUTION_FAILED)      [DT-008]
     editing          ─→ editing       (event: EDIT_AUTO_EXECUTED)
     editing          ─→ editing       (event: EDIT_HIGH_RISK_REQUESTED)
     editing          ─→ editing       (event: EDIT_HIGH_RISK_APPROVED)
     editing          ─→ discovery     (event: EDIT_HIGH_RISK_REJECTED)
+    failed           ─→ editing       (event: EDIT_AUTO_EXECUTED)      [DT-008]
+    failed           ─→ failed        (event: EDIT_HIGH_RISK_REQUESTED)
+    failed           ─→ editing       (event: EDIT_HIGH_RISK_APPROVED)
+    failed           ─→ discovery     (event: EDIT_HIGH_RISK_REJECTED)
     any              ─→ completed     (event: CHAT_ARCHIVED)
+
+DT-008: a failed execution lands in ``failed`` (not ``editing``) so the
+agentic loop and the UI can distinguish a failed run from a healthy one.
+The chat recovers from ``failed`` via the same edit/retry events as
+``editing`` (a successful edit moves it to ``editing``).
 
 The transitions matrix lives in :data:`_TRANSITIONS`. The orchestrator
 must call :func:`transition` and let it raise
@@ -61,9 +70,7 @@ class ChatModelingEvent(StrEnum):
 class InvalidModelingStageTransition(ValueError):
     """Raised when an event is not legal for the current stage."""
 
-    def __init__(
-        self, stage: ChatModelingStage | None, event: ChatModelingEvent
-    ) -> None:
+    def __init__(self, stage: ChatModelingStage | None, event: ChatModelingEvent) -> None:
         stage_str = stage.value if stage is not None else "<none>"
         super().__init__(
             f"Modeling chat cannot apply event {event.value!r} from stage {stage_str!r}."
@@ -85,16 +92,10 @@ _TRANSITIONS: dict[tuple[_STAGE_OR_NONE, ChatModelingEvent], ChatModelingStage] 
     (ChatModelingStage.discovery, ChatModelingEvent.CLARIFICATION_ASKED): (
         ChatModelingStage.discovery
     ),
-    (ChatModelingStage.discovery, ChatModelingEvent.PLAN_PROPOSED): (
-        ChatModelingStage.planning
-    ),
+    (ChatModelingStage.discovery, ChatModelingEvent.PLAN_PROPOSED): (ChatModelingStage.planning),
     # Planning resolves either to approval or rejection.
-    (ChatModelingStage.planning, ChatModelingEvent.PLAN_APPROVED): (
-        ChatModelingStage.approved
-    ),
-    (ChatModelingStage.planning, ChatModelingEvent.PLAN_REJECTED): (
-        ChatModelingStage.discovery
-    ),
+    (ChatModelingStage.planning, ChatModelingEvent.PLAN_APPROVED): (ChatModelingStage.approved),
+    (ChatModelingStage.planning, ChatModelingEvent.PLAN_REJECTED): (ChatModelingStage.discovery),
     # Execution lifecycle.
     (ChatModelingStage.approved, ChatModelingEvent.EXECUTION_STARTED): (
         ChatModelingStage.executing
@@ -102,13 +103,23 @@ _TRANSITIONS: dict[tuple[_STAGE_OR_NONE, ChatModelingEvent], ChatModelingStage] 
     (ChatModelingStage.executing, ChatModelingEvent.EXECUTION_COMPLETED): (
         ChatModelingStage.editing
     ),
-    (ChatModelingStage.executing, ChatModelingEvent.EXECUTION_FAILED): (
+    # DT-008: failure lands in a distinct ``failed`` stage (was ``editing``).
+    (ChatModelingStage.executing, ChatModelingEvent.EXECUTION_FAILED): (ChatModelingStage.failed),
+    # Recovery from ``failed`` mirrors the editing loop: a successful edit/
+    # retry moves to ``editing``; a pending high-risk retry stays in
+    # ``failed``; rejecting it returns to ``discovery``.
+    (ChatModelingStage.failed, ChatModelingEvent.EDIT_AUTO_EXECUTED): (ChatModelingStage.editing),
+    (ChatModelingStage.failed, ChatModelingEvent.EDIT_HIGH_RISK_REQUESTED): (
+        ChatModelingStage.failed
+    ),
+    (ChatModelingStage.failed, ChatModelingEvent.EDIT_HIGH_RISK_APPROVED): (
         ChatModelingStage.editing
+    ),
+    (ChatModelingStage.failed, ChatModelingEvent.EDIT_HIGH_RISK_REJECTED): (
+        ChatModelingStage.discovery
     ),
     # Editing loop — mini-plans either auto-execute or block on high-risk.
-    (ChatModelingStage.editing, ChatModelingEvent.EDIT_AUTO_EXECUTED): (
-        ChatModelingStage.editing
-    ),
+    (ChatModelingStage.editing, ChatModelingEvent.EDIT_AUTO_EXECUTED): (ChatModelingStage.editing),
     (ChatModelingStage.editing, ChatModelingEvent.EDIT_HIGH_RISK_REQUESTED): (
         ChatModelingStage.editing
     ),
@@ -141,9 +152,7 @@ def initial_stage(*, is_modeling_3d: bool) -> ChatModelingStage | None:
     return ChatModelingStage.discovery if is_modeling_3d else None
 
 
-def is_valid_transition(
-    stage: ChatModelingStage | None, event: ChatModelingEvent
-) -> bool:
+def is_valid_transition(stage: ChatModelingStage | None, event: ChatModelingEvent) -> bool:
     """Predicate version of :func:`transition`. Never raises."""
 
     if _is_archive(event):
@@ -151,9 +160,7 @@ def is_valid_transition(
     return (stage, event) in _TRANSITIONS
 
 
-def transition(
-    stage: ChatModelingStage | None, event: ChatModelingEvent
-) -> ChatModelingStage:
+def transition(stage: ChatModelingStage | None, event: ChatModelingEvent) -> ChatModelingStage:
     """Apply ``event`` to ``stage`` and return the next stage.
 
     Raises :class:`InvalidModelingStageTransition` when the event is not

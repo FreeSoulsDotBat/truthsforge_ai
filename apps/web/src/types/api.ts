@@ -2,7 +2,7 @@ export type ProviderName = "openai" | "anthropic" | "google";
 export type JobStatus = "pending" | "running" | "completed" | "failed";
 export type ModelingSoftware = "auto" | "blender" | "fusion";
 export type ModelingExecutionMode = "plan_only" | "approval_required" | "safe_auto";
-export type ChatModelingStage = "discovery" | "planning" | "approved" | "executing" | "editing" | "completed";
+export type ChatModelingStage = "discovery" | "planning" | "approved" | "executing" | "editing" | "failed" | "completed";
 export type ModelingPlanKind = "primary" | "edit";
 export type ModelingPlanStatus =
   | "draft"

@@ -499,7 +499,9 @@ class ModelingChatOrchestrator:
         """
 
         self._require_modeling_chat(chat)
-        if chat.modeling_stage is not ChatModelingStage.editing:
+        # DT-008: aceita edições/retry tanto de ``editing`` quanto de
+        # ``failed`` (uma execução que falhou pode ser corrigida pelo usuário).
+        if chat.modeling_stage not in (ChatModelingStage.editing, ChatModelingStage.failed):
             raise InvalidEditStage(chat.modeling_stage)
 
         edit_payload = payload.model_copy(
@@ -751,7 +753,10 @@ class InvalidEditStage(ValueError):
 
     def __init__(self, stage: ChatModelingStage | None) -> None:
         stage_str = stage.value if stage is not None else "<none>"
-        super().__init__(f"propose_edit_plan requires modeling_stage='editing', got {stage_str!r}.")
+        super().__init__(
+            f"propose_edit_plan requires modeling_stage in ('editing', 'failed'), "
+            f"got {stage_str!r}."
+        )
         self.stage = stage
 
 

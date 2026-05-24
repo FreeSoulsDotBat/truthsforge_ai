@@ -93,9 +93,7 @@ class _FakeExecutor:
     fail: bool = False
 
     def execute_plan(self, plan: ModelingPlan) -> ModelingExecutionResult:
-        status = (
-            ModelingPlanStatus.failed if self.fail else ModelingPlanStatus.completed
-        )
+        status = ModelingPlanStatus.failed if self.fail else ModelingPlanStatus.completed
         executed = [step.id for step in plan.steps]
         updated = plan.model_copy(update={"status": status})
         self.store.upsert_modeling_plan(updated)
@@ -118,9 +116,9 @@ def _make_chat(*, is_modeling_3d: bool = True, stage: Any = None) -> ChatSession
     return chat
 
 
-def _orchestrator(**kwargs: Any) -> tuple[
-    ModelingChatOrchestrator, _FakeStore, _FakePlanner, _FakeExecutor
-]:
+def _orchestrator(
+    **kwargs: Any,
+) -> tuple[ModelingChatOrchestrator, _FakeStore, _FakePlanner, _FakeExecutor]:
     store = _FakeStore()
     planner = _FakePlanner(store=store, next_steps=kwargs.get("planner_steps", []))
     executor = _FakeExecutor(store=store, fail=kwargs.get("execution_fails", False))
@@ -204,8 +202,7 @@ def test_ask_clarification_keeps_chat_in_discovery() -> None:
 
     assert updated.modeling_stage is ChatModelingStage.discovery
     assert any(
-        event.event_type == "modeling.chat.clarification_asked"
-        for event in store.audit_events
+        event.event_type == "modeling.chat.clarification_asked" for event in store.audit_events
     )
 
 
@@ -258,7 +255,7 @@ def test_approve_plan_drives_through_executing_to_editing() -> None:
     assert execution.executed_step_ids == [step.id for step in plan.steps]
 
 
-def test_approve_plan_falls_into_editing_when_execution_fails() -> None:
+def test_approve_plan_falls_into_failed_when_execution_fails() -> None:
     orch, store, _, _ = _orchestrator(
         planner_steps=[_safe_step(1, "blender.create_mesh_primitive")],
         execution_fails=True,
@@ -269,7 +266,8 @@ def test_approve_plan_falls_into_editing_when_execution_fails() -> None:
 
     chat, approved_plan, _ = orch.approve_plan(chat, plan.id)
 
-    assert chat.modeling_stage is ChatModelingStage.editing  # failed but moves on
+    # DT-008: execução que falha cai no estágio distinto ``failed``.
+    assert chat.modeling_stage is ChatModelingStage.failed
     assert approved_plan.status is ModelingPlanStatus.failed
 
 
@@ -294,9 +292,7 @@ def test_reject_plan_returns_to_discovery_and_clears_plan_id() -> None:
 
 
 def test_propose_edit_plan_auto_executes_when_no_high_risk() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.editing)
     chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
     store.chats[chat.id] = chat
@@ -319,23 +315,18 @@ def test_propose_edit_plan_blocks_on_high_risk() -> None:
     chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
     store.chats[chat.id] = chat
 
-    outcome = orch.propose_edit_plan(
-        chat, payload=ModelingPlanCreate(prompt="aplicar boolean")
-    )
+    outcome = orch.propose_edit_plan(chat, payload=ModelingPlanCreate(prompt="aplicar boolean"))
 
     assert outcome.requires_approval is True
     assert outcome.execution is None
     assert outcome.chat.modeling_stage is ChatModelingStage.editing
     assert any(
-        event.event_type == "modeling.chat.edit_high_risk_requested"
-        for event in store.audit_events
+        event.event_type == "modeling.chat.edit_high_risk_requested" for event in store.audit_events
     )
 
 
 def test_propose_edit_plan_raises_outside_editing_stage() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.discovery)
     store.chats[chat.id] = chat
 
@@ -349,9 +340,7 @@ def test_approve_edit_plan_executes_and_keeps_editing_stage() -> None:
     store.chats[chat.id] = chat
     chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
     store.chats[chat.id] = chat
-    outcome = orch.propose_edit_plan(
-        chat, payload=ModelingPlanCreate(prompt="aplicar boolean")
-    )
+    outcome = orch.propose_edit_plan(chat, payload=ModelingPlanCreate(prompt="aplicar boolean"))
 
     chat, approved, execution = orch.approve_edit_plan(outcome.chat, outcome.plan.id)
 
@@ -365,9 +354,7 @@ def test_reject_edit_plan_returns_to_discovery() -> None:
     chat = _make_chat(stage=ChatModelingStage.editing)
     chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
     store.chats[chat.id] = chat
-    outcome = orch.propose_edit_plan(
-        chat, payload=ModelingPlanCreate(prompt="aplicar boolean")
-    )
+    outcome = orch.propose_edit_plan(chat, payload=ModelingPlanCreate(prompt="aplicar boolean"))
 
     chat, rejected = orch.reject_edit_plan(
         outcome.chat, outcome.plan.id, reason="prefiro outra abordagem"
@@ -383,9 +370,7 @@ def test_reject_edit_plan_returns_to_discovery() -> None:
 
 
 def test_orchestrator_rejects_non_modeling_chats() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(is_modeling_3d=False)
     store.chats[chat.id] = chat
 
@@ -401,9 +386,7 @@ def test_archive_chat_marks_completed_even_from_non_terminal_stage() -> None:
     updated = orch.archive_chat(chat)
 
     assert updated.modeling_stage is ChatModelingStage.completed
-    assert any(
-        event.event_type == "modeling.chat.archived" for event in store.audit_events
-    )
+    assert any(event.event_type == "modeling.chat.archived" for event in store.audit_events)
 
 
 def test_archive_chat_is_noop_for_non_modeling_chat() -> None:
@@ -422,9 +405,7 @@ def test_archive_chat_is_noop_for_non_modeling_chat() -> None:
 
 
 def test_approve_plan_only_advances_to_approved_without_executing() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.discovery)
     store.chats[chat.id] = chat
     chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
@@ -439,9 +420,7 @@ def test_approve_plan_only_advances_to_approved_without_executing() -> None:
 
 
 def test_execute_plan_runs_after_approve_and_lands_in_editing() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.discovery)
     store.chats[chat.id] = chat
     chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
@@ -458,9 +437,7 @@ def test_split_flow_matches_monolithic_approve_plan() -> None:
     """approve_plan_only + execute_plan must land in the same end state as the
     monolithic approve_plan (the agent-tool path)."""
 
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.discovery)
     store.chats[chat.id] = chat
     chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
@@ -473,9 +450,7 @@ def test_split_flow_matches_monolithic_approve_plan() -> None:
 
 
 def test_execute_plan_retry_in_editing_stays_editing() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.discovery)
     store.chats[chat.id] = chat
     chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
@@ -491,9 +466,7 @@ def test_execute_plan_retry_in_editing_stays_editing() -> None:
 
 
 def test_reject_dispatches_to_reject_plan_in_planning() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.discovery)
     store.chats[chat.id] = chat
     chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
@@ -509,9 +482,7 @@ def test_reject_dispatches_to_reject_edit_plan_in_editing() -> None:
     chat = _make_chat(stage=ChatModelingStage.editing)
     chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
     store.chats[chat.id] = chat
-    outcome = orch.propose_edit_plan(
-        chat, payload=ModelingPlanCreate(prompt="aplicar boolean")
-    )
+    outcome = orch.propose_edit_plan(chat, payload=ModelingPlanCreate(prompt="aplicar boolean"))
 
     chat, rejected = orch.reject(outcome.chat, outcome.plan.id, reason="não")
 
