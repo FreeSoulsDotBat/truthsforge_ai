@@ -53,9 +53,10 @@ Adicionar `ChatModelingStage.failed` (e evento `EXECUTION_FAILED` passando a apo
 
 - **T2.1** — Estender o contrato de `ModelingStep`/plano com **geometria esperada** por passo (dimensões/contagens/bbox quando aplicável).
 - **T2.2** — Implementar tool de **read-back geométrico** (query de bbox/volume/contagens/dimensões) exposta pelo servidor MCP. _(dependente do adapter; validada no gate)_
-- **T2.3** — Partir do `ModelingAgentLoop` (`agent_loop.py`) absorvido: **ligá-lo ao stream** após a aprovação (item pendente do fidelity), com término explícito e rollback ao esgotar; manter teto 5.
-- **T2.3b** — **Estender `_needs_correction`**: disparar correção também em **divergência geométrica** (read-back esperado × medido), não só em `status=failed`.
-- **T2.3c** — Adotar `tool_schemas.py` no planner (a LLM recebe args/unidades/exemplos canônicos) — pré-requisito de fidelidade.
+- **T2.3** ✅ (núcleo) — `agent_loop.py` (`ModelingAgentLoop`) **implementado do zero** (os assets do fidelity não existiam — ver convergência): teto 5, término explícito, rollback ao esgotar (RF-011), plugando na costura `_execute_single_step`; corretor/verifier/rollback **injetáveis**. Testado com mock (sucesso, corrige-e-passa, esgota+rollback, divergência). **Pendente**: ligar ao stream (flag `modeling_agentic_loop_enabled` + orchestrator) e o **corretor LLM** (qualidade só no gate do Fusion).
+- **T2.3b** ✅ (estrutura) — `_needs_correction` dispara em `status=failed` **e** em divergência via `verifier` injetável (read-back esperado × medido). O read-back real depende do Fusion (gate).
+- **T2.3c** ✅ — `tool_schemas.py` criado (args/unidades mm/exemplos canônicos por tool + render). **Pendente**: injetar no prompt do planner (`_build_messages`).
+- **T2.3d** ✅ — `planner.build_correction_context` implementado (erro + args + verificação → contexto de correção da LLM).
 - **T2.4** — Garantir **execução fim-a-fim sem pausa** após aprovação; aprovação única cobrindo high-risk, **inclusive deltas corretivos** (ajustar `agent_loop` para não bloquear corretivo high-risk — DT-010, decisão do dono).
 - **T2.5** — **Persistência** do histórico de modelagem (esquema Postgres + fallback JSON; impacto em `postgres`/`json`/`auto` explicitado).
 - **T2.6** — **Observabilidade**: trace por passo + relatório de verificação na UI; superfície de logs legível ao dono.

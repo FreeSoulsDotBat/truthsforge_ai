@@ -1,0 +1,228 @@
+"""Loop agêntico de execução com auto-correção (Fase 2 — RF-008/010/011).
+
+Após a aprovação, o motor executa o plano **do início ao fim, sem pausar**; para
+cada passo roda um loop ``executa → inspeciona → corrige`` com **teto de 5
+iterações**. Em falha recuperável (erro de tool ou — quando há read-back —
+divergência geométrica), pede uma correção ao ``corrector`` e re-executa o MESMO
+passo. Ao **esgotar** as iterações, PARA, reverte ao último estado seguro
+(rollback) e reporta a falha (RF-011).
+
+Pluga na costura ``ModelingExecutorService._execute_single_step``. Injeções:
+- ``corrector(step, output, attempt) -> ModelingPlanStep | None`` — produz o
+  passo corrigido (em produção: planner LLM via ``build_correction_context``).
+- ``verifier(step, output) -> dict | None`` — verificação geométrica (read-back
+  esperado × medido). Só roda com o Fusion real (gate do dono); sem ela, a
+  correção dispara apenas em falha de tool.
+- ``rollback(plan) -> None`` — reversão ao estado seguro (DT-005: nativo do
+  Fusion, pendente do gate; aqui é best-effort/injetável).
+
+DT-010: o delta corretivo high-risk **não** bloqueia — a aprovação do plano já
+cobre a correção; o loop não pausa para aprovar a correção.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from typing import Any
+
+from app.core.contracts import (
+    AuditEvent,
+    ModelingExecutionResult,
+    ModelingPlan,
+    ModelingPlanStatus,
+    ModelingPlanStep,
+    ModelingStepStatus,
+    ModelingTraceLevel,
+    ModelingTraceSource,
+    now_utc,
+)
+from app.modeling.executor import ModelingExecutorService
+from app.modeling.observability import current_trace_id
+
+logger = logging.getLogger(__name__)
+
+MAX_CORRECTION_ITERATIONS = 5
+
+StepCorrector = Callable[[ModelingPlanStep, dict[str, Any], int], ModelingPlanStep | None]
+GeometryVerifier = Callable[[ModelingPlanStep, dict[str, Any]], dict[str, Any] | None]
+PlanRollback = Callable[[ModelingPlan], None]
+
+
+class ModelingAgentLoop:
+    """Execução autônoma fim-a-fim com loop de auto-correção por passo."""
+
+    def __init__(
+        self,
+        executor: ModelingExecutorService,
+        *,
+        corrector: StepCorrector | None = None,
+        verifier: GeometryVerifier | None = None,
+        rollback: PlanRollback | None = None,
+        max_iterations: int = MAX_CORRECTION_ITERATIONS,
+    ) -> None:
+        self.executor = executor
+        self.corrector = corrector
+        self.verifier = verifier
+        self.rollback = rollback
+        self.max_iterations = max(1, max_iterations)
+        # Reusa o tracer do executor (mesma sink/trace ativo).
+        self._tracer = executor._tracer
+
+    def run(self, plan: ModelingPlan) -> ModelingExecutionResult:
+        if plan.status == ModelingPlanStatus.draft:
+            return ModelingExecutionResult(
+                plan=plan,
+                executed_step_ids=[],
+                blocked_step_ids=[step.id for step in plan.steps],
+                events=["Plano em modo planejamento; aprove antes de executar."],
+                tool_call_ids=[],
+            )
+
+        executed_step_ids: list[str] = []
+        blocked_step_ids: list[str] = []
+        events: list[str] = []
+        tool_call_ids: list[str] = []
+        next_steps: list[ModelingPlanStep] = []
+        aborted = False
+
+        for step in plan.steps:
+            if aborted:
+                # RF-011: após esgotar a correção de um passo, o motor PARA;
+                # os passos seguintes ficam bloqueados (estado consistente).
+                blocked_step_ids.append(step.id)
+                next_steps.append(step)
+                continue
+            if step.error:
+                blocked_step_ids.append(step.id)
+                next_steps.append(step)
+                continue
+            if step.approval_required and step.status != ModelingStepStatus.approved:
+                blocked_step_ids.append(step.id)
+                next_steps.append(step)
+                continue
+
+            current = step
+            outcome = self.executor._execute_single_step(current, plan=plan)
+            attempt = 0
+            while self._needs_correction(current, outcome) and attempt < self.max_iterations:
+                attempt += 1
+                self._tracer.record(
+                    "agent_loop.correction_attempt",
+                    source=ModelingTraceSource.backend,
+                    level=ModelingTraceLevel.warn,
+                    message=f"Step {current.seq}: auto-correção {attempt}/{self.max_iterations}",
+                    payload={
+                        "step_id": step.id,
+                        "tool_name": current.tool_name,
+                        "error_code": outcome.output.get("error_code"),
+                    },
+                    plan_id=plan.id,
+                )
+                corrected = (
+                    self.corrector(current, outcome.output, attempt) if self.corrector else None
+                )
+                if corrected is None:
+                    break
+                current = corrected
+                outcome = self.executor._execute_single_step(current, plan=plan)
+
+            executed_step_ids.append(step.id)
+            suffix = f" (após {attempt} correção(ões))" if attempt else ""
+            events.append(outcome.event + suffix)
+            if outcome.tool_call_id is not None:
+                tool_call_ids.append(outcome.tool_call_id)
+            next_steps.append(outcome.step)
+
+            if self._needs_correction(current, outcome):
+                # Esgotou as iterações sem sucesso → PARA + rollback (RF-011).
+                blocked_step_ids.append(step.id)
+                aborted = True
+                self._tracer.record(
+                    "agent_loop.exhausted",
+                    source=ModelingTraceSource.backend,
+                    level=ModelingTraceLevel.error,
+                    message=(
+                        f"Step {step.seq} esgotou {self.max_iterations} correções; "
+                        "revertendo e parando."
+                    ),
+                    payload={"step_id": step.id, "tool_name": current.tool_name},
+                    plan_id=plan.id,
+                )
+                self._do_rollback(plan)
+
+        has_failed_step = any(step.status == ModelingStepStatus.failed for step in next_steps)
+        if has_failed_step:
+            status = ModelingPlanStatus.failed
+        elif blocked_step_ids:
+            status = ModelingPlanStatus.running
+        else:
+            status = ModelingPlanStatus.completed
+
+        updated = plan.model_copy(
+            update={"steps": next_steps, "status": status, "updated_at": now_utc()}
+        )
+        self.executor.store.upsert_modeling_plan(updated)
+        self.executor.store.add_audit_event(
+            AuditEvent(
+                event_type="modeling.agent_loop_executed",
+                metadata={
+                    "plan_id": updated.id,
+                    "executed_step_ids": executed_step_ids,
+                    "blocked_step_ids": blocked_step_ids,
+                    "tool_call_ids": tool_call_ids,
+                    "aborted": aborted,
+                },
+                trace_id=current_trace_id(),
+            ),
+        )
+        self._tracer.flush(current_trace_id())
+        return ModelingExecutionResult(
+            plan=updated,
+            executed_step_ids=executed_step_ids,
+            blocked_step_ids=blocked_step_ids,
+            events=events,
+            tool_call_ids=tool_call_ids,
+        )
+
+    # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+
+    def _needs_correction(self, step: ModelingPlanStep, outcome: Any) -> bool:
+        if not outcome.ok:
+            return True
+        # Verificação geométrica (read-back esperado × medido). Só quando
+        # injetada — depende do Fusion real (gate do dono).
+        if self.verifier is not None:
+            divergence = self.verifier(step, outcome.output)
+            if divergence:
+                return True
+        return False
+
+    def _do_rollback(self, plan: ModelingPlan) -> None:
+        if self.rollback is None:
+            # Rollback nativo do Fusion ainda não disponível (DT-005, pendente
+            # do gate). Registra a intenção para auditoria/observabilidade.
+            self._tracer.record(
+                "agent_loop.rollback_skipped",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.warn,
+                message="Rollback solicitado mas nenhum mecanismo de reversão injetado.",
+                payload={"plan_id": plan.id},
+                plan_id=plan.id,
+            )
+            return
+        try:
+            self.rollback(plan)
+        except Exception as exc:  # noqa: BLE001 - rollback é best-effort
+            logger.error("Rollback do plano %s falhou: %s", plan.id, exc, exc_info=True)
+
+
+__all__ = [
+    "ModelingAgentLoop",
+    "MAX_CORRECTION_ITERATIONS",
+    "StepCorrector",
+    "GeometryVerifier",
+    "PlanRollback",
+]

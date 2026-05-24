@@ -473,7 +473,9 @@ def build_edit_context_block(parent_plan: ModelingPlan | None) -> str | None:
         if isinstance(bodies, list):
             for body in bodies:
                 if isinstance(body, dict) and body.get("name"):
-                    metrics_lines.append(f"- corpo '{body.get('name')}': {json.dumps(body, ensure_ascii=False)}")
+                    metrics_lines.append(
+                        f"- corpo '{body.get('name')}': {json.dumps(body, ensure_ascii=False)}"
+                    )
         metrics = output.get("metrics")
         if isinstance(metrics, dict):
             for name, data in metrics.items():
@@ -493,6 +495,53 @@ def build_edit_context_block(parent_plan: ModelingPlan | None) -> str | None:
         block.extend(["", "Métricas conhecidas dos corpos atuais:", *metrics_lines[:20]])
     block.append("</modelo-atual>")
     return "\n".join(block)
+
+
+def build_correction_context(
+    step: ModelingPlanStep,
+    output: dict[str, Any],
+    *,
+    attempt: int,
+    max_attempts: int,
+    verification: dict[str, Any] | None = None,
+) -> str:
+    """Fase 2 (RF-012/013): monta o contexto de correção do loop agêntico.
+
+    Descreve o passo que falhou (tool + args), o erro retornado pelo adapter e
+    — quando há verificação geométrica (read-back esperado × medido) — a
+    divergência, instruindo a LLM a corrigir **somente este passo** (mesmo
+    objetivo, parâmetros/seleção ajustados). Não recria o modelo.
+    """
+
+    try:
+        args = json.dumps(step.input_json or {}, ensure_ascii=False)
+    except (TypeError, ValueError):
+        args = "{}"
+    error_code = output.get("error_code") or "desconhecido"
+    message = output.get("message") or output.get("error") or "sem mensagem"
+    lines = [
+        "<correcao>",
+        f"O passo {step.seq} '{step.title}' [{step.tool_name}] falhou na "
+        f"iteração {attempt}/{max_attempts} do loop de auto-correção.",
+        f"Args enviados: {args}",
+        f"Erro: {error_code} — {message}",
+    ]
+    if verification:
+        try:
+            verification_text = json.dumps(verification, ensure_ascii=False)
+        except (TypeError, ValueError):
+            verification_text = str(verification)
+        lines.append(f"Verificação geométrica (esperado × medido): {verification_text}")
+    lines.extend(
+        [
+            "Produza uma versão CORRIGIDA somente deste passo, com o MESMO "
+            "objetivo, ajustando parâmetros/seleção para resolver o problema.",
+            "Use a mesma tool quando possível; referencie corpos/sketches pelo "
+            "nome. NÃO recrie o modelo nem adicione passos não relacionados.",
+            "</correcao>",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _build_messages(
