@@ -69,7 +69,7 @@ A UI consome o SSE de `/api/chat/stream` e renateriza tokens/estados.
 
 - **DT-001**: `apps/web/src/App.tsx` é um **monólito de ~2564 linhas** (roteamento, fetch, estado, streaming, uploads, config de agentes, importação, contexto 3D). Direção: decompor por feature/hooks, espelhando `features/modeling-3d/`. Esforço: L.
 - **DT-002**: `apps/web/src/lib/api.ts` (449 linhas) é um cliente monolítico. Direção: dividir por domínio (`apiChat`, `apiFiles`, `apiModeling3d`, ...) como já feito em `features/modeling-3d/api/`. Esforço: M.
-- **DT-003**: `apps/web/src/types/api.ts` (740 linhas) é mantido **à mão** apesar de `types/openapi.json` (6681 linhas) existir e não ser usado. Direção: gerar tipos do OpenAPI (ex.: `openapi-typescript`) para eliminar drift. Esforço: M. Decidido: **ADR-016** (`docs/decisions.md`); adoção da toolchain em PR próprio.
+- **DT-003**: `apps/web/src/types/api.ts` (740 linhas) é mantido **à mão** apesar de `types/openapi.json` (6681 linhas) existir e não ser usado. Direção: gerar tipos do OpenAPI (ex.: `openapi-typescript`) para eliminar drift. Esforço: M. Decidido: **ADR-016** (`docs/decisions.md`); frente formalizada em `specs/140-frontend-type-generation/` (execução em PR próprio).
 - **DT-004**: Estado fragmentado (Zustand + muitos `useState` em App.tsx) e fetch monolítico de snapshot (`app/queries/app-data.ts`). Direção: React Query por entidade + camadas de estado claras. Esforço: L.
 
 ## Verificação de qualidade da spec
