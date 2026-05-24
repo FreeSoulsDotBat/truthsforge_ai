@@ -90,6 +90,27 @@ class Settings(BaseModel):
             "TRUTHS_FORGE_FUSION_MCP_URL", "http://127.0.0.1:27182/mcp"
         )
     )
+    # Servidor MCP standalone (ADR-017). Local-first: bind loopback por padrão,
+    # autenticação por token Bearer. O backend consome este servidor quando
+    # ``modeling_mcp_transport == "mcp_http"``. Ver
+    # specs/005-modeling-3d-fusion/micro/fase-1-mcp-standalone.md.
+    modeling_mcp_server_host: str = Field(
+        default_factory=lambda: os.getenv("TRUTHS_FORGE_MCP_SERVER_HOST", "127.0.0.1")
+    )
+    modeling_mcp_server_port: int = Field(
+        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MCP_SERVER_PORT", "8787"))
+    )
+    # Token explícito (env) tem precedência; vazio => gerado e persistido em
+    # ``modeling_dir/mcp_server_token`` por ``auth.load_or_create_token``.
+    modeling_mcp_server_token: str = Field(
+        default_factory=lambda: os.getenv("TRUTHS_FORGE_MCP_SERVER_TOKEN", "")
+    )
+    # URL que o cliente backend usa para alcançar o servidor standalone.
+    modeling_mcp_server_url: str = Field(
+        default_factory=lambda: os.getenv(
+            "TRUTHS_FORGE_MCP_SERVER_URL", "http://127.0.0.1:8787/mcp"
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",
@@ -108,8 +129,8 @@ class Settings(BaseModel):
         )
     )
 
-    # Observabilidade do módulo de modelagem 3D (ver plano em
-    # C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md).
+    # Observabilidade do módulo de modelagem 3D (ver
+    # specs/005-modeling-3d-fusion/observability-plan.md).
     # Quando ``true``, o ``ModelingTracer`` persiste eventos de trace em
     # ``modeling_trace_events``, emite logs JSON estruturados em
     # ``app.modeling.*`` e enriquece eventos SSE com ``trace_id``. Default
@@ -135,9 +156,7 @@ class Settings(BaseModel):
         default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MODELING_TRACE_RETENTION_INFO", "30"))
     )
     modeling_trace_retention_days_error: int = Field(
-        default_factory=lambda: int(
-            os.getenv("TRUTHS_FORGE_MODELING_TRACE_RETENTION_ERROR", "180")
-        )
+        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MODELING_TRACE_RETENTION_ERROR", "180"))
     )
     # Discovery agent (P2 do chat-flow-redesign): antes de propor o plano, um
     # agente LLM avalia se o pedido está claro o suficiente; se não, faz
@@ -152,9 +171,7 @@ class Settings(BaseModel):
     # Limiar de confiança: abaixo dele (ou se o LLM listar perguntas) o agente
     # pergunta em vez de propor o plano. Mais alto = pergunta mais.
     modeling_discovery_confidence_threshold: float = Field(
-        default_factory=lambda: float(
-            os.getenv("TRUTHS_FORGE_MODELING_DISCOVERY_THRESHOLD", "0.7")
-        )
+        default_factory=lambda: float(os.getenv("TRUTHS_FORGE_MODELING_DISCOVERY_THRESHOLD", "0.7"))
     )
 
     @property

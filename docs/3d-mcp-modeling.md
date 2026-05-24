@@ -286,6 +286,56 @@ com ele por socket local autenticado. A UI diferencia `transport: "http"`
 (Fusion MCP oficial), `transport: "local"` (bridge legado), `transport: "mock"`
 (adapter ausente) e erros reais.
 
+## Servidor MCP standalone (ADR-017)
+
+A partir do v4 (spec `005-modeling-3d-fusion`, Fase 1), as tools de modelagem 3D
+ficam atrás de um **servidor MCP standalone, aderente ao protocolo** (SDK MCP
+oficial), com transport **HTTP streamable + SSE** e **autenticação por token
+Bearer**, **local-first**. O backend do produto deixa de ser o único caller e
+passa a ser **um cliente** entre outros possíveis (ex.: Claude com conector
+personalizado).
+
+> Não confundir com o Fusion MCP Server da Autodesk (`27182`): aquele é
+> _upstream_ (o executor real fala com ele); este é **o nosso servidor**, que
+> expõe a allowlist `fusion.*` de forma reutilizável e autenticada. A cadeia é:
+> `cliente → servidor standalone → FusionDesktopAdapter → Fusion (27182/add-in/mock)`.
+
+**Arquitetura**
+
+- Expõe exatamente a allowlist executável (`fusion_adapter.FUSION_TOOLS`,
+  derivada do `tool_registry` de fonte única; `fusion.run_script` **nunca** é
+  exposto — RF-023).
+- `tools/call` devolve o envelope-padrão (`ok`, `transport`, `error_code`, …)
+  como `structuredContent`; o cliente backend reconstrói o `dict` sem regressão.
+- O executor real continua sendo o `FusionDesktopAdapter` (HTTP Autodesk /
+  add-in / mock), inalterado.
+
+**Como rodar** (na máquina do dono, com o Fusion aberto):
+
+```bash
+python -m app.modeling.mcp_standalone
+# Servidor MCP standalone em http://127.0.0.1:8787/mcp (token em <modeling_dir>/mcp_server_token)
+```
+
+**Autenticação (local-first, RNF-001/P1)**
+
+- Token Bearer estático: precedência para `TRUTHS_FORGE_MCP_SERVER_TOKEN`; na
+  ausência, gerado e persistido em `<modeling_dir>/mcp_server_token`.
+- **Bind loopback por padrão**; acesso remoto **apenas** via VPN/pareamento
+  (Tailscale/WireGuard). Exposição pública ingênua é proibida.
+
+**Variáveis**
+
+- `TRUTHS_FORGE_MCP_TRANSPORT=mcp_http`: faz o backend consumir o servidor
+  standalone para steps `fusion.*` (Blender, congelado, e `project_store.*`
+  seguem in-process). Outros valores: `in_process` (default) e `stdio`.
+- `TRUTHS_FORGE_MCP_SERVER_HOST` (`127.0.0.1`), `TRUTHS_FORGE_MCP_SERVER_PORT`
+  (`8787`), `TRUTHS_FORGE_MCP_SERVER_URL` (`http://127.0.0.1:8787/mcp`),
+  `TRUTHS_FORGE_MCP_SERVER_TOKEN` (vazio ⇒ token gerado/persistido).
+
+Detalhes e roadmap: ADR-017 (`docs/decisions.md`) e
+`specs/005-modeling-3d-fusion/micro/fase-1-mcp-standalone.md`.
+
 ## Endpoints
 
 ### Públicos (mantidos na v2)

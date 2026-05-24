@@ -116,7 +116,7 @@ Spec e plano: `specs/090-frontend-web-shell/` (dívida DT-003).
 
 ## ADR-017 - Servidor MCP standalone para modelagem 3D (local-first + auth)
 
-**Status: Rascunho (Fase 0 da spec 005-v4; aguardando gate do dono).** Referências: P1, P2, P6; RNF-001; supera parcialmente ADR-012 (transport/exposição).
+**Status: Aceito (gate Fase 0 aprovado em 2026-05-24; implementado na Fase 1 — `backend/app/modeling/mcp_standalone/`).** Referências: P1, P2, P6; RNF-001; supera parcialmente ADR-012 (transport/exposição).
 
 **Contexto.** Hoje o backend é **cliente** em todos os caminhos MCP da modelagem 3D e o produto **não expõe** servidor MCP algum (ver auditoria `specs/005-modeling-3d-fusion/micro/fase-0-auditoria.md` §3). Coexistem: (a) o **Autodesk Fusion MCP Server** em `127.0.0.1:27182/mcp` (HTTP JSON-RPC, caminho preferido — porém **sem autenticação**); (b) um **bridge TCP loopback legado** com token; e (c) `backend/app/modeling/mcp_servers/` — um esqueleto **stdio** que é, por desenho (`protocol.py:1-11`), um subset do MCP (só `tools/list|call|status|shutdown`, sem `initialize`/capabilities/resources/prompts, sem HTTP/SSE, sem auth). O dono quer que as operações 3D fiquem atrás de um **servidor MCP standalone reutilizável**, para que outros clientes (ex.: Claude) as usem sem reengenharia futura.
 

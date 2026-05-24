@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.core.config import settings
 from app.core.contracts import ModelingPlanStep, ModelingSoftware, ModelingTraceSource
@@ -16,6 +16,9 @@ from app.modeling.stdio_client import (
     build_fusion_command,
 )
 
+if TYPE_CHECKING:
+    from app.modeling.mcp_standalone.client import StandaloneMCPClient
+
 logger = logging.getLogger(__name__)
 
 FUSION_TOOLS = list(FUSION_ADAPTER_TOOLS)
@@ -24,7 +27,7 @@ FUSION_TOOLS = list(FUSION_ADAPTER_TOOLS)
 class LocalMCPClient:
     """Boundary in front of the local MCP adapters.
 
-    Two transport modes are supported:
+    Three transport modes are supported:
 
     - ``in_process`` (default): calls ``BlenderAdapter.execute`` directly; cheap
       and easy to test, no extra processes involved.
@@ -32,10 +35,14 @@ class LocalMCPClient:
       and talks JSON-RPC over their pipes. Same observable behaviour but lets us
       relocate the MCP servers later (e.g. ship them next to a remote Blender
       host) without touching the service layer.
+    - ``mcp_http`` (ADR-017): routes ``fusion.*`` steps through the standalone
+      MCP server (HTTP streamable + Bearer auth) via ``StandaloneMCPClient``;
+      ``blender.*`` (frozen) and ``project_store.*`` stay in-process. The backend
+      becomes one client among others (e.g. Claude).
 
     The transport is selected by ``settings.modeling_mcp_transport``
-    (``TRUTHS_FORGE_MCP_TRANSPORT=stdio``) and can also be forced via the
-    constructor for tests.
+    (``TRUTHS_FORGE_MCP_TRANSPORT=stdio|mcp_http``) and can also be forced via
+    the constructor for tests.
     """
 
     def __init__(
@@ -46,13 +53,15 @@ class LocalMCPClient:
         blender_stdio: StdioMCPClient | None = None,
         fusion_stdio: StdioMCPClient | None = None,
         fusion_adapter: FusionDesktopAdapter | None = None,
+        standalone_client: StandaloneMCPClient | None = None,
     ) -> None:
         self.blender_adapter = blender_adapter or BlenderAdapter()
         self.fusion_adapter = fusion_adapter or FusionDesktopAdapter()
         mode = (transport_mode or settings.modeling_mcp_transport or "in_process").lower()
-        self.transport_mode = mode if mode in {"in_process", "stdio"} else "in_process"
+        self.transport_mode = mode if mode in {"in_process", "stdio", "mcp_http"} else "in_process"
         self._blender_stdio = blender_stdio
         self._fusion_stdio = fusion_stdio
+        self._standalone = standalone_client
 
     # ------------------------------------------------------------------ stdio
 
@@ -65,6 +74,16 @@ class LocalMCPClient:
         if self._fusion_stdio is None:
             self._fusion_stdio = StdioMCPClient(build_fusion_command(), name="fusion_mcp")
         return self._fusion_stdio
+
+    # -------------------------------------------------------------- mcp_http
+
+    def _standalone_client(self) -> StandaloneMCPClient:
+        if self._standalone is None:
+            # Import tardio: o SDK MCP só é necessário neste transporte.
+            from app.modeling.mcp_standalone.client import StandaloneMCPClient
+
+            self._standalone = StandaloneMCPClient()
+        return self._standalone
 
     def shutdown(self) -> None:
         for client in (self._blender_stdio, self._fusion_stdio):
@@ -89,6 +108,8 @@ class LocalMCPClient:
     def transport(self, software: ModelingSoftware) -> str:
         if self.transport_mode == "stdio":
             return "stdio"
+        if self.transport_mode == "mcp_http" and software == ModelingSoftware.fusion:
+            return "mcp_http"
         if software == ModelingSoftware.blender:
             return self.blender_adapter.status().transport
         if software == ModelingSoftware.fusion:
@@ -118,8 +139,28 @@ class LocalMCPClient:
         plan_id: str | None = None,
         project_id: str | None = None,
     ) -> dict[str, Any]:
+        if self.transport_mode == "mcp_http":
+            return self._execute_step_mcp_http(step, plan_id=plan_id, project_id=project_id)
         if self.transport_mode == "stdio":
             return self._execute_step_stdio(step, plan_id=plan_id, project_id=project_id)
+        return self._execute_step_in_process(step, plan_id=plan_id, project_id=project_id)
+
+    # -------------------------------------------------------------- mcp_http
+
+    def _execute_step_mcp_http(
+        self,
+        step: ModelingPlanStep,
+        *,
+        plan_id: str | None,
+        project_id: str | None,
+    ) -> dict[str, Any]:
+        # Só ``fusion.*`` vai pelo servidor MCP standalone (ADR-017). Blender
+        # (congelado) e ``project_store.*`` (internos ao backend) seguem
+        # in-process — mesmo critério do roteamento stdio.
+        if step.tool_name.startswith("fusion."):
+            return self._standalone_client().execute_step(
+                step, plan_id=plan_id, project_id=project_id
+            )
         return self._execute_step_in_process(step, plan_id=plan_id, project_id=project_id)
 
     # ------------------------------------------------------------ in_process
@@ -192,9 +233,7 @@ class LocalMCPClient:
         try:
             result = client.tool_call(step.tool_name, arguments=step.input_json, meta=meta)
         except StdioServerError as exc:
-            logger.error(
-                "Servidor stdio '%s' falhou: %s", server_name, exc, exc_info=True
-            )
+            logger.error("Servidor stdio '%s' falhou: %s", server_name, exc, exc_info=True)
             tracer = get_tracer()
             tracer.record(
                 "mcp.transport_error",
@@ -233,9 +272,7 @@ class LocalMCPClient:
                     if server_name == "fusion_mcp"
                     else ModelingTraceSource.blender
                 )
-                get_tracer().ingest_external_events(
-                    trace_events, default_source=default_source
-                )
+                get_tracer().ingest_external_events(trace_events, default_source=default_source)
                 # Não exporta para o caller (poluiria a interface dict
                 # consumida pelo executor) — já está nos eventos
                 # persistidos via tracer.
