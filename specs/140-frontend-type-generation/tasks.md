@@ -5,7 +5,7 @@
 ## Fase 1 — Documentação (esta onda)
 
 - [x] T001 [P0] [claude-code] Criar `spec.md`/`plan.md`/`tasks.md` da frente de geração de tipos (formaliza ADR-016 / `090` DT-003)
-- [ ] T002 [P1] [any] Adicionar `specs/140-...` ao catálogo de `specs/README.md` e referenciar a partir de `090` DT-003 (retro-fit; coordenar com PR #43 que edita o catálogo)
+- [x] T002 [P1] [any] Adicionar `specs/140-...` ao catálogo de `specs/README.md` e referenciar a partir de `090` DT-003 (retro-fit pós-merge do #43)
 
 ## Fase 2 — Execução (futuro; PRs próprios, após decisão do dono)
 

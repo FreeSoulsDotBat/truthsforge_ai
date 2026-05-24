@@ -61,5 +61,6 @@ Ativas (`specs/NNN-<slug>/`):
 - `specs/110-artifacts-export/` — canvas e exports.
 - `specs/120-sdd-spec-kit-adoption/` — meta: adoção do Spec Kit e governança SDD.
 - `specs/130-frontend-visual-identity-v4/` — identidade visual v4 "Hearth" do `apps/web` (sub-spec de frontend).
+- `specs/140-frontend-type-generation/` — geração de tipos do frontend a partir do OpenAPI (ADR-016).
 
 Legado (arquivado e congelado em `specs/_legacy/`): `agents-tools`, `rag-sensitive-data`, `observability-quality`, `mobile-pairing` — migradas para `050`/`030`/`060`/`100`, respectivamente.
