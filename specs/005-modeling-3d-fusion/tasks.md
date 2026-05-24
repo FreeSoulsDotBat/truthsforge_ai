@@ -23,7 +23,7 @@ Além do gate do dono, nenhuma fase fecha sem cumprir as **Regras transversais**
 |---|---|---|---|---|
 | 0 | Specs + Auditoria | [`micro/fase-0-specs-auditoria.md`](./micro/fase-0-specs-auditoria.md) · [`micro/fase-0-auditoria.md`](./micro/fase-0-auditoria.md) | `[x]` | ✅ Dono aprovou inventário + ADR-017/018/019 (2026-05-24) |
 | 1 | Servidor MCP standalone (ADR-017) | [`micro/fase-1-mcp-standalone.md`](./micro/fase-1-mcp-standalone.md) | `[~]` | Código + CI ✅; **aguardando gate do dono**: cliente externo conecta + smoke de tools no Fusion real |
-| 2 | Núcleo agêntico (loop + verificação + persistência + observabilidade) | [`micro/fase-2-nucleo-agentico.md`](./micro/fase-2-nucleo-agentico.md) | `[~]` | Estrutural iniciado (DT-007 ✅; DT-008/DT-006/executor a seguir). Loop/verificação aguardam convergência + gate. Fluxo completo Nível 1 no Fusion real |
+| 2 | Núcleo agêntico (loop + verificação + persistência + observabilidade) | [`micro/fase-2-nucleo-agentico.md`](./micro/fase-2-nucleo-agentico.md) | `[~]` | Estrutural ✅ (DT-006/007/008 + executor); loop agêntico **implementado + fiado** atrás da flag `modeling_agentic_loop_enabled` (núcleo `06b2d2e`, fiação `9be0996`). Falta (Fusion): read-back/verificação geométrica + snapshot nativo (DT-005) + **gate Nível 1 no Fusion real** |
 | 3 | Edição manual (read-back/reconciliação) | [`micro/fase-3-edicao-manual.md`](./micro/fase-3-edicao-manual.md) | `[ ]` | Alteração manual + continuação correta |
 | 4 | Parametrização real + selectors + features de sólido | [`micro/fase-4-param-selectors-solido.md`](./micro/fase-4-param-selectors-solido.md) | `[ ]` | Nível 1 aprofundado |
 | 5 | Superfícies (NURBS) | [`micro/fase-5-superficies.md`](./micro/fase-5-superficies.md) | `[ ]` | Nível 2 |
