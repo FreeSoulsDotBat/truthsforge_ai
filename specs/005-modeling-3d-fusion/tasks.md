@@ -21,7 +21,7 @@ Além do gate do dono, nenhuma fase fecha sem cumprir as **Regras transversais**
 
 | Fase | Tema | Micro-plano | Status | Gate (dono valida no Fusion real) |
 |---|---|---|---|---|
-| 0 | Specs + Auditoria | [`micro/fase-0-specs-auditoria.md`](./micro/fase-0-specs-auditoria.md) | `[~]` | Dono revê inventário de auditoria + ADR-017/018 |
+| 0 | Specs + Auditoria | [`micro/fase-0-specs-auditoria.md`](./micro/fase-0-specs-auditoria.md) · [`micro/fase-0-auditoria.md`](./micro/fase-0-auditoria.md) | `[x]` | ✅ Dono aprovou inventário + ADR-017/018/019 (2026-05-24) |
 | 1 | Servidor MCP standalone (ADR-017) | [`micro/fase-1-mcp-standalone.md`](./micro/fase-1-mcp-standalone.md) | `[ ]` | Cliente externo conecta + smoke de tools no Fusion real |
 | 2 | Núcleo agêntico (loop + verificação + persistência + observabilidade) | [`micro/fase-2-nucleo-agentico.md`](./micro/fase-2-nucleo-agentico.md) | `[ ]` | Fluxo completo Nível 1 no Fusion real |
 | 3 | Edição manual (read-back/reconciliação) | [`micro/fase-3-edicao-manual.md`](./micro/fase-3-edicao-manual.md) | `[ ]` | Alteração manual + continuação correta |
@@ -38,14 +38,15 @@ Além do gate do dono, nenhuma fase fecha sem cumprir as **Regras transversais**
 - [x] T0.2 — Reescrever `plan.md` (macro: arquitetura-alvo + roadmap de fases + Constitution Check)
 - [x] T0.3 — Reescrever `tasks.md` (este índice vivo)
 - [x] T0.4 — Escrever `micro/fase-0-specs-auditoria.md`
-- [ ] T0.5 — Auditoria peça-a-peça do `backend/app/modeling/` (veredito confiar/reescrever)
-- [ ] T0.6 — Inventário do status real-Fusion das ~50 tools do adapter
-- [ ] T0.7 — Rascunho do ADR-017 (servidor MCP standalone, local-first + auth)
-- [ ] T0.8 — Rascunho do ADR-018 (reabrir assemblies / cobertura "todo o Design")
-- [ ] T0.9 — Rascunho do ADR-019 (fronteira de segurança do script backend-owned — DT-009)
-- [ ] T0.10 — Catalogar inconsistências de doc v2/v3→v4 (saída da varredura) para a Fase final
-- [ ] T0.11 — **Pós-merge `homolog-new-ui`→`master`**: passada de refactor de UI no plano (RNF-009)
-- [ ] T0.12 — **Gate Fase 0**: dono revê inventário + ADRs e libera a Fase 1
+- [x] T0.5 — Auditoria peça-a-peça do `backend/app/modeling/` (veredito confiar/reescrever) → [`micro/fase-0-auditoria.md`](./micro/fase-0-auditoria.md) §1
+- [x] T0.6 — Inventário do status real-Fusion das ~50 tools do adapter → `fase-0-auditoria.md` §4 (+ candidatas de smoke da Fase 1)
+- [x] T0.6b — Assets do fidelity (`agent_loop.py`/`tool_schemas.py`/`build_correction_context`) confirmados **ausentes** nesta branch; convergência de branches registrada → §5
+- [x] T0.7 — Rascunho do ADR-017 (servidor MCP standalone, local-first + auth) em `docs/decisions.md`
+- [x] T0.8 — Rascunho do ADR-018 (reabrir assemblies / cobertura "todo o Design"); `g4-assemblies-decision.md` marcado como superado
+- [x] T0.9 — Rascunho do ADR-019 (fronteira de segurança do script backend-owned — DT-009)
+- [x] T0.10 — Catalogar inconsistências de doc v2/v3→v4 para a Fase final → §6 (D1–D6; inclui caminho pessoal vazado em `docs/local-dev.md:5`)
+- [x] T0.11 — Reavaliado: **desbloqueado** (re-skin v4 mergeado na `master` via PR #42; base inclui a UI nova). Passada de refactor de `features/modeling-3d/` movida para as fases que tocam UI (2+) → §7
+- [x] T0.12 — **Gate Fase 0**: dono **aprovou** inventário + ADRs (2026-05-24) → Fase 1 liberada
 
 ## Disposição dos documentos auxiliares (herdados do v3)
 

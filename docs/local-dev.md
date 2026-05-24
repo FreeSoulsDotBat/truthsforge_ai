@@ -2,7 +2,7 @@
 
 ## Observabilidade do módulo de modelagem 3D
 
-O backend emite logs JSON estruturados e persiste eventos de trace em `modeling_trace_events` para todo o fluxo de modelagem 3D (planner → executor → MCP → Fusion/Blender). Ver o plano em `C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md`.
+O backend emite logs JSON estruturados e persiste eventos de trace em `modeling_trace_events` para todo o fluxo de modelagem 3D (planner → executor → MCP → Fusion/Blender). Ver o plano de observabilidade em `specs/005-modeling-3d-fusion/observability-plan.md`.
 
 ### Flags
 

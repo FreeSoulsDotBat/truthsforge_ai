@@ -113,3 +113,50 @@ Motivação: eliminar o drift silencioso entre backend e frontend, no qual uma m
 Por ser **mudança de toolchain de build** (nova dependência de dev + passo de geração), a adoção entra em um PR controlado próprio, com `typecheck`/`build` verdes e os tipos gerados versionados ou gerados no build. Sem dependências pesadas em runtime (P-Frontend de `AGENTS.md`).
 
 Spec e plano: `specs/090-frontend-web-shell/` (dívida DT-003).
+
+## ADR-017 - Servidor MCP standalone para modelagem 3D (local-first + auth)
+
+**Status: Rascunho (Fase 0 da spec 005-v4; aguardando gate do dono).** Referências: P1, P2, P6; RNF-001; supera parcialmente ADR-012 (transport/exposição).
+
+**Contexto.** Hoje o backend é **cliente** em todos os caminhos MCP da modelagem 3D e o produto **não expõe** servidor MCP algum (ver auditoria `specs/005-modeling-3d-fusion/micro/fase-0-auditoria.md` §3). Coexistem: (a) o **Autodesk Fusion MCP Server** em `127.0.0.1:27182/mcp` (HTTP JSON-RPC, caminho preferido — porém **sem autenticação**); (b) um **bridge TCP loopback legado** com token; e (c) `backend/app/modeling/mcp_servers/` — um esqueleto **stdio** que é, por desenho (`protocol.py:1-11`), um subset do MCP (só `tools/list|call|status|shutdown`, sem `initialize`/capabilities/resources/prompts, sem HTTP/SSE, sem auth). O dono quer que as operações 3D fiquem atrás de um **servidor MCP standalone reutilizável**, para que outros clientes (ex.: Claude) as usem sem reengenharia futura.
+
+**Decisão.** Criar um **servidor MCP standalone, MCP-compliant**, que expõe as tools Fusion já confiadas (ver inventário §4) com:
+- **Protocolo real**: `initialize`/handshake + capabilities + `tools/*` (e `resources/*`/`prompts/*` quando fizer sentido), substituindo o subset stdio interno.
+- **Transport HTTP + SSE** (streaming), aposentando o stdio in-process como caminho-alvo.
+- **Local-first (P1)**: bind em loopback por padrão; acesso remoto **apenas** via VPN/pareamento (Tailscale/WireGuard); **proibida** exposição pública ingênua.
+- **Autenticação obrigatória em toda conexão** (RNF-001), inclusive no caminho loopback HTTP — **fechando o gap de auth atual** do 27182.
+- **Backend como cliente** do servidor (evolui a boundary `LocalMCPClient`); o caminho Autodesk 27182 e o bridge TCP permanecem como **upstream/fallback** sob o servidor, não como superfície exposta.
+
+**Consequências.** `mcp_servers/_server_base.py` + `protocol.py` evoluem ou são trocados por um SDK MCP real; as cascas `fusion_server.py`/`blender_server.py` (backend servindo a si mesmo via stdio) viram becos → **reescrever** (auditoria §1); `mcp_client.py`/`stdio_client.py` adaptam-se ao novo transport (stdio tende a sair). Não há troca de stack (P2): é componente novo dentro da stack atual. Precede a **Fase 1**; gate = cliente externo conecta + smoke das tools no Fusion real.
+
+## ADR-018 - Reabrir "single-body" → cobertura "todo o Design" (assemblies)
+
+**Status: Rascunho (Fase 0; precede a Fase 8).** Referências: P8; RNF-005; **supera `specs/005-modeling-3d-fusion/g4-assemblies-decision.md`** (decisão "single-body" de 2026-05-20).
+
+**Contexto.** Em 2026-05-20, o dono escolheu **manter single-body** (Opção A) porque o caso dominante era peça única imprimível e assemblies eram over-kill (`g4-assemblies-decision.md`). O v4 redefine a cobertura-alvo como **todo o workspace Design** (sólido, superfície, sheet metal, sculpt **e** assemblies/componentes/juntas/materiais), o que reabre aquela decisão. Mudança no data model do plano exige ADR antes de virar código (RNF-005, P8).
+
+**Decisão.** Adotar **"todo o Design"** como cobertura-alvo; assemblies/componentes/juntas/materiais entram no escopo, entregues **por último (Fase 8)**, depois do núcleo estável.
+
+**Consequências (4 eixos de impacto).**
+1. **Data model do plano**: de "um design = N bodies" para **árvore de componentes** com ocorrências e juntas.
+2. **Selectors/refs**: de `body > face` para `componente > ocorrência > body > face` (estende G2.2/G2.3).
+3. **UI do card**: representar **hierarquia**, não lista linear de steps.
+4. **Printability/export por componente**: peça de assembly pode exportar separada ou montada → afeta `validate_printability` e exports (um STL por componente).
+
+As APIs de junta do Fusion são complexas e **version-sensitive** (risco G5). Por isso a Fase 8 é isolada e a última das ondas de cobertura. `g4-assemblies-decision.md` fica **superado** por este ADR.
+
+## ADR-019 - Fronteira de segurança do script Python backend-owned (`featureType:"script"`)
+
+**Status: Rascunho (Fase 0).** Referências: P6, P8; RF-023; formaliza DT-009.
+
+**Contexto.** O adapter Fusion executa cada operação **enviando um script Python completo** ao Fusion via a tool de execução da Autodesk com `featureType:"script"` (`fusion_adapter.py:475-479`; script gerado por `fusion_mcp_scripts.build_autodesk_fusion_script`, `:470`). Isso é, na prática, **execução de Python no processo do Fusion** — a maior superfície de ataque do bounded context, hoje agravada por o caminho HTTP 27182 não ter auth (ver ADR-017).
+
+**Decisão.** Formalizar que o caminho `featureType:"script"` é permitido **exclusivamente** para scripts **backend-owned, determinísticos e derivados da allowlist** — **nunca** para script fornecido pelo modelo ou pelo usuário. Controles que sustentam a decisão (já presentes, aqui tornados invariante):
+- O LLM escolhe **apenas** `tool_name` + args; o **script é gerado pelo backend** de forma determinística (`fusion_mcp_scripts.py`).
+- `fusion.run_script` fica **fora** da allowlist do adapter (`fusion_adapter.py:53-55`) e da visão do planner (`tool_registry.py:487-502`) — existe só para policy/auditoria.
+- Args entram como **JSON desserializado em runtime** (`fusion_mcp_scripts.py:73-79`), nunca interpolados como literal Python (defesa de injeção).
+- **Auditoria por tool-call** + **auth no transporte** que carrega o script (vínculo direto com ADR-017).
+
+Isso respeita **RF-023** (sem script livre/shell/destrutivo no caminho feliz) na letra e no espírito.
+
+**Consequências.** O gerador `fusion_mcp_scripts.py` permanece uma **fronteira controlada** (veredito `evoluir`: refatorar a forma — f-string de ~2,5k linhas — sem afrouxar a fronteira). Qualquer mudança que permita conteúdo **não-backend** chegar ao `featureType:"script"` é violação de nível constitucional (P6/P8). O **gap de auth do loopback** (DT-009) é defeito a corrigir na Fase 1 junto com ADR-017.

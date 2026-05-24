@@ -1,6 +1,8 @@
 # Decisão de escopo — G4: assemblies, componentes, joints e materiais
 
-> **Status:** AGUARDANDO DECISÃO DO DONO DO PRODUTO. Não implementar antes.
+> ⚠️ **SUPERADO (2026-05-24) por ADR-018** (`docs/decisions.md`). O v4 redefine a cobertura-alvo como "todo o Design" (inclui assemblies/componentes/juntas/materiais), revertendo a escolha "single-body" registrada abaixo. Mantido como histórico/insumo da Fase 8. Ver `micro/fase-0-auditoria.md` §1 e `plan.md`.
+
+> **Status (histórico):** AGUARDANDO DECISÃO DO DONO DO PRODUTO. Não implementar antes.
 > **Autor:** Claude Code, 2026-05-20.
 > **Contexto:** fase G4 da `adapter-gaps-roadmap.md`. As fases G1-G3/G5 foram
 > entregues; G4 foi deixada para o fim porque muda a arquitetura e precisa
