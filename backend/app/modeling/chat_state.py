@@ -93,6 +93,10 @@ _TRANSITIONS: dict[tuple[_STAGE_OR_NONE, ChatModelingEvent], ChatModelingStage] 
         ChatModelingStage.discovery
     ),
     (ChatModelingStage.discovery, ChatModelingEvent.PLAN_PROPOSED): (ChatModelingStage.planning),
+    # DT-006: "modelo do zero" a partir de um chat que já tinha modelo
+    # (estágio editing/failed) também propõe um plano primário → planning.
+    (ChatModelingStage.editing, ChatModelingEvent.PLAN_PROPOSED): (ChatModelingStage.planning),
+    (ChatModelingStage.failed, ChatModelingEvent.PLAN_PROPOSED): (ChatModelingStage.planning),
     # Planning resolves either to approval or rejection.
     (ChatModelingStage.planning, ChatModelingEvent.PLAN_APPROVED): (ChatModelingStage.approved),
     (ChatModelingStage.planning, ChatModelingEvent.PLAN_REJECTED): (ChatModelingStage.discovery),

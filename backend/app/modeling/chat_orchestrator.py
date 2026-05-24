@@ -151,13 +151,18 @@ class ModelingChatOrchestrator:
     # ------------------------------------------------------------------
 
     def propose_plan(
-        self, chat: ChatSession, *, payload: ModelingPlanCreate
+        self, chat: ChatSession, *, payload: ModelingPlanCreate, manage_trace: bool = True
     ) -> tuple[ChatSession, ModelingPlan]:
         """Create the primary plan for ``chat`` and move it to ``planning``.
 
         Forces ``payload.kind = primary``; the orchestrator owns this
         invariant. The chat is linked to the new plan via
         ``modeling_plan_id``.
+
+        ``manage_trace=False`` (DT-006) lets a caller that already opened a
+        trace — the live chat-stream route — drive this without the
+        orchestrator starting/closing its own; events still land on the
+        active trace.
         """
 
         self._require_modeling_chat(chat)
@@ -165,10 +170,11 @@ class ModelingChatOrchestrator:
         # Inicia trace para este request de proposta de plano. Identifica
         # a sessão de chat e o projeto pais. O plan_id ainda não existe;
         # o planner_service vai chamar ``bind_plan`` quando souber.
-        self._tracer.start_trace(
-            session_id=chat.id,
-            project_id=chat.project_id,
-        )
+        if manage_trace:
+            self._tracer.start_trace(
+                session_id=chat.id,
+                project_id=chat.project_id,
+            )
 
         primary_payload = payload.model_copy(
             update={
@@ -201,8 +207,9 @@ class ModelingChatOrchestrator:
         # Flush dos eventos buffered — garante que o frontend que ler o
         # endpoint /trace logo após receber o ``modeling_plan`` SSE veja
         # tudo já persistido. PR#28 review: close_trace para liberar buffer.
-        self._tracer.flush(current_trace_id())
-        self._tracer.close_trace()
+        if manage_trace:
+            self._tracer.flush(current_trace_id())
+            self._tracer.close_trace()
         return updated, plan
 
     def approve_plan(
@@ -487,15 +494,18 @@ class ModelingChatOrchestrator:
     # ------------------------------------------------------------------
 
     def propose_edit_plan(
-        self, chat: ChatSession, *, payload: ModelingPlanCreate
+        self, chat: ChatSession, *, payload: ModelingPlanCreate, fluid_mode: bool = True
     ) -> EditPlanOutcome:
-        """Create a mini-plan for a follow-up edit in ``editing`` stage.
+        """Create a mini-plan for a follow-up edit in ``editing``/``failed`` stage.
 
-        * No high-risk step in the plan → auto-execute immediately and
-          emit ``EDIT_AUTO_EXECUTED``.
         * Any high-risk step → leave the plan pending, emit
-          ``EDIT_HIGH_RISK_REQUESTED``; the chat card will block on
-          approval before the executor runs.
+          ``EDIT_HIGH_RISK_REQUESTED``; the chat card blocks on approval.
+        * Non-high-risk + ``fluid_mode`` → auto-execute immediately and
+          emit ``EDIT_AUTO_EXECUTED``.
+        * Non-high-risk + not ``fluid_mode`` (DT-006) → leave the plan in
+          ``waiting_approval`` for the in-chat card; the chat stays in its
+          current stage. Mirrors the route's opt-in fluid behavior
+          (chat-flow-redesign): fluid edits are opt-in, not default.
         """
 
         self._require_modeling_chat(chat)
@@ -525,6 +535,23 @@ class ModelingChatOrchestrator:
                 extra={"plan_id": plan.id},
             )
             return EditPlanOutcome(chat=updated, plan=plan, execution=None, requires_approval=True)
+
+        if not fluid_mode:
+            # DT-006: fora do modo fluido, edições não-high-risk também PARAM
+            # no card (waiting_approval) em vez de auto-executar. O chat
+            # permanece no estágio atual (editing/failed); a execução vem do
+            # card (endpoints /approve + /execute).
+            pending = plan.model_copy(
+                update={"status": ModelingPlanStatus.waiting_approval, "updated_at": now_utc()}
+            )
+            self.store.upsert_modeling_plan(pending)
+            self._audit(
+                "modeling.chat.edit_approval_requested",
+                chat_id=chat.id,
+                plan_id=plan.id,
+                stage=chat.modeling_stage.value if chat.modeling_stage else None,
+            )
+            return EditPlanOutcome(chat=chat, plan=pending, execution=None, requires_approval=True)
 
         # Auto-approve every step that the planner left as
         # ``waiting_approval`` (only a non-high-risk plan can reach this

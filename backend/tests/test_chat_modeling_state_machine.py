@@ -94,6 +94,20 @@ def test_failed_stays_failed_on_pending_high_risk_and_resets_on_reject() -> None
     )
 
 
+def test_new_primary_plan_from_editing_or_failed_moves_to_planning() -> None:
+    """DT-006: começar um modelo do zero a partir de editing/failed propõe um
+    plano primário e leva a planning (caso "modelo novo" da rota viva)."""
+
+    assert (
+        transition(ChatModelingStage.editing, ChatModelingEvent.PLAN_PROPOSED)
+        is ChatModelingStage.planning
+    )
+    assert (
+        transition(ChatModelingStage.failed, ChatModelingEvent.PLAN_PROPOSED)
+        is ChatModelingStage.planning
+    )
+
+
 def test_editing_self_loops_for_auto_executed_mini_plans() -> None:
     assert (
         transition(ChatModelingStage.editing, ChatModelingEvent.EDIT_AUTO_EXECUTED)

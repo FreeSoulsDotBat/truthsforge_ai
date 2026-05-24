@@ -34,6 +34,7 @@ from app.core.contracts import (
     now_utc,
 )
 from app.cost_governor.service import estimate_tokens
+from app.modeling.chat_orchestrator import get_modeling_orchestrator
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.service import get_modeling_service
 
@@ -48,28 +49,6 @@ def _promote_modeling_session(
             "is_modeling_3d": True,
             "modeling_software_preference": payload.modeling_3d.software_override,
             "modeling_stage": ChatModelingStage.discovery,
-            "updated_at": now_utc(),
-        }
-    )
-    if hasattr(store, "upsert_chat_session"):
-        store.upsert_chat_session(updated)
-    return updated
-
-
-def _sync_modeling_plan_proposed(store, session: ChatSession, plan: ModelingPlan) -> ChatSession:
-    """P1: liga o plano proposto ao chat e move para ``planning``.
-
-    O plano NÃO foi executado — está aguardando a aprovação humana via card
-    (endpoints /approve + /execute). Ver
-    specs/005-modeling-3d-fusion/chat-flow-redesign.md (P1).
-    """
-
-    updated = session.model_copy(
-        update={
-            "is_modeling_3d": True,
-            "modeling_software_preference": plan.software_choice,
-            "modeling_stage": ChatModelingStage.planning,
-            "modeling_plan_id": plan.id,
             "updated_at": now_utc(),
         }
     )
@@ -176,12 +155,6 @@ def _force_plan_new_document(store, plan: ModelingPlan) -> ModelingPlan:
     if hasattr(store, "upsert_modeling_plan"):
         store.upsert_modeling_plan(updated)
     return updated
-
-
-def _plan_has_high_risk(plan: ModelingPlan) -> bool:
-    """True quando alguma etapa é high-risk ou exige aprovação (destrutiva)."""
-
-    return any(step.approval_required or step.risk_level.value == "high" for step in plan.steps)
 
 
 def _format_intent_question() -> str:
@@ -351,9 +324,11 @@ def build_modeling_3d_stream_response(
         # ready=true, intent=edit). Ver chat-flow-redesign.md (P2/P3).
         plan_prompt = payload.message
         plan_kind = ModelingPlanKind.primary
-        parent_plan_id = None
         reset_document = False
-        has_existing_model = session.modeling_stage == ChatModelingStage.editing
+        has_existing_model = session.modeling_stage in (
+            ChatModelingStage.editing,
+            ChatModelingStage.failed,
+        )
         if settings.modeling_discovery_enabled:
             history = _modeling_chat_history(store, session.id, exclude_message=payload.message)
             assessment = await modeling_service.assess_request_async(
@@ -423,42 +398,72 @@ def build_modeling_3d_stream_response(
             # Decide kind do plano: edição do modelo atual vs modelo novo.
             if has_existing_model and assessment.intent == "edit":
                 plan_kind = ModelingPlanKind.edit
-                parent_plan_id = session.modeling_plan_id
             elif has_existing_model and assessment.intent == "new_model":
                 reset_document = True  # modelo do zero: documento limpo
         elif has_existing_model:
             # Discovery off: ainda assim trata follow-up como edição segura.
             plan_kind = ModelingPlanKind.edit
-            parent_plan_id = session.modeling_plan_id
 
-        # PR#28 review (issue 2): close_trace() é chamado em TODOS os
-        # exit points abaixo (early-return error paths + happy path)
-        # para garantir cleanup do buffer. Sem isso o trace ficaria
-        # preso indefinidamente (apenas eviccionado pelo cap FIFO).
+        # DT-006: a proposta de plano (primário/edição) é delegada ao
+        # ModelingChatOrchestrator — fonte única da state machine (chat_state)
+        # e dos eventos modeling.chat.*. A rota só cuida do streaming/mensagem/
+        # título e é dona do trace (manage_trace=False). close_trace() é
+        # chamado em TODOS os exit points abaixo para liberar o buffer.
+        orchestrator = get_modeling_orchestrator(store)
+        plan_create = ModelingPlanCreate(
+            prompt=plan_prompt,
+            project_id=effective_project_id,
+            conversation_id=session.id,
+            mode=payload.modeling_3d.mode,
+            software_override=payload.modeling_3d.software_override,
+            knowledge_base_ids=effective_knowledge_base_ids,
+        )
         try:
-            plan = await modeling_service.create_plan_async(
-                ModelingPlanCreate(
-                    prompt=plan_prompt,
-                    project_id=effective_project_id,
-                    conversation_id=session.id,
-                    mode=payload.modeling_3d.mode,
-                    software_override=payload.modeling_3d.software_override,
-                    knowledge_base_ids=effective_knowledge_base_ids,
-                    kind=plan_kind,
-                    parent_plan_id=parent_plan_id,
+            if plan_kind == ModelingPlanKind.edit:
+                # Edição: o orchestrator decide auto-exec (modo fluido, sem
+                # high-risk) vs PARAR no card (não-fluido ou high-risk).
+                outcome = await asyncio.to_thread(
+                    orchestrator.propose_edit_plan,
+                    session,
+                    payload=plan_create,
+                    fluid_mode=bool(session.modeling_fluid_mode),
                 )
-            )
-            # P3: para "modelo do zero" num chat que já tinha modelo, força
-            # o primeiro open_design a criar um documento NOVO (limpo) em
-            # vez de reusar o ativo (o reuso é o default da P3a).
-            if reset_document:
-                plan = _force_plan_new_document(store, plan)
-            # Flush imediato — frontend que ler /api/3d/plans/{id}/trace
-            # logo após receber o SSE ``modeling_plan`` precisa ver tudo
-            # já persistido (não fica em buffer).
+                session = outcome.chat
+                plan = outcome.plan
+                executed = outcome.execution is not None
+            else:
+                # Plano primário (inclui "modelo do zero" a partir de
+                # editing/failed). propose_plan move o chat para planning via
+                # chat_state e vincula o modeling_plan_id.
+                session, plan = await asyncio.to_thread(
+                    orchestrator.propose_plan,
+                    session,
+                    payload=plan_create,
+                    manage_trace=False,
+                )
+                # P3: "modelo do zero" num chat que já tinha modelo força o
+                # primeiro open_design a criar documento NOVO (default é reusar).
+                if reset_document:
+                    plan = _force_plan_new_document(store, plan)
+                # P1 (gate): o plano primário SEMPRE para para aprovação (mesmo
+                # safe_auto sem high-risk); a execução só vem do card.
+                if plan.status not in (
+                    ModelingPlanStatus.waiting_approval,
+                    ModelingPlanStatus.completed,
+                    ModelingPlanStatus.failed,
+                    ModelingPlanStatus.rejected,
+                ):
+                    plan = plan.model_copy(
+                        update={
+                            "status": ModelingPlanStatus.waiting_approval,
+                            "updated_at": now_utc(),
+                        }
+                    )
+                    if hasattr(store, "upsert_modeling_plan"):
+                        store.upsert_modeling_plan(plan)
+                executed = False
             _modeling_tracer.flush(current_trace_id())
         except Exception as exc:  # noqa: BLE001 - stream must surface domain failures
-            # Garante que o trace de erro chegue ao DB.
             _modeling_tracer.flush(current_trace_id())
             _modeling_tracer.close_trace()
             error_message = f"Não consegui criar o plano 3D via MCP: {exc}"
@@ -469,90 +474,7 @@ def build_modeling_3d_stream_response(
             yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
             return
 
-        # P3 (modo fluido): edições aditivas SEM high-risk auto-executam
-        # quando o chat está em modo fluido — pulam o card. O plano
-        # primário e qualquer etapa destrutiva/high-risk SEMPRE param para
-        # aprovação. Ver chat-flow-redesign.md (P3).
-        if (
-            plan_kind == ModelingPlanKind.edit
-            and session.modeling_fluid_mode
-            and not _plan_has_high_risk(plan)
-        ):
-            try:
-                yield _runtime_status(
-                    "modeling_3d_execute",
-                    "Modo fluido: executando edição",
-                    "Edição aditiva sem etapas high-risk; executo sem card.",
-                )
-                execution = await asyncio.to_thread(modeling_service.execute_plan, plan.id)
-                plan = execution.plan
-                _modeling_tracer.flush(current_trace_id())
-            except Exception as exc:  # noqa: BLE001 - surface execution failure
-                _modeling_tracer.flush(current_trace_id())
-                _modeling_tracer.close_trace()
-                error_message = f"Edição fluida falhou na execução: {exc}"
-                assistant_message.content = error_message
-                assistant_message.metadata["provider_error"] = str(exc)
-                store.add_message(assistant_message)
-                yield _sse("error", {"message": error_message, "reason": str(exc)})
-                yield _sse(
-                    "done",
-                    {"session_id": session.id, "message_id": assistant_message.id},
-                )
-                return
-            session = session.model_copy(
-                update={
-                    "modeling_stage": ChatModelingStage.editing,
-                    "modeling_plan_id": plan.id,
-                    "updated_at": now_utc(),
-                }
-            )
-            if hasattr(store, "upsert_chat_session"):
-                store.upsert_chat_session(session)
-            plan_metadata = _modeling_plan_metadata(plan)
-            assistant_message.content = _modeling_plan_chat_summary(plan)
-            assistant_message.metadata["modeling_plan"] = plan_metadata
-            assistant_message.metadata["modeling_plan_id"] = plan.id
-            store.add_message(assistant_message)
-            yield _runtime_status(
-                "modeling_3d_plan",
-                "Edição aplicada (modo fluido)",
-                f"{len(plan.steps)} etapa(s) executada(s).",
-            )
-            yield _sse("modeling_plan", {"plan": plan_metadata})
-            yield _sse("token", {"content": assistant_message.content})
-            yield _runtime_status("done", "Concluído")
-            yield _sse(
-                "done",
-                {"session_id": session.id, "message_id": assistant_message.id},
-            )
-            _modeling_tracer.close_trace()
-            return
-
-        # P1 (gate de aprovação): o plano SEMPRE para e pede aprovação
-        # humana antes de executar. A execução só acontece quando o usuário
-        # aprova pelo card (endpoints /plans/{id}/approve + /execute, já
-        # ligados em useModelingPlanActions). Forçamos waiting_approval para
-        # o card exibir Aprovar/Rejeitar mesmo quando o planner marcou o
-        # plano como ``approved`` (safe_auto sem high-risk). Ver
-        # specs/005-modeling-3d-fusion/chat-flow-redesign.md (P1).
-        if plan.status not in (
-            ModelingPlanStatus.waiting_approval,
-            ModelingPlanStatus.completed,
-            ModelingPlanStatus.failed,
-            ModelingPlanStatus.rejected,
-        ):
-            plan = plan.model_copy(
-                update={
-                    "status": ModelingPlanStatus.waiting_approval,
-                    "updated_at": now_utc(),
-                }
-            )
-            if hasattr(store, "upsert_modeling_plan"):
-                store.upsert_modeling_plan(plan)
-
         plan_metadata = _modeling_plan_metadata(plan)
-        session = _sync_modeling_plan_proposed(store, session, plan)
         assistant_message.content = _modeling_plan_chat_summary(plan)
         assistant_message.metadata["modeling_plan"] = plan_metadata
         assistant_message.metadata["modeling_plan_id"] = plan.id
@@ -576,15 +498,22 @@ def build_modeling_3d_stream_response(
             if hasattr(store, "upsert_chat_session"):
                 store.upsert_chat_session(titled_session)
             yield _sse("session_title", {"session_id": session.id, "title": title})
-        yield _runtime_status(
-            "modeling_3d_plan",
-            "Plano 3D pronto — aguardando sua aprovação",
-            (
-                f"{len(plan.steps)} etapas para {plan.software_choice.value}. "
-                "Revise o card e clique em Aprovar para executar, ou Rejeitar "
-                "para refazer."
-            ),
-        )
+        if executed:
+            yield _runtime_status(
+                "modeling_3d_plan",
+                "Edição aplicada (modo fluido)",
+                f"{len(plan.steps)} etapa(s) executada(s).",
+            )
+        else:
+            yield _runtime_status(
+                "modeling_3d_plan",
+                "Plano 3D pronto — aguardando sua aprovação",
+                (
+                    f"{len(plan.steps)} etapas para {plan.software_choice.value}. "
+                    "Revise o card e clique em Aprovar para executar, ou Rejeitar "
+                    "para refazer."
+                ),
+            )
         yield _sse("modeling_plan", {"plan": plan_metadata})
         yield _sse("token", {"content": assistant_message.content})
         yield _runtime_status("done", "Concluído")
