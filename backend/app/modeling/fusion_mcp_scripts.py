@@ -821,8 +821,24 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     "fusion.no_profile",
                     "Sketch não tem profile fechado para extrudar.",
                 )
+            # Fix (trace m3d_plan_2f7aeff0): nao extrudar cegamente profiles[0].
+            # Seletor explicito quando informado; aviso visivel no trace quando
+            # um cut ambiguo (varios profiles, sem seletor) cai no profiles[0] —
+            # foi exatamente isso que consumiu a placa no gate.
+            profile = _resolve_extrude_profile(sketch, args, design)
+            _has_selector = (
+                args.get("profile_index") is not None
+                or args.get("profile_diameter_mm") is not None
+            )
+            if operation == "cut" and sketch.profiles.count > 1 and not _has_selector:
+                operation_warning += (
+                    " [WARN: cut em sketch com "
+                    + str(sketch.profiles.count)
+                    + " profiles sem seletor; usei profiles[0] - verifique se nao"
+                    + " consumiu a peca (use profile_index/profile_diameter_mm)]"
+                )
             extrudes = _root(design).features.extrudeFeatures
-            input_obj = extrudes.createInput(sketch.profiles.item(0), operation_map[operation])
+            input_obj = extrudes.createInput(profile, operation_map[operation])
             input_obj.setDistanceExtent(
                 False,
                 _param_value_input(args.get("distance_mm"), design),
@@ -1448,6 +1464,29 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     best = prof
             if best is not None:
                 return best
+            return sketch.profiles.item(0)
+
+
+        def _resolve_extrude_profile(sketch, args, design):
+            # Selecao explicita de profile para extrude/cut. Sem isto o extrude
+            # caia sempre em sketch.profiles.item(0) (bug "cut apaga a peca",
+            # trace real m3d_plan_2f7aeff0): num sketch com retangulo + circulo
+            # coplanares, item(0) pode ser a placa inteira e um operation=cut a
+            # consome. Suporta profile_index (direto) e profile_diameter_mm
+            # (seleciona pela area do circulo, reusando _profile_for_circle).
+            # Sem seletor mantem o comportamento legado (item(0)).
+            count = sketch.profiles.count
+            idx = args.get("profile_index")
+            if idx is not None:
+                try:
+                    i = int(idx)
+                except Exception:
+                    i = -1
+                if 0 <= i < count:
+                    return sketch.profiles.item(i)
+            diam = _eval_param(args.get("profile_diameter_mm"), design, 0.0) or 0.0
+            if diam > 0:
+                return _profile_for_circle(sketch, diam / 20.0)
             return sketch.profiles.item(0)
 
 

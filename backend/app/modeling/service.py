@@ -59,6 +59,7 @@ from app.modeling.executor import (
     envelope_into_output as _envelope_into_output,
 )
 from app.modeling.mcp_client import LocalMCPClient
+from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner_service import ModelingPlannerService
 from app.modeling.policy import apply_modeling_policy, apply_plan_approval
 from app.modeling.printability import ModelingPrintabilityService
@@ -327,7 +328,23 @@ class ModelingService:
 
     def execute_plan(self, plan_id: str) -> ModelingExecutionResult:
         plan = self._get_plan_or_raise(plan_id)
-        return self.executor.execute_plan(plan)
+        # O card (routes/modeling.py → /plans/{id}/execute) executa FORA de um
+        # trace aberto. Sem isto, todo ``self._tracer.record(...)`` do executor
+        # e do loop vira no-op (observability.record: ``tid is None`` → None) e o
+        # diagnóstico do plano fica vazio mesmo com os tool calls persistidos.
+        # Abrimos um trace ligado ao plano quando não há um ativo; se já houver
+        # (fluxo de chat), só ligamos o plano e deixamos o dono fechá-lo.
+        owns_trace = current_trace_id() is None
+        tracer = get_tracer(self.store if hasattr(self.store, "record_trace_events_bulk") else None)
+        if owns_trace:
+            tracer.start_trace(plan_id=plan.id)
+        else:
+            tracer.bind_plan(plan.id)
+        try:
+            return self.executor.execute_plan(plan)
+        finally:
+            if owns_trace:
+                tracer.close_trace()
 
     # ------------------------------------------------------------------
     # snapshots (delegated)

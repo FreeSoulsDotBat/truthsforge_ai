@@ -113,6 +113,85 @@ def test_start_trace_binds_contextvar_and_emits_started_event() -> None:
     assert tracer._buffers[trace_id].events[0].payload["session_id"] == "sess-1"
 
 
+def test_bind_plan_backfills_buffered_events_without_plan_id() -> None:
+    """Fix do "trace vazio por plano" (gate m3d_plan_2f7aeff0): spans do planner
+    (``model_resolved``/``llm_request``) gravados ANTES do plano existir saiam
+    com ``plan_id=None`` e o diagnóstico-por-plano não os achava. ``bind_plan``
+    deve propagar o plan_id recém-ligado aos eventos já buffered do trace.
+    """
+
+    store = _FakeStore()
+    tracer = ModelingTracer(store=store, batch_size=100)
+    tracer.start_trace(session_id="sess")  # plan_id ainda None
+    tracer.record("planner.model_resolved", source=ModelingTraceSource.backend)
+    tracer.record("planner.llm_request", source=ModelingTraceSource.backend)
+
+    buffer = tracer._buffers[current_trace_id()]
+    assert [e.plan_id for e in buffer.events] == [None, None, None]  # +trace.started
+
+    tracer.bind_plan("m3d_plan_x")
+    assert all(e.plan_id == "m3d_plan_x" for e in buffer.events)
+
+    # Eventos seguintes continuam herdando o plan_id via contextvar.
+    tracer.record("planner.plan_created", source=ModelingTraceSource.backend)
+    assert buffer.events[-1].plan_id == "m3d_plan_x"
+
+
+def test_execute_plan_opens_trace_for_card_path() -> None:
+    """Fix do "trace de execução vazio" (gate m3d_plan_2f7aeff0): o card chama
+    ``/plans/{id}/execute`` FORA de um trace aberto, então todo ``record()`` do
+    executor virava no-op (``tid is None``). ``ModelingService.execute_plan`` deve
+    abrir um trace ligado ao plano durante a execução. Usa store/executor fakes
+    para não tocar o storage real (conftest de isolamento ainda não mergeado).
+    """
+
+    from app.core.contracts import (
+        ModelingExecutionResult,
+        ModelingPlan,
+        ModelingPlanStatus,
+        ModelingSoftware,
+    )
+    from app.modeling.observability import current_plan_id
+    from app.modeling.service import ModelingService
+
+    plan = ModelingPlan(
+        id="m3d_plan_test_a1",
+        prompt="peça de teste",
+        software_choice=ModelingSoftware.fusion,
+        status=ModelingPlanStatus.approved,
+        steps=[],
+    )
+    seen: dict[str, Any] = {}
+
+    class _Store:
+        def record_trace_events_bulk(self, events: list[ModelingTraceEvent]) -> None:
+            pass
+
+        def get_modeling_plan(self, plan_id: str) -> ModelingPlan:
+            return plan
+
+    class _Executor:
+        def execute_plan(self, p: ModelingPlan) -> ModelingExecutionResult:
+            seen["trace_id"] = current_trace_id()
+            seen["plan_id"] = current_plan_id()
+            return ModelingExecutionResult(
+                plan=p,
+                executed_step_ids=[],
+                blocked_step_ids=[],
+                events=[],
+                tool_call_ids=[],
+            )
+
+    svc = ModelingService(store=_Store())
+    svc.executor = _Executor()  # type: ignore[assignment]
+
+    assert current_trace_id() is None  # nada aberto antes (caminho do card)
+    svc.execute_plan("m3d_plan_test_a1")
+
+    assert seen["trace_id"] is not None  # trace estava ABERTO durante a execução
+    assert seen["plan_id"] == "m3d_plan_test_a1"  # e ligado ao plano
+
+
 def test_record_without_active_trace_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     store = _FakeStore()
     tracer = ModelingTracer(store=store)
@@ -627,8 +706,17 @@ def test_onda_a_tools_are_registered_and_compile() -> None:
 
     cases = {
         "fusion.add_polygon": {"sketch": "s", "sides": 6, "radius_mm": 25, "center_mm": [0, 0]},
-        "fusion.add_line": {"sketch": "s", "points_mm": [[0, 0], [10, 0], [10, 10]], "closed": True},
-        "fusion.add_arc": {"sketch": "s", "center_mm": [0, 0], "start_mm": [10, 0], "sweep_deg": 180},
+        "fusion.add_line": {
+            "sketch": "s",
+            "points_mm": [[0, 0], [10, 0], [10, 10]],
+            "closed": True,
+        },
+        "fusion.add_arc": {
+            "sketch": "s",
+            "center_mm": [0, 0],
+            "start_mm": [10, 0],
+            "sweep_deg": 180,
+        },
         "fusion.revolve_profile": {"sketch": "s", "axis": "y", "angle_deg": 360},
     }
     for tool, args in cases.items():
@@ -866,7 +954,10 @@ def test_onda9_rest_scripts_compile() -> None:
 
     cases = {
         "fusion.query_geometry": ({"limit": 30}, ToolCategory.read_only),
-        "fusion.add_ellipse": ({"sketch": "s", "major_mm": 40, "minor_mm": 20}, ToolCategory.additive),
+        "fusion.add_ellipse": (
+            {"sketch": "s", "major_mm": 40, "minor_mm": 20},
+            ToolCategory.additive,
+        ),
         "fusion.add_slot": (
             {"sketch": "s", "length_mm": 40, "width_mm": 10},
             ToolCategory.additive,
@@ -1050,6 +1141,46 @@ def test_hole_uses_circle_profile_selector() -> None:
     assert "_profile_for_circle(sketch, diameter_mm / 20.0)" in script
 
 
+def test_extrude_profile_uses_profile_selector() -> None:
+    """Gate real (m3d_plan_2f7aeff0): ``extrude_profile`` extrudava sempre
+    ``profiles.item(0)``. Num sketch com 2 profiles (retangulo + circulo
+    coplanares) um ``operation=cut`` consumia a placa inteira. Agora resolve o
+    profile via ``_resolve_extrude_profile`` (profile_index / profile_diameter_mm)
+    e avisa quando um cut ambiguo cai no profiles[0] sem seletor.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    # cut do furo selecionando o profile pela area do circulo
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.extrude_profile",
+        arguments={
+            "sketch": "s",
+            "operation": "cut",
+            "distance_mm": 5,
+            "profile_diameter_mm": 10,
+        },
+    )
+    ast.parse(script)
+    assert "_resolve_extrude_profile" in script
+    # não cai mais no item(0) cego dentro do createInput do extrude.
+    assert "createInput(profile, operation_map[operation])" in script
+
+    # selecao por indice tambem compila
+    script_idx = build_autodesk_fusion_script(
+        tool_name="fusion.extrude_profile",
+        arguments={
+            "sketch": "s",
+            "operation": "new_body",
+            "distance_mm": 5,
+            "profile_index": 1,
+        },
+    )
+    ast.parse(script_idx)
+
+
 def test_open_design_reuses_active_design() -> None:
     """P3: open_design deve REUSAR o design ativo por padrão (não recriar um
     Untitled e zerar o modelo); só cria novo com new_document/reset/force_new.
@@ -1062,9 +1193,7 @@ def test_open_design_reuses_active_design() -> None:
     from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
 
     for args in ({}, {"new_document": True}, {"reset": True}):
-        script = build_autodesk_fusion_script(
-            tool_name="fusion.open_design", arguments=args
-        )
+        script = build_autodesk_fusion_script(tool_name="fusion.open_design", arguments=args)
         ast.parse(script)
         assert 'TOOL_NAME = "fusion.open_design"' in script
     # A lógica de reuso e de force_new precisa estar presente no template.
