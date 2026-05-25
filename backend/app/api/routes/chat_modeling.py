@@ -420,13 +420,17 @@ def build_modeling_3d_stream_response(
         )
         try:
             if plan_kind == ModelingPlanKind.edit:
-                # Edição: o orchestrator decide auto-exec (modo fluido, sem
-                # high-risk) vs PARAR no card (não-fluido ou high-risk).
+                # Edição: auto-executa por PADRÃO (decisão do dono 2026-05-25,
+                # T3.4/RF-015) — só PARA no card quando houver etapa high-risk/
+                # destrutiva (propose_edit_plan bloqueia isso sozinho via
+                # _plan_has_high_risk, preservando P8). Sobrepõe a DT-006 (fluido
+                # opt-in) apenas no caminho de EDIÇÃO; o plano PRIMÁRIO continua
+                # parando no card independentemente do modeling_fluid_mode.
                 outcome = await asyncio.to_thread(
                     orchestrator.propose_edit_plan,
                     session,
                     payload=plan_create,
-                    fluid_mode=bool(session.modeling_fluid_mode),
+                    fluid_mode=True,
                 )
                 session = outcome.chat
                 plan = outcome.plan
