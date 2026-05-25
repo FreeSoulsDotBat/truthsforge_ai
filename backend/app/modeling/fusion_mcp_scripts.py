@@ -37,6 +37,7 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.delete_body",
     "fusion.split_body",
     "fusion.query_geometry",
+    "fusion.query_timeline",
     "fusion.set_parameter",
     "fusion.export_step",
     "fusion.export_stl",
@@ -2173,6 +2174,60 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
+        def _query_timeline(args):
+            # T3.1 (read-only): le a timeline (features, ordem, supressao) + os
+            # user parameters atuais. Insumo da reconciliacao (T3.2/T3.3): o
+            # planner ve o estado REAL antes de planejar uma edicao, mesmo que o
+            # usuario tenha mexido a mao direto no Fusion.
+            design = _design()
+            limit = int(_eval_param(args.get("limit"), design, 200.0) or 200)
+            features_out = []
+            tl = design.timeline
+            for i in range(min(tl.count, limit)):
+                obj = tl.item(i)
+                try:
+                    ent = obj.entity
+                except Exception:
+                    ent = None
+                try:
+                    fname = ent.name if ent is not None else None
+                except Exception:
+                    fname = None
+                try:
+                    ftype = ent.objectType if ent is not None else None
+                except Exception:
+                    ftype = None
+                try:
+                    suppressed = bool(obj.isSuppressed)
+                except Exception:
+                    suppressed = False
+                features_out.append({{
+                    "index": i,
+                    "name": fname,
+                    "type": ftype,
+                    "suppressed": suppressed,
+                }})
+            params_out = []
+            ups = design.userParameters
+            for pi in range(min(ups.count, limit)):
+                p = ups.item(pi)
+                try:
+                    params_out.append({{
+                        "name": p.name,
+                        "expression": p.expression,
+                        "unit": p.unit,
+                    }})
+                except Exception:
+                    continue
+            return {{
+                "message": "Timeline: {{}} feature(s), {{}} parametro(s).".format(
+                    tl.count, ups.count
+                ),
+                "timeline": features_out,
+                "parameters": params_out,
+            }}
+
+
         def _set_parameter(args):
             # Fix #1: aceita dois formatos:
             # (a) singular legado:  name='X', expression='10mm', unit='mm'
@@ -2535,6 +2590,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _split_body(args)
             if tool_name == "fusion.query_geometry":
                 return _query_geometry(args)
+            if tool_name == "fusion.query_timeline":
+                return _query_timeline(args)
             if tool_name == "fusion.set_parameter":
                 return _set_parameter(args)
             if tool_name == "fusion.export_step":

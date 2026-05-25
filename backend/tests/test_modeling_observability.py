@@ -823,6 +823,25 @@ def test_primitives_support_origin_z_offset() -> None:
         assert "_xyz_mm(" in script, tool
 
 
+def test_query_timeline_reads_timeline_and_params() -> None:
+    """T3.1 (Fase 3): tool read-only que lê a timeline (features/ordem/supressão)
+    + os user parameters atuais — insumo da reconciliação (T3.2/T3.3) antes de
+    planejar uma edição (estado real do Fusion, não o histórico desatualizado).
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+    from app.modeling.tool_registry import is_read_only
+
+    script = build_autodesk_fusion_script(tool_name="fusion.query_timeline", arguments={})
+    ast.parse(script)
+    assert "design.timeline" in script
+    assert "userParameters" in script
+    assert '"timeline"' in script and '"parameters"' in script
+    assert is_read_only("fusion.query_timeline")
+
+
 def test_pilot_tools_return_dimensions_mm_for_verifier() -> None:
     """C (verifier): extrude + primitivas fazem read-back e devolvem
     dimensions_mm (bbox) no output, p/ o verifier do loop comparar com

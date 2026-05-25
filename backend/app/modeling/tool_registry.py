@@ -207,6 +207,12 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Lista bodies/faces/arestas com índice estável + metadata para seleção precisa (G2.2).",
     ),
     _t(
+        "fusion.query_timeline",
+        _FUSION,
+        _RO,
+        "Lê a timeline (features/ordem/supressão) + parâmetros atuais p/ reconciliação (T3.1).",
+    ),
+    _t(
         "fusion.validate_printability",
         _FUSION,
         _RO,
