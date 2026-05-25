@@ -1145,7 +1145,7 @@ def test_extrude_profile_uses_profile_selector() -> None:
     """Gate real (m3d_plan_2f7aeff0): ``extrude_profile`` extrudava sempre
     ``profiles.item(0)``. Num sketch com 2 profiles (retangulo + circulo
     coplanares) um ``operation=cut`` consumia a placa inteira. Agora resolve o
-    profile via ``_resolve_extrude_profile`` (profile_index / profile_diameter_mm)
+    profile via ``_resolve_profile_selection`` (profile_index / profile_diameter_mm)
     e avisa quando um cut ambiguo cai no profiles[0] sem seletor.
     """
 
@@ -1164,7 +1164,7 @@ def test_extrude_profile_uses_profile_selector() -> None:
         },
     )
     ast.parse(script)
-    assert "_resolve_extrude_profile" in script
+    assert "_resolve_profile_selection" in script
     # não cai mais no item(0) cego dentro do createInput do extrude.
     assert "createInput(profile, operation_map[operation])" in script
 
@@ -1179,6 +1179,34 @@ def test_extrude_profile_uses_profile_selector() -> None:
         },
     )
     ast.parse(script_idx)
+
+
+def test_revolve_and_sweep_use_profile_selector() -> None:
+    """Follow-up do gate: ``revolve_profile`` e ``sweep_profile`` também caíam em
+    ``profiles.item(0)`` cego (mesmo risco do extrude num sketch multi-perfil).
+    Agora usam ``_resolve_profile_selection``; os scripts compilam com
+    ``profile_index``. (Primitivas e loft ficam de fora: sketch de perfil único
+    ou seção por sketch separado.)
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = (
+        (
+            "fusion.revolve_profile",
+            {"sketch": "s", "axis": "y", "angle_deg": 360, "profile_index": 0},
+        ),
+        (
+            "fusion.sweep_profile",
+            {"profile": "prof", "path": "path", "profile_index": 1},
+        ),
+    )
+    for tool, args in cases:
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert "_resolve_profile_selection" in script
 
 
 def test_open_design_reuses_active_design() -> None:

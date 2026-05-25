@@ -825,7 +825,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Seletor explicito quando informado; aviso visivel no trace quando
             # um cut ambiguo (varios profiles, sem seletor) cai no profiles[0] —
             # foi exatamente isso que consumiu a placa no gate.
-            profile = _resolve_extrude_profile(sketch, args, design)
+            profile = _resolve_profile_selection(sketch, args, design)
             _has_selector = (
                 args.get("profile_index") is not None
                 or args.get("profile_diameter_mm") is not None
@@ -1095,7 +1095,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
             axis = axis_map.get(axis_name, root.yConstructionAxis)
             revolves = root.features.revolveFeatures
-            input_obj = revolves.createInput(sketch.profiles.item(0), axis, op)
+            input_obj = revolves.createInput(
+                _resolve_profile_selection(sketch, args, design), axis, op
+            )
             angle_rad = float(angle_deg) * math.pi / 180.0
             input_obj.setAngleExtent(False, adsk.core.ValueInput.createByReal(angle_rad))
             revolves.add(input_obj)
@@ -1467,13 +1469,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return sketch.profiles.item(0)
 
 
-        def _resolve_extrude_profile(sketch, args, design):
-            # Selecao explicita de profile para extrude/cut. Sem isto o extrude
+        def _resolve_profile_selection(sketch, args, design):
+            # Selecao explicita de profile para extrude/revolve/sweep. Sem isto
             # caia sempre em sketch.profiles.item(0) (bug "cut apaga a peca",
-            # trace real m3d_plan_2f7aeff0): num sketch com retangulo + circulo
-            # coplanares, item(0) pode ser a placa inteira e um operation=cut a
-            # consome. Suporta profile_index (direto) e profile_diameter_mm
-            # (seleciona pela area do circulo, reusando _profile_for_circle).
+            # trace real m3d_plan_2f7aeff0): num sketch com varios profiles
+            # (ex.: retangulo + circulo coplanares) item(0) pode ser a peca toda
+            # e um operation=cut a consome. Suporta profile_index (direto) e
+            # profile_diameter_mm (area do circulo, reusando _profile_for_circle).
             # Sem seletor mantem o comportamento legado (item(0)).
             count = sketch.profiles.count
             idx = args.get("profile_index")
@@ -1790,7 +1792,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             root = _root(design)
             path = root.features.createPath(path_sketch.sketchCurves.item(0))
             sweeps = root.features.sweepFeatures
-            inp = sweeps.createInput(profile_sketch.profiles.item(0), path, op)
+            inp = sweeps.createInput(
+                _resolve_profile_selection(profile_sketch, args, design), path, op
+            )
             sweeps.add(inp)
             return {{
                 "message": "Sweep do profile '{{}}' pelo path '{{}}'.".format(
