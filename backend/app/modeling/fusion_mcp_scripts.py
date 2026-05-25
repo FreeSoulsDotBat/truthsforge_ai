@@ -280,36 +280,6 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return (ebb.minPoint.z, ebb.maxPoint.z)
 
 
-        def _select_edges(body, selector):
-            # Onda C: selectors SEMANTICOS (o LLM nao conhece edge tokens do
-            # Fusion). Suportados: all, top, bottom, vertical, horizontal.
-            selector = str(selector or "all").lower()
-            coll = adsk.core.ObjectCollection.create()
-            bbox = body.boundingBox
-            zmin = bbox.minPoint.z
-            zmax = bbox.maxPoint.z
-            tol = max(1e-4, (zmax - zmin) * 0.01)
-            for i in range(body.edges.count):
-                edge = body.edges.item(i)
-                if selector == "all":
-                    coll.add(edge)
-                    continue
-                ez_min, ez_max = _edge_z_range(edge)
-                if selector == "top" and abs(ez_min - zmax) <= tol and abs(ez_max - zmax) <= tol:
-                    coll.add(edge)
-                elif (
-                    selector == "bottom"
-                    and abs(ez_min - zmin) <= tol
-                    and abs(ez_max - zmin) <= tol
-                ):
-                    coll.add(edge)
-                elif selector == "vertical" and (ez_max - ez_min) > tol:
-                    coll.add(edge)
-                elif selector == "horizontal" and (ez_max - ez_min) <= tol:
-                    coll.add(edge)
-            return coll
-
-
         def _select_edges_extra(body, selector, coll):
             # G2.1: selectors adicionais de aresta — tamanho e posicao.
             # longest/shortest: a aresta de maior/menor comprimento.
