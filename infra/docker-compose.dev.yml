@@ -23,11 +23,11 @@ services:
       TRUTHS_FORGE_MONTHLY_BUDGET_BRL: ${TRUTHS_FORGE_MONTHLY_BUDGET_BRL:-200}
       TRUTHS_FORGE_MAX_IMPORT_BYTES: ${TRUTHS_FORGE_MAX_IMPORT_BYTES:-5368709120}
       TRUTHS_FORGE_FUSION_MCP_URL: ${TRUTHS_FORGE_FUSION_MCP_URL:-http://host.docker.internal:27182/mcp}
-      # Observabilidade do módulo de modelagem 3D
-      # (ver backend/app/modeling/observability.py + plano em
-      # C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md).
+      # Observabilidade + loop agêntico do módulo de modelagem 3D
+      # (ver backend/app/modeling/observability.py e agent_loop.py).
       TRUTHS_FORGE_MODELING_OBSERVABILITY_ENABLED: ${TRUTHS_FORGE_MODELING_OBSERVABILITY_ENABLED:-true}
       TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE: ${TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE:-false}
+      TRUTHS_FORGE_MODELING_AGENTIC_LOOP_ENABLED: ${TRUTHS_FORGE_MODELING_AGENTIC_LOOP_ENABLED:-false}
       WATCHFILES_FORCE_POLLING: "true"
       WATCHFILES_POLL_DELAY_MS: "250"
     extra_hosts:
