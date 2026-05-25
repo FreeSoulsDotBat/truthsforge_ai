@@ -247,6 +247,38 @@ def test_planner_system_prompt_positions_multiple_bodies() -> None:
     assert "CORRESPONDÊNCIA DE EIXOS" in content
 
 
+def test_planner_system_prompt_prefers_shell_for_hollowing() -> None:
+    """Gate caixa (m3d_plan_39b1e3f5): o planner ocou na mão com add_box+combine
+    cut e errou a posição do corpo interno (paredes faltando, topo/fundo finos).
+    O system prompt deve mandar usar fusion.shell_body para ocar.
+    """
+
+    payload = ModelingPlanCreate(prompt="caixa oca 60x40x30 paredes 2mm")
+    response = {
+        "software_choice": "fusion",
+        "confidence": 0.7,
+        "rationale": "ok",
+        "assumptions": [],
+        "risks": [],
+        "steps": [
+            {
+                "seq": 1,
+                "title": "Box",
+                "tool_name": "fusion.add_box",
+                "risk_level": "low",
+                "approval_required": False,
+                "input_json": "{}",
+            }
+        ],
+    }
+    gateway = _FakeGateway(response=response)
+    create_llm_plan(payload, gateway=gateway, model=_planner_model())
+    system = next(msg for msg in gateway.received_messages[-1] if msg["role"] == "system")
+    content = system["content"]
+    assert "OCAR um corpo" in content
+    assert "fusion.shell_body" in content
+
+
 def test_create_llm_plan_rejects_tool_outside_allowlist() -> None:
     payload = ModelingPlanCreate(prompt="qualquer coisa")
     response = {
