@@ -1093,6 +1093,24 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return "{{}} ({{}})".format(base, n)
 
 
+        def _unique_body_name(design, base):
+            # Gera um nome de CORPO livre (base, base (1), ...). As primitivas
+            # passam a nomear o BODY (nao so o sketch) para que shell/fillet/
+            # pattern/etc. consigam referenciar por nome — bug do gate caixa+
+            # tampa: 'name' nomeava so o sketch, o body ficava Body1/Body2 e a
+            # referencia por nome dava fusion.body_not_found.
+            existing = set()
+            bodies = _root(design).bRepBodies
+            for i in range(bodies.count):
+                existing.add(bodies.item(i).name)
+            if base not in existing:
+                return base
+            n = 1
+            while "{{}} ({{}})".format(base, n) in existing:
+                n += 1
+            return "{{}} ({{}})".format(base, n)
+
+
         def _add_box(args):
             # Onda B: primitiva direta. Cria sketch interno + extrude num
             # unico step (corpo editavel na timeline, nao TemporaryBRep).
@@ -1148,12 +1166,17 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
             )
             inp.setDistanceExtent(False, adsk.core.ValueInput.createByReal(h / 10.0))
-            extrudes.add(inp)
+            feat = extrudes.add(inp)
+            body_name = sketch.name
+            if feat.bodies.count > 0:
+                body_name = _unique_body_name(design, str(args.get("name") or "Box"))
+                feat.bodies.item(0).name = body_name
             return {{
-                "message": "Caixa {{}}x{{}}x{{}} mm criada ('{{}}').".format(
-                    w, d, h, sketch.name
+                "message": "Caixa {{}}x{{}}x{{}} mm criada (corpo '{{}}').".format(
+                    w, d, h, body_name
                 ),
                 "sketch_name": sketch.name,
+                "body_name": body_name,
             }}
 
 
@@ -1187,12 +1210,17 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
             )
             inp.setDistanceExtent(False, adsk.core.ValueInput.createByReal(h / 10.0))
-            extrudes.add(inp)
+            feat = extrudes.add(inp)
+            body_name = sketch.name
+            if feat.bodies.count > 0:
+                body_name = _unique_body_name(design, str(args.get("name") or "Cylinder"))
+                feat.bodies.item(0).name = body_name
             return {{
-                "message": "Cilindro o{{}}x{{}} mm criado ('{{}}').".format(
-                    diameter_mm, h, sketch.name
+                "message": "Cilindro o{{}}x{{}} mm criado (corpo '{{}}').".format(
+                    diameter_mm, h, body_name
                 ),
                 "sketch_name": sketch.name,
+                "body_name": body_name,
             }}
 
 
@@ -1229,12 +1257,17 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
             )
             inp.setAngleExtent(False, adsk.core.ValueInput.createByReal(2 * math.pi))
-            revolves.add(inp)
+            feat = revolves.add(inp)
+            body_name = sketch.name
+            if feat.bodies.count > 0:
+                body_name = _unique_body_name(design, str(args.get("name") or "Sphere"))
+                feat.bodies.item(0).name = body_name
             return {{
-                "message": "Esfera o{{}} mm criada ('{{}}').".format(
-                    diameter_mm, sketch.name
+                "message": "Esfera o{{}} mm criada (corpo '{{}}').".format(
+                    diameter_mm, body_name
                 ),
                 "sketch_name": sketch.name,
+                "body_name": body_name,
             }}
 
 
@@ -1280,13 +1313,18 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
             )
             inp.setAngleExtent(False, adsk.core.ValueInput.createByReal(2 * math.pi))
-            revolves.add(inp)
+            feat = revolves.add(inp)
+            body_name = sketch.name
+            if feat.bodies.count > 0:
+                body_name = _unique_body_name(design, str(args.get("name") or "Cone"))
+                feat.bodies.item(0).name = body_name
             shape = "cone" if top_d <= 0 else "tronco de cone"
             return {{
                 "message": "{{}} base o{{}} topo o{{}} altura {{}} mm criado ('{{}}').".format(
-                    shape, base_d, top_d, h, sketch.name
+                    shape, base_d, top_d, h, body_name
                 ),
                 "sketch_name": sketch.name,
+                "body_name": body_name,
             }}
 
 

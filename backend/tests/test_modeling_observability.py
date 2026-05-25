@@ -752,6 +752,31 @@ def test_onda_b_primitives_are_registered_and_compile() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_primitives_name_the_body_not_only_the_sketch() -> None:
+    """Regressão (gate caixa+tampa): add_box/cylinder/sphere/cone passam a
+    nomear o CORPO com o ``name`` dado (antes nomeavam só o sketch → o body
+    ficava Body1/Body2 e shell/fillet por nome davam fusion.body_not_found).
+    O script gerado precisa setar o nome do body e devolver body_name.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases = {
+        "fusion.add_box": {"name": "BoxOuter", "dimensions_mm": [60, 40, 30]},
+        "fusion.add_cylinder": {"name": "Pino", "diameter_mm": 10, "height_mm": 20},
+        "fusion.add_sphere": {"name": "Bola", "diameter_mm": 30},
+        "fusion.add_cone": {"name": "Bico", "base_diameter_mm": 20, "height_mm": 30},
+    }
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert "_unique_body_name" in script, tool
+        assert "feat.bodies.item(0).name" in script, tool
+        assert '"body_name"' in script, tool
+
+
 def test_onda_c_features_are_registered_and_compile() -> None:
     """Onda C: fillet/chamfer/shell/hole estão na allowlist, no registry
     (categoria mutative) e geram scripts Python válidos.
