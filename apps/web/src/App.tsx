@@ -581,6 +581,18 @@ function App() {
     [applyPlanToSession, modelingPlanActionsRuntime]
   );
 
+  // T3.6: desfaz a última edição. NÃO chama applyPlanToSession — o plano de
+  // rollback é um plano separado e repontar modeling_plan_id pra ele quebraria
+  // o contexto de edição (que precisa do plano com histórico completo). O chat
+  // segue em "editing"; o card de edição reflete o "desfeito" localmente.
+  const handleRollbackModelingPlan = useCallback(
+    async (planId: string) => {
+      const execution = await modelingPlanActionsRuntime.rollback(planId);
+      return Boolean(execution && execution.plan.status === "completed");
+    },
+    [modelingPlanActionsRuntime]
+  );
+
   const handleEditModelingPlan = useCallback(
     async (planId: string, payload: ModelingPlanEdit) => {
       const edited = await modelingPlanActionsRuntime.edit(planId, payload);
@@ -595,6 +607,7 @@ function App() {
       onApprove: handleApproveModelingPlan,
       onReject: handleRejectModelingPlan,
       onRetry: handleRetryModelingPlan,
+      onRollback: handleRollbackModelingPlan,
       onRevise: handleReviseModelingPlan,
       onEditPlan: handleEditModelingPlan,
       isBusy: modelingPlanActionsRuntime.busy
@@ -603,6 +616,7 @@ function App() {
       handleApproveModelingPlan,
       handleRejectModelingPlan,
       handleRetryModelingPlan,
+      handleRollbackModelingPlan,
       handleReviseModelingPlan,
       handleEditModelingPlan,
       modelingPlanActionsRuntime.busy
@@ -1251,11 +1265,7 @@ function App() {
                   is_modeling_3d: true,
                   modeling_software_preference: plan.software_choice,
                   modeling_stage:
-                    plan.status === "completed"
-                      ? "editing"
-                      : plan.status === "failed"
-                        ? "failed"
-                        : "executing",
+                    plan.status === "completed" ? "editing" : plan.status === "failed" ? "failed" : "executing",
                   modeling_plan_id: plan.id,
                   messages
                 };

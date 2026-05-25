@@ -2,7 +2,14 @@ export type ProviderName = "openai" | "anthropic" | "google";
 export type JobStatus = "pending" | "running" | "completed" | "failed";
 export type ModelingSoftware = "auto" | "blender" | "fusion";
 export type ModelingExecutionMode = "plan_only" | "approval_required" | "safe_auto";
-export type ChatModelingStage = "discovery" | "planning" | "approved" | "executing" | "editing" | "failed" | "completed";
+export type ChatModelingStage =
+  | "discovery"
+  | "planning"
+  | "approved"
+  | "executing"
+  | "editing"
+  | "failed"
+  | "completed";
 export type ModelingPlanKind = "primary" | "edit";
 export type ModelingPlanStatus =
   | "draft"
@@ -112,6 +119,10 @@ export interface ModelingPlan {
   trace_id?: string | null;
   kind?: ModelingPlanKind;
   parent_plan_id?: string | null;
+  // T3.6: para edições fusion, a contagem da timeline ANTES da edição rodar.
+  // Presente quando a captura best-effort teve sucesso; habilita o botão
+  // "Desfazer última edição" (POST /api/3d/plans/{id}/rollback).
+  rollback_marker?: number | null;
   created_at: string;
   updated_at: string;
 }
