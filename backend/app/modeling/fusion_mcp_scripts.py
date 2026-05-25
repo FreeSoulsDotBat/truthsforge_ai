@@ -265,7 +265,11 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     return bodies.item(idx)
             except (TypeError, ValueError):
                 pass
-            raise ToolError("fusion.body_not_found", "Corpo nao encontrado: " + ref)
+            _avail = [bodies.item(i).name for i in range(bodies.count)]
+            raise ToolError(
+                "fusion.body_not_found",
+                "Corpo nao encontrado: " + ref + ". Corpos disponiveis: " + str(_avail),
+            )
 
 
         def _edge_z_range(edge):

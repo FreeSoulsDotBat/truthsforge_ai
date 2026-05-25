@@ -181,6 +181,39 @@ def test_planner_system_prompt_warns_against_redundant_cut() -> None:
     assert "fusion.hole" in content  # caminho preferido para furo
 
 
+def test_planner_system_prompt_requires_consistent_body_names() -> None:
+    """Gate caixa+tampa (m3d_plan_eeab7c1b/b2711cc7): o LLM referenciava um corpo
+    por um nome que nunca deu à primitiva → fusion.body_not_found e o corretor
+    ficava às cegas. O system prompt deve exigir nomear a primitiva e referenciar
+    o corpo pelo MESMO name.
+    """
+
+    payload = ModelingPlanCreate(prompt="caixa 60x40x30 mm ocada com tampa")
+    response = {
+        "software_choice": "fusion",
+        "confidence": 0.7,
+        "rationale": "ok",
+        "assumptions": [],
+        "risks": [],
+        "steps": [
+            {
+                "seq": 1,
+                "title": "Box",
+                "tool_name": "fusion.add_box",
+                "risk_level": "low",
+                "approval_required": False,
+                "input_json": "{}",
+            }
+        ],
+    }
+    gateway = _FakeGateway(response=response)
+    create_llm_plan(payload, gateway=gateway, model=_planner_model())
+    system = next(msg for msg in gateway.received_messages[-1] if msg["role"] == "system")
+    content = system["content"]
+    assert "NOMES DE CORPO" in content
+    assert "MESMO `name`" in content
+
+
 def test_create_llm_plan_rejects_tool_outside_allowlist() -> None:
     payload = ModelingPlanCreate(prompt="qualquer coisa")
     response = {

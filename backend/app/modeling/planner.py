@@ -687,6 +687,14 @@ def _build_messages(
         "  `fusion.add_box`, `fusion.add_cylinder`, `fusion.add_cone` criam o corpo\n"
         "  em UM step (sem sketch/revolve manual). Use-as para bola/esfera, caixa,\n"
         "  cilindro e cone — é mais robusto que montar o perfil à mão.\n"
+        "- NOMES DE CORPO: ao criar uma primitiva (`add_box`/`add_cylinder`/\n"
+        "  `add_sphere`/`add_cone`) passe SEMPRE um `name` único e descritivo\n"
+        '  (ex.: "BoxOuter", "LidOuter"). O corpo recebe ESSE nome. Nas tools\n'
+        "  seguintes que operam num corpo (`shell_body`, `fillet_edges`,\n"
+        "  `chamfer_edges`, `hole`, `pattern_*`, `mirror_feature`, `combine_bodies`,\n"
+        "  `export_*`) referencie o corpo em `body` pelo MESMO `name` que você deu.\n"
+        "  NUNCA referencie um corpo por um nome que você não definiu (ex.: usar\n"
+        '  body="Outer_Box" sem ter criado a primitiva com name="Outer_Box").\n'
         "- Só use `fusion.revolve_profile` para formas de revolução NÃO cobertas pelas\n"
         "  primitivas. O meio-perfil deve ficar INTEIRAMENTE de um lado do eixo (não\n"
         "  cruze o eixo de revolução, senão o sólido é inválido).\n"

@@ -804,6 +804,21 @@ def test_onda_c_features_are_registered_and_compile() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_body_not_found_error_lists_available_bodies() -> None:
+    """Gate caixa+tampa: o corretor ficava às cegas em fusion.body_not_found
+    (referenciou 'Outer_Box', corpo era 'Box'). O script gerado deve listar os
+    corpos disponíveis na mensagem de erro para o corretor se autocorrigir.
+    """
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.shell_body",
+        arguments={"thickness_mm": 2, "body": "Outer_Box"},
+    )
+    assert "Corpos disponiveis:" in script
+
+
 def test_fillet_chamfer_warn_on_unrecognized_edge_arg() -> None:
     """Regressão (gate placa+furo+fillet): fillet/chamfer NÃO podem cair mudo
     em edge_selector='all' quando o planner manda a intenção de aresta numa
