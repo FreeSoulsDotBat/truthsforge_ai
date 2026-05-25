@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -103,6 +104,9 @@ class _FakeExecutor:
     probe_features: list[dict[str, Any]] | None = None
     probe_ok: bool = True
     probe_raises: bool = False
+    # Quando True, embrulha a saída no envelope real do adapter HTTP fusion
+    # (payload do script como JSON stringificado em message/result.message).
+    probe_envelope: bool = False
     single_step_calls: list[ModelingPlanStep] = field(default_factory=list)
 
     def execute_plan(self, plan: ModelingPlan) -> ModelingExecutionResult:
@@ -122,11 +126,22 @@ class _FakeExecutor:
         self.single_step_calls.append(step)
         if self.probe_raises:
             raise RuntimeError("fusion offline durante a captura")
-        output: dict[str, Any] = (
+        inner: dict[str, Any] = (
             {} if self.probe_count is None else {"timeline_count": self.probe_count}
         )
         if self.probe_features is not None:
-            output["timeline"] = self.probe_features
+            inner["timeline"] = self.probe_features
+        output: dict[str, Any] = inner
+        if self.probe_envelope:
+            # Replica o envelope HTTP real: payload do script como JSON string.
+            blob = json.dumps({**inner, "ok": True, "tool_name": "fusion.query_timeline"})
+            output = {
+                "ok": True,
+                "input": {},
+                "result": {"message": blob, "success": True},
+                "message": blob,
+                "software": "fusion",
+            }
         return SimpleNamespace(
             step=step, output=output, tool_call_id=None, event="probe", ok=self.probe_ok
         )
@@ -154,6 +169,7 @@ def _orchestrator(
         probe_features=kwargs.get("probe_features"),
         probe_ok=kwargs.get("probe_ok", True),
         probe_raises=kwargs.get("probe_raises", False),
+        probe_envelope=kwargs.get("probe_envelope", False),
     )
     orch = ModelingChatOrchestrator(store=store, planner=planner, executor=executor)
     return orch, store, planner, executor
@@ -475,6 +491,59 @@ def test_reconciliation_flags_possible_manual_edit_on_count_mismatch() -> None:
     block = planner.last_live_state_block
     assert block is not None
     assert "edição manual" in block.lower()
+
+
+def test_inner_fusion_payload_parses_http_envelope() -> None:
+    # Regressão (gate 2026-05-25): tools fusion OK devolvem o payload como JSON
+    # stringificado em message/result.message; ler o topo dava None → marcador
+    # vazio + bloco de reconciliação enganoso ("0 features").
+    orch, _, _, _ = _orchestrator()
+    inner = {
+        "ok": True,
+        "timeline_count": 9,
+        "timeline": [{"index": 0, "name": "Sketch_Base", "type": "adsk::fusion::Sketch"}],
+        "parameters": [],
+    }
+    blob = json.dumps(inner)
+    envelope = {
+        "ok": True,
+        "input": {},
+        "result": {"message": blob, "success": True},
+        "message": blob,
+        "software": "fusion",
+    }
+    payload = orch._inner_fusion_payload(envelope)
+    assert payload is not None
+    assert payload["timeline_count"] == 9
+    assert payload["timeline"][0]["name"] == "Sketch_Base"
+    # formato direto (fakes/mock/in_process) continua passando direto
+    assert orch._inner_fusion_payload({"timeline_count": 3})["timeline_count"] == 3
+    assert orch._inner_fusion_payload(None) is None
+
+
+def test_propose_edit_plan_extracts_marker_from_http_envelope() -> None:
+    # Regressão fim-a-fim: com o envelope HTTP real, marcador + reconciliação
+    # têm que sair corretos (o bug do gate deixava marker vazio e bloco "0").
+    orch, store, planner, _ = _orchestrator(
+        planner_steps=[_safe_step(1, "fusion.fillet_edges")],
+        probe_count=9,
+        probe_features=[{"index": 0, "name": "Extrude1", "type": "ExtrudeFeature"}],
+        probe_envelope=True,
+    )
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    outcome = orch.propose_edit_plan(
+        chat,
+        payload=ModelingPlanCreate(prompt="arredondar", software_override=ModelingSoftware.fusion),
+    )
+
+    assert outcome.plan.rollback_marker == 9
+    block = planner.last_live_state_block
+    assert block is not None
+    assert "9 feature(s)" in block
+    assert "Extrude1" in block
 
 
 def test_propose_edit_plan_blocks_on_high_risk() -> None:

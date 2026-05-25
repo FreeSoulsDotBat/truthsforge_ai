@@ -33,6 +33,7 @@ state-machine logic.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -553,7 +554,44 @@ class ModelingChatOrchestrator:
             return None
         if not outcome.ok or not isinstance(outcome.output, dict):
             return None
-        return outcome.output
+        return self._inner_fusion_payload(outcome.output)
+
+    @staticmethod
+    def _inner_fusion_payload(output: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Extrai o payload real de um tool fusion do envelope do adapter.
+
+        Tools fusion BEM-SUCEDIDAS devolvem o dict do script como JSON
+        *stringificado* em ``output["message"]`` (duplicado em
+        ``output["result"]["message"]``); o executor só promove os campos ao
+        topo quando é FALHA (``_unwrap_inner_fusion_result``). Para ler campos
+        estruturados de um sucesso (``timeline_count``, ``timeline``...) é
+        preciso parsear aqui. Aceita também o formato direto (dict já plano) —
+        robustez p/ mock/in_process e testes com fakes.
+        """
+
+        if not isinstance(output, dict):
+            return None
+        # Formato direto (mock/in_process/fakes): campos já no topo.
+        if "timeline_count" in output or "timeline" in output:
+            return output
+        # Envelope HTTP: JSON stringificado em message / result.message.
+        candidates = [output.get("message")]
+        result = output.get("result")
+        if isinstance(result, dict):
+            candidates.append(result.get("message"))
+        for cand in candidates:
+            if not isinstance(cand, str):
+                continue
+            stripped = cand.strip()
+            if not (stripped.startswith("{") and stripped.endswith("}")):
+                continue
+            try:
+                inner = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(inner, dict):
+                return inner
+        return output
 
     def _apply_rollback_marker(
         self, plan: ModelingPlan, live_output: dict[str, Any] | None
