@@ -122,6 +122,31 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
         summary="Arredonda arestas selecionadas com um raio.",
         args={
             "radius_mm": ArgSpec("Raio do fillet em milímetros.", example=2.0),
+            "edge_selector": ArgSpec(
+                "Quais arestas arredondar. Valores VÁLIDOS: all | top | bottom | "
+                "vertical | horizontal. NÃO invente nomes semânticos "
+                "(ex.: 'outer_edges_of_body') — eles não casam com aresta nenhuma. "
+                "Alternativa precisa: edge_ids=[i,j] com índices de query_geometry.",
+                type="string",
+                unit=None,
+                required=False,
+                example="all",
+            ),
+        },
+    ),
+    "fusion.chamfer_edges": ToolSchema(
+        summary="Chanfra arestas selecionadas com uma distância.",
+        args={
+            "distance_mm": ArgSpec("Distância do chanfro em milímetros.", example=1.0),
+            "edge_selector": ArgSpec(
+                "Quais arestas chanfrar. Valores VÁLIDOS: all | top | bottom | "
+                "vertical | horizontal (sem nomes semânticos). "
+                "Alternativa: edge_ids=[i,j] de query_geometry.",
+                type="string",
+                unit=None,
+                required=False,
+                example="all",
+            ),
         },
     ),
     "fusion.set_parameter": ToolSchema(

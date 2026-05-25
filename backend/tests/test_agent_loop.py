@@ -226,6 +226,21 @@ def test_tool_schemas_render_includes_units_and_examples() -> None:
     assert tool_schemas.tool_schema("fusion.add_rectangle") is not None
 
 
+def test_fillet_chamfer_schema_documents_valid_edge_selectors() -> None:
+    """Gate da placa (m3d_plan_99598a25): o loop ESGOTOU corrigindo fillet_edges
+    porque o LLM inventava edge_selector ('outer_edges_of_body:Body1') e o schema
+    — que é passado ao corretor em _correction_messages — não listava os válidos.
+    Agora fillet/chamfer documentam o enum all|top|bottom|vertical|horizontal.
+    """
+
+    rendered = tool_schemas.render_tool_schema("fusion.fillet_edges")
+    assert "edge_selector" in rendered
+    for valid in ("all", "top", "vertical", "horizontal"):
+        assert valid in rendered
+    # chamfer compartilha a mesma gramática de selector
+    assert "edge_selector" in tool_schemas.render_tool_schema("fusion.chamfer_edges")
+
+
 def test_tool_schemas_unknown_tool_falls_back_to_registry() -> None:
     # Tool real do registry sem schema explícito ainda → usa a descrição.
     rendered = tool_schemas.render_tool_schema("fusion.add_cylinder")
