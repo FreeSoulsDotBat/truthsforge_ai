@@ -1298,12 +1298,37 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if radius_mm <= 0:
                 raise ToolError("fusion.invalid_dimensions", "radius_mm precisa ser positivo.")
             body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
+            edge_warn = ""
             edge_ids = args.get("edge_ids") or args.get("edge_indices")
             if edge_ids:
                 selector = "edge_ids"
                 edges = _edges_by_ids(body, edge_ids)
             else:
-                selector = args.get("edge_selector") or args.get("edges") or "all"
+                selector = args.get("edge_selector") or args.get("edges")
+                if selector is None:
+                    # Era o fallback silencioso: o planner mandava a intencao de
+                    # aresta numa chave nao reconhecida (ex.: edge_ids_from_
+                    # previous_query com texto livre) e caiamos mudo em "all" —
+                    # filetando ate o furo. Agora avisamos alto no trace.
+                    _recognized = {{
+                        "radius_mm", "distance_mm", "edge_ids", "edge_indices",
+                        "edge_selector", "edges", "body_ref", "body", "body_name",
+                    }}
+                    _unknown = [
+                        k for k in args
+                        if k not in _recognized
+                        and ("edge" in k.lower() or "selector" in k.lower())
+                    ]
+                    if _unknown:
+                        edge_warn = (
+                            " [WARN: args de aresta nao reconhecidos "
+                            + str(sorted(_unknown))
+                            + " ignorados; apliquei em TODAS as arestas - selecao"
+                            + " pode estar imprecisa. Use edge_selector=all|top|"
+                            + "bottom|vertical|horizontal ou edge_ids=[i,j] de"
+                            + " query_geometry]"
+                        )
+                    selector = "all"
                 edges = _select_edges(body, selector)
             if edges.count == 0:
                 raise ToolError(
@@ -1317,8 +1342,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             )
             fillets.add(inp)
             return {{
-                "message": "Fillet r={{}}mm em {{}} aresta(s) ({{}}) de '{{}}'.".format(
-                    radius_mm, edges.count, selector, body.name
+                "message": "Fillet r={{}}mm em {{}} aresta(s) ({{}}) de '{{}}'.{{}}".format(
+                    radius_mm, edges.count, selector, body.name, edge_warn
                 ),
                 "body_name": body.name,
             }}
@@ -1331,12 +1356,37 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if distance_mm <= 0:
                 raise ToolError("fusion.invalid_dimensions", "distance_mm precisa ser positivo.")
             body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
+            edge_warn = ""
             edge_ids = args.get("edge_ids") or args.get("edge_indices")
             if edge_ids:
                 selector = "edge_ids"
                 edges = _edges_by_ids(body, edge_ids)
             else:
-                selector = args.get("edge_selector") or args.get("edges") or "all"
+                selector = args.get("edge_selector") or args.get("edges")
+                if selector is None:
+                    # Era o fallback silencioso: o planner mandava a intencao de
+                    # aresta numa chave nao reconhecida (ex.: edge_ids_from_
+                    # previous_query com texto livre) e caiamos mudo em "all" —
+                    # chanfrando ate o furo. Agora avisamos alto no trace.
+                    _recognized = {{
+                        "radius_mm", "distance_mm", "edge_ids", "edge_indices",
+                        "edge_selector", "edges", "body_ref", "body", "body_name",
+                    }}
+                    _unknown = [
+                        k for k in args
+                        if k not in _recognized
+                        and ("edge" in k.lower() or "selector" in k.lower())
+                    ]
+                    if _unknown:
+                        edge_warn = (
+                            " [WARN: args de aresta nao reconhecidos "
+                            + str(sorted(_unknown))
+                            + " ignorados; apliquei em TODAS as arestas - selecao"
+                            + " pode estar imprecisa. Use edge_selector=all|top|"
+                            + "bottom|vertical|horizontal ou edge_ids=[i,j] de"
+                            + " query_geometry]"
+                        )
+                    selector = "all"
                 edges = _select_edges(body, selector)
             if edges.count == 0:
                 raise ToolError(
@@ -1357,8 +1407,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 inp.chamferEdgeSets.addEqualDistanceChamferEdgeSet(edges, dist_vi, True)
                 chamfers.add(inp)
             return {{
-                "message": "Chanfro d={{}}mm em {{}} aresta(s) ({{}}) de '{{}}'.".format(
-                    distance_mm, edges.count, selector, body.name
+                "message": "Chanfro d={{}}mm em {{}} aresta(s) ({{}}) de '{{}}'.{{}}".format(
+                    distance_mm, edges.count, selector, body.name, edge_warn
                 ),
                 "body_name": body.name,
             }}

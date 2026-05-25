@@ -779,6 +779,33 @@ def test_onda_c_features_are_registered_and_compile() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_fillet_chamfer_warn_on_unrecognized_edge_arg() -> None:
+    """Regressão (gate placa+furo+fillet): fillet/chamfer NÃO podem cair mudo
+    em edge_selector='all' quando o planner manda a intenção de aresta numa
+    chave não reconhecida (ex.: edge_ids_from_previous_query com texto livre) —
+    foi assim que o fillet arredondou as arestas do furo contra o plano. O
+    script gerado precisa conter o guard que torna esse fallback visível no
+    trace (WARN), em vez de silencioso.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    for tool in ("fusion.fillet_edges", "fusion.chamfer_edges"):
+        script = build_autodesk_fusion_script(
+            tool_name=tool,
+            arguments={
+                "radius_mm": 2,
+                "distance_mm": 1,
+                "edge_ids_from_previous_query": "so as externas, nao o furo",
+            },
+        )
+        ast.parse(script)
+        assert "args de aresta nao reconhecidos" in script, tool
+        assert "edge_warn" in script, tool
+
+
 def test_onda_def_tools_are_registered_and_compile() -> None:
     """Ondas D-F: replicação, sweeps, modificação direta. Verifica allowlist,
     categorias de risco corretas (combine=high_risk, delete=destructive) e
