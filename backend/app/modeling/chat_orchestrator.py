@@ -48,7 +48,10 @@ from app.core.contracts import (
     ModelingPlanCreate,
     ModelingPlanKind,
     ModelingPlanStatus,
+    ModelingPlanStep,
     ModelingRiskLevel,
+    ModelingSoftware,
+    ModelingStepStatus,
     ModelingTraceLevel,
     ModelingTraceSource,
     now_utc,
@@ -509,6 +512,46 @@ class ModelingChatOrchestrator:
     # editing (mini-plans)
     # ------------------------------------------------------------------
 
+    def _capture_rollback_marker(self, plan: ModelingPlan) -> ModelingPlan:
+        """T3.6: best-effort snapshot of the pre-edit timeline count.
+
+        Runs ``fusion.query_timeline`` once *outside* ``plan.steps`` — so the
+        agentic loop never sees it and a failed read can never block the edit
+        — and records ``design.timeline.count`` on ``plan.rollback_marker``.
+        Any failure (non-fusion software, Fusion offline, malformed output)
+        leaves the marker ``None`` and returns the plan untouched, so the
+        edit proceeds exactly as before. ``POST /plans/{id}/rollback`` later
+        reverts the model to this count.
+        """
+
+        if plan.software_choice != ModelingSoftware.fusion:
+            return plan
+        probe = ModelingPlanStep(
+            seq=1,
+            title="Capturar timeline pré-edição",
+            software=ModelingSoftware.fusion,
+            tool_name="fusion.query_timeline",
+            risk_level=ModelingRiskLevel.low,
+            status=ModelingStepStatus.approved,
+            input_json={},
+        )
+        try:
+            outcome = self.executor._execute_single_step(probe, plan=plan)
+        except Exception:  # pragma: no cover - defensive: read must not block edit
+            logger.warning(
+                "rollback marker capture raised; edit proceeds without rollback",
+                exc_info=True,
+            )
+            return plan
+        if not outcome.ok or not isinstance(outcome.output, dict):
+            return plan
+        count = outcome.output.get("timeline_count")
+        if not isinstance(count, int):
+            return plan
+        captured = plan.model_copy(update={"rollback_marker": count})
+        self.store.upsert_modeling_plan(captured)
+        return captured
+
     def propose_edit_plan(
         self, chat: ChatSession, *, payload: ModelingPlanCreate, fluid_mode: bool = True
     ) -> EditPlanOutcome:
@@ -541,6 +584,10 @@ class ModelingChatOrchestrator:
             }
         )
         plan = self.planner.create_plan(edit_payload)
+        # T3.6: registra a contagem da timeline ANTES da edição rodar, para o
+        # botão "Desfazer última edição" reverter via fusion.rollback_timeline.
+        # Best-effort: nunca bloqueia a edição (ver _capture_rollback_marker).
+        plan = self._capture_rollback_marker(plan)
         high_risk = self._plan_has_high_risk(plan)
 
         if high_risk:

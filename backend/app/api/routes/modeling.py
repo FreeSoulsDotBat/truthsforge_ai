@@ -35,6 +35,7 @@ from app.modeling.observability import _truncate_payload, get_tracer
 from app.modeling.service import (
     ModelingInvalidEditTool,
     ModelingPlanNotEditable,
+    ModelingRollbackUnavailable,
     get_modeling_service,
 )
 from app.storage.store import get_store
@@ -130,6 +131,24 @@ def execute_plan(plan_id: str) -> ModelingExecutionResult:
         raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
     _advance_chat_to_editing_after_execute(result)
     return result
+
+
+@router.post("/plans/{plan_id}/rollback", response_model=ModelingExecutionResult)
+def rollback_plan(plan_id: str) -> ModelingExecutionResult:
+    """T3.6: desfaz a última edição revertendo a timeline ao ponto pré-edição.
+
+    ``plan_id`` é a edição a reverter; usa ``plan.rollback_marker`` (capturado
+    antes da edição). NÃO mexe no ``modeling_plan_id`` do chat — o contexto de
+    edição segue apontando para o plano com histórico completo, não para o
+    plano de rollback (que só contém o passo de reversão).
+    """
+
+    try:
+        return _service().rollback_last_edit(plan_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
+    except ModelingRollbackUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _advance_chat_to_editing_after_execute(result: ModelingExecutionResult) -> None:

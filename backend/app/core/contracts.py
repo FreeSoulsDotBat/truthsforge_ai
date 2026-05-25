@@ -879,6 +879,12 @@ class ModelingPlan(BaseModel):
     fallback_reason: str | None = None
     parent_plan_id: str | None = None
     """For ``kind="edit"``, the id of the primary plan it edits."""
+    rollback_marker: int | None = None
+    """T3.6: for fusion ``kind="edit"`` plans, the design timeline feature
+    count captured (best-effort) *before* this edit ran. ``POST
+    /plans/{id}/rollback`` reverts the model to this count via
+    ``fusion.rollback_timeline``. ``None`` when the pre-edit read failed or
+    the software has no timeline (rollback then unavailable for this edit)."""
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
 

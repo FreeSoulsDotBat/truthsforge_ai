@@ -2224,6 +2224,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 "message": "Timeline: {{}} feature(s), {{}} parametro(s).".format(
                     tl.count, ups.count
                 ),
+                "timeline_count": tl.count,
                 "timeline": features_out,
                 "parameters": params_out,
             }}

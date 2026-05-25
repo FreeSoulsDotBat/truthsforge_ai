@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -91,6 +92,12 @@ class _FakeExecutor:
 
     store: _FakeStore
     fail: bool = False
+    # T3.6: controls the best-effort ``query_timeline`` probe in
+    # ``_capture_rollback_marker`` (only invoked for fusion edits).
+    probe_count: int | None = 7
+    probe_ok: bool = True
+    probe_raises: bool = False
+    single_step_calls: list[ModelingPlanStep] = field(default_factory=list)
 
     def execute_plan(self, plan: ModelingPlan) -> ModelingExecutionResult:
         status = ModelingPlanStatus.failed if self.fail else ModelingPlanStatus.completed
@@ -103,6 +110,15 @@ class _FakeExecutor:
             blocked_step_ids=[],
             events=[f"executed:{name}" for name in (s.tool_name for s in plan.steps)],
             tool_call_ids=[],
+        )
+
+    def _execute_single_step(self, step: ModelingPlanStep, *, plan: ModelingPlan) -> Any:
+        self.single_step_calls.append(step)
+        if self.probe_raises:
+            raise RuntimeError("fusion offline durante a captura")
+        output = {} if self.probe_count is None else {"timeline_count": self.probe_count}
+        return SimpleNamespace(
+            step=step, output=output, tool_call_id=None, event="probe", ok=self.probe_ok
         )
 
 
@@ -121,7 +137,13 @@ def _orchestrator(
 ) -> tuple[ModelingChatOrchestrator, _FakeStore, _FakePlanner, _FakeExecutor]:
     store = _FakeStore()
     planner = _FakePlanner(store=store, next_steps=kwargs.get("planner_steps", []))
-    executor = _FakeExecutor(store=store, fail=kwargs.get("execution_fails", False))
+    executor = _FakeExecutor(
+        store=store,
+        fail=kwargs.get("execution_fails", False),
+        probe_count=kwargs.get("probe_count", 7),
+        probe_ok=kwargs.get("probe_ok", True),
+        probe_raises=kwargs.get("probe_raises", False),
+    )
     orch = ModelingChatOrchestrator(store=store, planner=planner, executor=executor)
     return orch, store, planner, executor
 
@@ -307,6 +329,66 @@ def test_propose_edit_plan_auto_executes_when_no_high_risk() -> None:
     assert outcome.plan.parent_plan_id == "m3d_plan_parent"
     assert outcome.execution is not None
     assert outcome.plan.status is ModelingPlanStatus.completed
+
+
+def test_propose_edit_plan_captures_rollback_marker_for_fusion() -> None:
+    orch, store, _, executor = _orchestrator(
+        planner_steps=[_safe_step(1, "fusion.extrude_profile")],
+        probe_count=5,
+    )
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    outcome = orch.propose_edit_plan(
+        chat,
+        payload=ModelingPlanCreate(
+            prompt="extrudar base 4mm", software_override=ModelingSoftware.fusion
+        ),
+    )
+
+    # T3.6: a captura roda fusion.query_timeline ANTES da edição (fora de
+    # plan.steps, para o loop nunca a ver) e grava a contagem no plano.
+    assert [s.tool_name for s in executor.single_step_calls] == ["fusion.query_timeline"]
+    assert outcome.plan.rollback_marker == 5
+    assert store.plans[outcome.plan.id].rollback_marker == 5
+    assert outcome.requires_approval is False
+
+
+def test_propose_edit_plan_skips_rollback_capture_for_non_fusion() -> None:
+    orch, store, _, executor = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    outcome = orch.propose_edit_plan(chat, payload=ModelingPlanCreate(prompt="bevel 2mm"))
+
+    # Blender não tem timeline: nenhuma sondagem; marcador permanece None.
+    assert executor.single_step_calls == []
+    assert outcome.plan.rollback_marker is None
+
+
+def test_propose_edit_plan_proceeds_when_rollback_capture_fails() -> None:
+    orch, store, _, executor = _orchestrator(
+        planner_steps=[_safe_step(1, "fusion.extrude_profile")],
+        probe_raises=True,
+    )
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    outcome = orch.propose_edit_plan(
+        chat,
+        payload=ModelingPlanCreate(
+            prompt="extrudar base 4mm", software_override=ModelingSoftware.fusion
+        ),
+    )
+
+    # A leitura falhou, mas a edição NÃO pode ser bloqueada por isso (best-effort).
+    assert executor.single_step_calls  # tentou sondar
+    assert outcome.requires_approval is False
+    assert outcome.plan.status is ModelingPlanStatus.completed
+    assert outcome.plan.rollback_marker is None
 
 
 def test_propose_edit_plan_blocks_on_high_risk() -> None:

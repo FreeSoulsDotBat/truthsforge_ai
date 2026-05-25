@@ -33,10 +33,12 @@ from app.core.contracts import (
     ModelingPlan,
     ModelingPlanCreate,
     ModelingPlanEdit,
+    ModelingPlanKind,
     ModelingPlanStatus,
     ModelingPlanStep,
     ModelingPrintabilityReport,
     ModelingPrintabilityRequest,
+    ModelingRiskLevel,
     ModelingSession,
     ModelingSessionStart,
     ModelingSnapshot,
@@ -83,6 +85,23 @@ class ModelingInvalidEditTool(Exception):
     def __init__(self, tool_name: str) -> None:
         super().__init__(f"Ferramenta não permitida na edição: {tool_name!r}.")
         self.tool_name = tool_name
+
+
+class ModelingRollbackUnavailable(Exception):
+    """Plano de edição sem ponto de rollback (timeline pré-edição não capturada).
+
+    Lançada por :meth:`ModelingService.rollback_last_edit` quando
+    ``plan.rollback_marker is None`` — a leitura best-effort da timeline
+    falhou (Fusion offline no momento da edição) ou o software não tem
+    timeline. A rota mapeia para 409.
+    """
+
+    def __init__(self, plan_id: str) -> None:
+        super().__init__(
+            f"Edição {plan_id!r} não tem ponto de rollback registrado "
+            "(timeline pré-edição não capturada)."
+        )
+        self.plan_id = plan_id
 
 
 class ModelingService:
@@ -348,6 +367,75 @@ class ModelingService:
         finally:
             if owns_trace:
                 tracer.close_trace()
+
+    def rollback_last_edit(self, plan_id: str) -> ModelingExecutionResult:
+        """T3.6: reverte uma edição revertendo a timeline do Fusion.
+
+        Lê ``plan.rollback_marker`` (contagem da timeline ANTES da edição,
+        capturada best-effort pelo orchestrator em ``propose_edit_plan``) e
+        executa um plano de UM passo ``fusion.rollback_timeline``. Sem
+        marcador → :class:`ModelingRollbackUnavailable`.
+
+        O clique no botão "Desfazer última edição" é a aprovação humana (P6)
+        desta deleção; por isso o passo nasce ``approved``. O loop agêntico é
+        DELIBERADAMENTE evitado (executor linear direto): rollback é
+        destrutivo e não deve ser "corrigido" automaticamente.
+        """
+
+        plan = self._get_plan_or_raise(plan_id)
+        if plan.rollback_marker is None:
+            raise ModelingRollbackUnavailable(plan_id)
+
+        rollback_plan = self._build_rollback_plan(plan)
+        self.store.upsert_modeling_plan(rollback_plan)
+        self.store.add_audit_event(
+            AuditEvent(
+                event_type="modeling.plan_rollback_requested",
+                metadata={
+                    "plan_id": rollback_plan.id,
+                    "reverts_plan_id": plan.id,
+                    "target_count": plan.rollback_marker,
+                },
+            ),
+        )
+        # Mesmo cuidado de trace do execute_plan: o endpoint roda fora de um
+        # trace aberto, então abrimos um ligado ao plano de rollback.
+        owns_trace = current_trace_id() is None
+        tracer = get_tracer(self.store if hasattr(self.store, "record_trace_events_bulk") else None)
+        if owns_trace:
+            tracer.start_trace(plan_id=rollback_plan.id)
+        else:
+            tracer.bind_plan(rollback_plan.id)
+        try:
+            return self.executor.execute_plan(rollback_plan)
+        finally:
+            if owns_trace:
+                tracer.close_trace()
+
+    def _build_rollback_plan(self, edit_plan: ModelingPlan) -> ModelingPlan:
+        """Monta o plano de 1 passo que reverte ``edit_plan`` via timeline."""
+
+        step = ModelingPlanStep(
+            seq=1,
+            title="Reverter última edição",
+            software=edit_plan.software_choice,
+            tool_name="fusion.rollback_timeline",
+            risk_level=ModelingRiskLevel.high,
+            approval_required=False,  # aprovação = clique no botão (ver rollback_last_edit)
+            status=ModelingStepStatus.approved,
+            input_json={"target_count": edit_plan.rollback_marker},
+        )
+        return ModelingPlan(
+            project_id=edit_plan.project_id,
+            conversation_id=edit_plan.conversation_id,
+            prompt=f"Reverter edição {edit_plan.id}",
+            software_choice=edit_plan.software_choice,
+            kind=ModelingPlanKind.edit,
+            parent_plan_id=edit_plan.parent_plan_id or edit_plan.id,
+            status=ModelingPlanStatus.approved,
+            rationale="Rollback da última edição (timeline → contagem pré-edição).",
+            steps=[step],
+        )
 
     # ------------------------------------------------------------------
     # snapshots (delegated)
