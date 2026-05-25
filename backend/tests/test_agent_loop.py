@@ -181,6 +181,46 @@ def test_loop_corrects_on_geometric_divergence_even_when_tool_ok() -> None:
     assert executor.calls == [("fusion.extrude_profile", True), ("fusion.extrude_profile", True)]
 
 
+def test_build_dimension_verifier_compares_list_dims() -> None:
+    """C (verifier): expected_dimensions_mm e o read-back das tools são listas
+    [x,y,z]. O verifier compara por eixo; bbox z=0 (cut consumiu a peça) diverge.
+    """
+
+    from app.modeling.agent_loop import build_dimension_verifier
+
+    verifier = build_dimension_verifier()
+    step = _step(1, "fusion.extrude_profile", expected_dimensions_mm=[60, 40, 30])
+    assert verifier(step, {"dimensions_mm": [60.0, 40.0, 30.0]}) is None
+    div = verifier(step, {"dimensions_mm": [60.0, 40.0, 0.0]})
+    assert div is not None and "z" in div
+    assert div["z"]["expected"] == 30 and div["z"]["measured"] == 0.0
+
+
+def test_loop_threads_divergence_to_corrector() -> None:
+    """C (verifier): quando o tool foi OK mas a geometria divergiu, o loop injeta
+    a divergência no output que vai ao corretor (para o LLM ver esperado×medido).
+    """
+
+    store = _FakeStore()
+    executor = _ScriptedExecutor(store, decide=lambda step: True)  # tool sempre ok
+    seen: list[dict[str, Any]] = []
+
+    def verifier(step, output):
+        return None if step.input_json.get("_fixed") else {"z": {"expected": 30, "measured": 0}}
+
+    def corrector(step, output, attempt):
+        seen.append(output)
+        return step.model_copy(update={"input_json": {**step.input_json, "_fixed": True}})
+
+    loop = ModelingAgentLoop(executor, corrector=corrector, verifier=verifier)
+    result = loop.run(
+        _plan(_step(1, "fusion.extrude_profile", expected_dimensions_mm=[60, 40, 30]))
+    )
+
+    assert result.plan.status is ModelingPlanStatus.completed
+    assert seen and seen[0].get("verification_divergence") == {"z": {"expected": 30, "measured": 0}}
+
+
 def test_loop_draft_plan_does_not_execute() -> None:
     store = _FakeStore()
     executor = _ScriptedExecutor(store, decide=lambda step: True)

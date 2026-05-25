@@ -107,6 +107,15 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
                 required=False,
                 example=10.0,
             ),
+            "expected_dimensions_mm": ArgSpec(
+                "Bbox esperado [x,y,z] do corpo após o passo (read-back/verificação): "
+                "se a geometria real divergir, o loop auto-corrige (ex.: um cut que "
+                "consome a peça vira bbox ~0). Num furo, use o bbox externo da peça.",
+                type="array",
+                unit="mm",
+                required=False,
+                example=[60, 40, 4],
+            ),
         },
     ),
     "fusion.hole": ToolSchema(

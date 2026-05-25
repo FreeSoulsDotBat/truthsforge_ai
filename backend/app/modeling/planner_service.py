@@ -232,6 +232,7 @@ class ModelingPlannerService:
                     gateway=self.gateway,
                     model=model,
                     max_attempts=max_attempts,
+                    verification=output.get("verification_divergence"),
                 )
             except Exception as exc:  # noqa: BLE001 - falha de correção não estoura
                 self._classify_and_record_llm_error(exc, model)

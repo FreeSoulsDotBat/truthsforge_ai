@@ -817,12 +817,14 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 False,
                 _param_value_input(args.get("distance_mm"), design),
             )
-            extrudes.add(input_obj)
+            ext = extrudes.add(input_obj)
+            dims = _body_dims_mm(ext.bodies.item(0)) if ext.bodies.count > 0 else [0.0, 0.0, 0.0]
             return {{
                 "message": "Extrusão de {{}} mm aplicada (operation={{}}).{{}}".format(
                     distance_mm, operation, operation_warning
                 ),
                 "sketch_name": sketch.name,
+                "dimensions_mm": dims,
             }}
 
 
@@ -1149,6 +1151,18 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 moves.add(inp)
 
 
+        def _body_dims_mm(body):
+            # Read-back: dimensoes (bbox) do corpo em mm [x, y, z]. Alimenta o
+            # verifier do loop (expected_dimensions_mm x medido). bbox ~0 sinaliza
+            # corpo consumido (ex.: cut que comeu a peca).
+            bb = body.boundingBox
+            return [
+                round((bb.maxPoint.x - bb.minPoint.x) * 10.0, 3),
+                round((bb.maxPoint.y - bb.minPoint.y) * 10.0, 3),
+                round((bb.maxPoint.z - bb.minPoint.z) * 10.0, 3),
+            ]
+
+
         def _add_box(args):
             # Onda B: primitiva direta. Cria sketch interno + extrude num
             # unico step (corpo editavel na timeline, nao TemporaryBRep).
@@ -1206,17 +1220,20 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             inp.setDistanceExtent(False, adsk.core.ValueInput.createByReal(h / 10.0))
             feat = extrudes.add(inp)
             body_name = sketch.name
+            dims = [0.0, 0.0, 0.0]
             if feat.bodies.count > 0:
                 body_name = _unique_body_name(design, str(args.get("name") or "Box"))
                 feat.bodies.item(0).name = body_name
                 _oz = _xyz_mm(args.get("origin_mm") or args.get("center_mm"), design)[2]
                 _translate_body(design, feat.bodies.item(0), 0.0, 0.0, _oz / 10.0)
+                dims = _body_dims_mm(feat.bodies.item(0))
             return {{
                 "message": "Caixa {{}}x{{}}x{{}} mm criada (corpo '{{}}').".format(
                     w, d, h, body_name
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
+                "dimensions_mm": dims,
             }}
 
 
@@ -1252,17 +1269,20 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             inp.setDistanceExtent(False, adsk.core.ValueInput.createByReal(h / 10.0))
             feat = extrudes.add(inp)
             body_name = sketch.name
+            dims = [0.0, 0.0, 0.0]
             if feat.bodies.count > 0:
                 body_name = _unique_body_name(design, str(args.get("name") or "Cylinder"))
                 feat.bodies.item(0).name = body_name
                 _oz = _xyz_mm(args.get("center_mm") or args.get("origin_mm"), design)[2]
                 _translate_body(design, feat.bodies.item(0), 0.0, 0.0, _oz / 10.0)
+                dims = _body_dims_mm(feat.bodies.item(0))
             return {{
                 "message": "Cilindro o{{}}x{{}} mm criado (corpo '{{}}').".format(
                     diameter_mm, h, body_name
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
+                "dimensions_mm": dims,
             }}
 
 
@@ -1301,17 +1321,20 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             inp.setAngleExtent(False, adsk.core.ValueInput.createByReal(2 * math.pi))
             feat = revolves.add(inp)
             body_name = sketch.name
+            dims = [0.0, 0.0, 0.0]
             if feat.bodies.count > 0:
                 body_name = _unique_body_name(design, str(args.get("name") or "Sphere"))
                 feat.bodies.item(0).name = body_name
                 _ox, _oy, _oz = _xyz_mm(args.get("origin_mm") or args.get("center_mm"), design)
                 _translate_body(design, feat.bodies.item(0), _ox / 10.0, _oy / 10.0, _oz / 10.0)
+                dims = _body_dims_mm(feat.bodies.item(0))
             return {{
                 "message": "Esfera o{{}} mm criada (corpo '{{}}').".format(
                     diameter_mm, body_name
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
+                "dimensions_mm": dims,
             }}
 
 
@@ -1359,11 +1382,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             inp.setAngleExtent(False, adsk.core.ValueInput.createByReal(2 * math.pi))
             feat = revolves.add(inp)
             body_name = sketch.name
+            dims = [0.0, 0.0, 0.0]
             if feat.bodies.count > 0:
                 body_name = _unique_body_name(design, str(args.get("name") or "Cone"))
                 feat.bodies.item(0).name = body_name
                 _ox, _oy, _oz = _xyz_mm(args.get("origin_mm") or args.get("center_mm"), design)
                 _translate_body(design, feat.bodies.item(0), _ox / 10.0, _oy / 10.0, _oz / 10.0)
+                dims = _body_dims_mm(feat.bodies.item(0))
             shape = "cone" if top_d <= 0 else "tronco de cone"
             return {{
                 "message": "{{}} base o{{}} topo o{{}} altura {{}} mm criado ('{{}}').".format(
@@ -1371,6 +1396,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
+                "dimensions_mm": dims,
             }}
 
 

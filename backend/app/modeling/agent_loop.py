@@ -108,6 +108,12 @@ class ModelingAgentLoop:
             attempt = 0
             while self._needs_correction(current, outcome) and attempt < self.max_iterations:
                 attempt += 1
+                # Tool OK mas geometria divergente (verifier): injeta a
+                # divergência no output p/ o corretor enxergar (o
+                # build_correction_context formata "esperado × medido").
+                divergence = None
+                if outcome.ok and self.verifier is not None:
+                    divergence = self.verifier(current, outcome.output)
                 self._tracer.record(
                     "agent_loop.correction_attempt",
                     source=ModelingTraceSource.backend,
@@ -117,11 +123,15 @@ class ModelingAgentLoop:
                         "step_id": step.id,
                         "tool_name": current.tool_name,
                         "error_code": outcome.output.get("error_code"),
+                        "divergence": divergence,
                     },
                     plan_id=plan.id,
                 )
+                corrector_output = outcome.output
+                if divergence is not None:
+                    corrector_output = {**outcome.output, "verification_divergence": divergence}
                 corrected = (
-                    self.corrector(current, outcome.output, attempt) if self.corrector else None
+                    self.corrector(current, corrector_output, attempt) if self.corrector else None
                 )
                 if corrected is None:
                     break
@@ -241,20 +251,34 @@ def build_dimension_verifier(
     def verifier(step: ModelingPlanStep, output: dict[str, Any]) -> dict[str, Any] | None:
         expected = (step.input_json or {}).get(expected_key)
         measured = (output or {}).get(measured_key)
-        if not isinstance(expected, dict) or not isinstance(measured, dict):
-            return None
-        divergences: dict[str, Any] = {}
-        for key, exp in expected.items():
-            meas = measured.get(key)
-            if (
+
+        def _diverged(exp: Any, meas: Any) -> bool:
+            return (
                 isinstance(exp, int | float)
                 and isinstance(meas, int | float)
                 and abs(float(exp) - float(meas)) > tolerance_mm
-            ):
+            )
+
+        divergences: dict[str, Any] = {}
+        # Formato lista [x, y, z] (o usado pelas tools de geometria): índice→eixo.
+        if isinstance(expected, list | tuple) and isinstance(measured, list | tuple):
+            for i in range(min(len(expected), len(measured), 3)):
+                if _diverged(expected[i], measured[i]):
+                    divergences[("x", "y", "z")[i]] = {
+                        "expected": expected[i],
+                        "measured": measured[i],
+                        "delta": round(float(measured[i]) - float(expected[i]), 3),
+                    }
+            return divergences or None
+        # Formato dict {chave: valor}.
+        if not isinstance(expected, dict) or not isinstance(measured, dict):
+            return None
+        for key, exp in expected.items():
+            if _diverged(exp, measured.get(key)):
                 divergences[key] = {
                     "expected": exp,
-                    "measured": meas,
-                    "delta": round(float(meas) - float(exp), 3),
+                    "measured": measured.get(key),
+                    "delta": round(float(measured.get(key)) - float(exp), 3),
                 }
         return divergences or None
 
@@ -280,7 +304,11 @@ def run_plan_with_optional_loop(
     """
 
     if settings.modeling_agentic_loop_enabled:
-        loop = ModelingAgentLoop(executor, corrector=planner.build_corrector())
+        loop = ModelingAgentLoop(
+            executor,
+            corrector=planner.build_corrector(),
+            verifier=build_dimension_verifier(),
+        )
         return loop.run(plan)
     return executor.execute_plan(plan)
 

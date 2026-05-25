@@ -823,6 +823,26 @@ def test_primitives_support_origin_z_offset() -> None:
         assert "_xyz_mm(" in script, tool
 
 
+def test_pilot_tools_return_dimensions_mm_for_verifier() -> None:
+    """C (verifier): extrude + primitivas fazem read-back e devolvem
+    dimensions_mm (bbox) no output, p/ o verifier do loop comparar com
+    expected_dimensions_mm e auto-corrigir (ex.: cut que consome a peça → bbox 0).
+    """
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    for tool in (
+        "fusion.extrude_profile",
+        "fusion.add_box",
+        "fusion.add_cylinder",
+        "fusion.add_sphere",
+        "fusion.add_cone",
+    ):
+        script = build_autodesk_fusion_script(tool_name=tool, arguments={})
+        assert '"dimensions_mm"' in script, tool
+        assert "_body_dims_mm(" in script, tool
+
+
 def test_body_not_found_error_lists_available_bodies() -> None:
     """Gate caixa+tampa: o corretor ficava às cegas em fusion.body_not_found
     (referenciou 'Outer_Box', corpo era 'Box'). O script gerado deve listar os

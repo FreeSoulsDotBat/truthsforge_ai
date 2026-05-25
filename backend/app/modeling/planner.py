@@ -732,6 +732,12 @@ def _build_messages(
         "      identificar o perfil do furo com `profile_diameter_mm` (diâmetro do\n"
         "      círculo) ou `profile_index`; sem seletor o cut cai no profiles[0] e pode\n"
         "      consumir a peça.\n"
+        "- VERIFICAÇÃO (read-back): quando criar/alterar um corpo com dimensões\n"
+        "  externas conhecidas (primitivas e `extrude_profile`), declare\n"
+        "  `expected_dimensions_mm: [x, y, z]` (bbox esperado) no MESMO passo. O\n"
+        "  motor mede a geometria real e AUTO-CORRIGE se divergir — ex.: um `cut`\n"
+        "  que consome a peça vira bbox ~0 e dispara correção. Num furo numa placa,\n"
+        "  o bbox externo NÃO muda: use as dimensões da placa.\n"
         "\n"
         "Ferramentas disponíveis (com argumentos/unidades/exemplos quando conhecidos):\n"
         + tool_schemas.render_tool_schemas(list(PLANNER_TOOLSET))

@@ -279,6 +279,37 @@ def test_planner_system_prompt_prefers_shell_for_hollowing() -> None:
     assert "fusion.shell_body" in content
 
 
+def test_planner_system_prompt_asks_for_expected_dimensions() -> None:
+    """C (verifier): o planner deve declarar expected_dimensions_mm nos passos de
+    geometria, pra o loop comparar com o read-back e auto-corrigir divergências.
+    """
+
+    payload = ModelingPlanCreate(prompt="cubo de 30mm")
+    response = {
+        "software_choice": "fusion",
+        "confidence": 0.7,
+        "rationale": "ok",
+        "assumptions": [],
+        "risks": [],
+        "steps": [
+            {
+                "seq": 1,
+                "title": "Box",
+                "tool_name": "fusion.add_box",
+                "risk_level": "low",
+                "approval_required": False,
+                "input_json": "{}",
+            }
+        ],
+    }
+    gateway = _FakeGateway(response=response)
+    create_llm_plan(payload, gateway=gateway, model=_planner_model())
+    system = next(msg for msg in gateway.received_messages[-1] if msg["role"] == "system")
+    content = system["content"]
+    assert "VERIFICAÇÃO (read-back)" in content
+    assert "expected_dimensions_mm" in content
+
+
 def test_create_llm_plan_rejects_tool_outside_allowlist() -> None:
     payload = ModelingPlanCreate(prompt="qualquer coisa")
     response = {
