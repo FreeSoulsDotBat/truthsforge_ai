@@ -40,7 +40,12 @@ services:
       postgres:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
+        # RAG é best-effort/lazy: o backend não deve falhar o boot porque o
+        # Qdrant está em recovery lento (storage é bind mount no Windows → WAL
+        # replay rasteja). service_started deixa o dev.ps1 subir; o RAG fica
+        # degradado só até o Qdrant ficar pronto. postgres/valkey seguem
+        # service_healthy (são caminho crítico do backend).
+        condition: service_started
       valkey:
         condition: service_healthy
     healthcheck:
