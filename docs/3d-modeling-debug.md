@@ -19,6 +19,52 @@ Nomes e portas usados abaixo:
 > para `Select-Object` / `Where-Object` / `Format-Table`. Onde a leitura no
 > banco é mais direta, use `docker exec ... psql`.
 
+## Logs no terminal
+
+O backend emite os eventos de modelagem como **logs JSON estruturados** no stdout
+(logger `app.modeling.observability`), cada linha com `event_type`, `trace_id`,
+`plan_id`, `tool_name`, `error_code` e `trace_payload`. É o jeito mais rápido de
+ver o que aconteceu numa execução.
+
+```powershell
+# Seguir o backend ao vivo (tudo)
+docker logs -f truths-forge-backend
+
+# Só os eventos de trace de modelagem (planner / executor / loop)
+docker logs --tail 500 truths-forge-backend | Select-String "modeling.trace"
+
+# Filtrar por tipo: erros de etapa, loop de auto-correção, fallback do planner
+docker logs -f truths-forge-backend |
+  Select-String "executor.step_error|agent_loop|planner.fallback_used"
+
+# Tudo de UM plano (ou de um trace_id) específico
+docker logs --tail 4000 truths-forge-backend | Select-String "m3d_plan_xxxxxxxx"
+docker logs --tail 4000 truths-forge-backend | Select-String "mt_019e..."
+```
+
+**Via `docker compose`** (precisa dos 2 arquivos + env — ver §5):
+
+```powershell
+docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml logs -f backend
+```
+
+**Outros serviços:**
+
+```powershell
+docker logs -f truths-forge-qdrant       # ex.: progresso do recovery
+docker logs --tail 80 truths-forge-postgres
+docker logs --tail 80 truths-forge-web
+```
+
+**Dozzle** — visualizador web de logs (opcional; filtra os containers `truths-forge-*`):
+
+```powershell
+docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml --profile observability up -d dozzle
+# abra http://127.0.0.1:8082
+```
+
+Para incluir prompt/resposta do LLM no log, ligue `TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE=true` (§5) e reinicie o backend.
+
 ## 1. Saúde e conexões
 
 ```powershell
