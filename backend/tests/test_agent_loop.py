@@ -285,6 +285,63 @@ def test_orchestrator_run_execution_uses_loop_when_flag_on(monkeypatch) -> None:
     )
 
 
+def test_run_plan_with_optional_loop_uses_loop_when_flag_on(monkeypatch) -> None:
+    """Fonte ÚNICA loop×linear usada pelo orchestrator E pelo service (card).
+
+    Regressão do gate da bola (m3d_plan_608fd2579): a flag estava ON, mas o card
+    (`service.execute_plan`) executava SEMPRE linear porque o loop só vivia no
+    orchestrator. Com flag ON o helper roda pelo loop (emite
+    ``modeling.agent_loop_executed``).
+    """
+
+    from app.core.config import settings
+    from app.modeling.agent_loop import run_plan_with_optional_loop
+
+    monkeypatch.setattr(settings, "modeling_agentic_loop_enabled", True)
+    store = _FakeStore()
+    executor = _ScriptedExecutor(store, decide=lambda step: True)
+
+    class _FakePlanner:
+        def build_corrector(self, **_kwargs):
+            return None
+
+    result = run_plan_with_optional_loop(
+        executor, _FakePlanner(), _plan(_step(1, "fusion.create_sketch"))
+    )
+
+    assert result.plan.status is ModelingPlanStatus.completed
+    assert any(
+        getattr(e, "event_type", None) == "modeling.agent_loop_executed" for e in store.audits
+    )
+
+
+def test_run_plan_with_optional_loop_uses_linear_when_flag_off(monkeypatch) -> None:
+    """Com a flag OFF, delega ao executor linear e NEM constrói o corretor."""
+
+    from app.core.config import settings
+    from app.modeling.agent_loop import run_plan_with_optional_loop
+
+    monkeypatch.setattr(settings, "modeling_agentic_loop_enabled", False)
+    sentinel = object()
+    calls: dict[str, bool] = {}
+
+    class _LinearExec:
+        def execute_plan(self, plan):
+            calls["linear"] = True
+            return sentinel
+
+    class _FakePlanner:
+        def build_corrector(self, **_kwargs):
+            raise AssertionError("não deve construir corretor com a flag desligada")
+
+    result = run_plan_with_optional_loop(
+        _LinearExec(), _FakePlanner(), _plan(_step(1, "fusion.create_sketch"))
+    )
+
+    assert result is sentinel
+    assert calls.get("linear") is True
+
+
 def test_build_dimension_verifier_compares_expected_vs_measured() -> None:
     from app.modeling.agent_loop import build_dimension_verifier
 

@@ -37,7 +37,6 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from app.core.config import settings
 from app.core.contracts import (
     AuditEvent,
     ChatModelingStage,
@@ -54,7 +53,7 @@ from app.core.contracts import (
     ModelingTraceSource,
     now_utc,
 )
-from app.modeling.agent_loop import ModelingAgentLoop
+from app.modeling.agent_loop import run_plan_with_optional_loop
 from app.modeling.chat_state import (
     ChatModelingEvent,
     transition,
@@ -106,18 +105,14 @@ class ModelingChatOrchestrator:
     # ------------------------------------------------------------------
 
     def _run_execution(self, plan: ModelingPlan) -> ModelingExecutionResult:
-        """Executa um plano aprovado.
+        """Executa um plano aprovado (loop agêntico × executor linear).
 
-        Quando ``settings.modeling_agentic_loop_enabled`` está ligado (Fase 2),
-        usa o ``ModelingAgentLoop`` (executa→inspeciona→corrige, teto 5,
-        rollback ao esgotar) com o corretor LLM do planner. Caso contrário, o
-        executor linear de sempre. Default OFF até o gate do dono no Fusion.
+        Delegado a ``run_plan_with_optional_loop`` — fonte única compartilhada
+        com ``ModelingService.execute_plan`` (card), para o loop não depender do
+        caminho de execução.
         """
 
-        if settings.modeling_agentic_loop_enabled:
-            loop = ModelingAgentLoop(self.executor, corrector=self.planner.build_corrector())
-            return loop.run(plan)
-        return self.executor.execute_plan(plan)
+        return run_plan_with_optional_loop(self.executor, self.planner, plan)
 
     # ------------------------------------------------------------------
     # lifecycle

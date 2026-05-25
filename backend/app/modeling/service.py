@@ -48,6 +48,7 @@ from app.core.contracts import (
     now_utc,
 )
 from app.llm_gateway.gateway import LLMGateway
+from app.modeling.agent_loop import run_plan_with_optional_loop
 from app.modeling.artifacts import ARTIFACT_CONTENT_TYPES, ModelingArtifactService
 from app.modeling.executor import (
     ModelingExecutorService,
@@ -341,7 +342,9 @@ class ModelingService:
         else:
             tracer.bind_plan(plan.id)
         try:
-            return self.executor.execute_plan(plan)
+            # Loop agêntico quando a flag está ligada, senão executor linear
+            # (mesma fonte única do orchestrator — o card não pode ficar de fora).
+            return run_plan_with_optional_loop(self.executor, self.planner, plan)
         finally:
             if owns_trace:
                 tracer.close_trace()

@@ -26,6 +26,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from app.core.config import settings
 from app.core.contracts import (
     AuditEvent,
     ModelingExecutionResult,
@@ -260,6 +261,30 @@ def build_dimension_verifier(
     return verifier
 
 
+def run_plan_with_optional_loop(
+    executor: ModelingExecutorService,
+    planner: Any,
+    plan: ModelingPlan,
+) -> ModelingExecutionResult:
+    """Executa um plano aprovado pelo loop agêntico OU pelo executor linear.
+
+    Quando ``settings.modeling_agentic_loop_enabled`` está ligado (Fase 2), usa o
+    ``ModelingAgentLoop`` (executa→inspeciona→corrige, teto 5, rollback ao esgotar)
+    com o corretor LLM do planner; senão, o executor linear de sempre.
+
+    Fonte ÚNICA da decisão loop×linear, compartilhada pelo
+    ``ModelingChatOrchestrator`` (fluxo de chat) e pelo ``ModelingService``
+    (card → ``POST /plans/{id}/execute``). Sem isto a flag só valia no fluxo de
+    chat e o caminho do card executava SEMPRE linear — o loop não corrigia nada
+    apesar de "ligado".
+    """
+
+    if settings.modeling_agentic_loop_enabled:
+        loop = ModelingAgentLoop(executor, corrector=planner.build_corrector())
+        return loop.run(plan)
+    return executor.execute_plan(plan)
+
+
 __all__ = [
     "ModelingAgentLoop",
     "MAX_CORRECTION_ITERATIONS",
@@ -267,4 +292,5 @@ __all__ = [
     "GeometryVerifier",
     "PlanRollback",
     "build_dimension_verifier",
+    "run_plan_with_optional_loop",
 ]
