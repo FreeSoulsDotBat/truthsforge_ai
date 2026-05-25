@@ -842,6 +842,23 @@ def test_query_timeline_reads_timeline_and_params() -> None:
     assert is_read_only("fusion.query_timeline")
 
 
+def test_rollback_timeline_is_destructive_and_not_planner_visible() -> None:
+    """T3.6: rollback da última edição apaga features da timeline após um ponto.
+    Destrutivo e FORA do planner (undo do usuário via botão, nunca planejado).
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+    from app.modeling.tool_registry import PLANNER_TOOLSET, TOOL_REGISTRY, ToolCategory
+
+    script = build_autodesk_fusion_script(tool_name="fusion.rollback_timeline", arguments={})
+    ast.parse(script)
+    assert "deleteMe" in script and "timeline" in script
+    assert TOOL_REGISTRY["fusion.rollback_timeline"].category == ToolCategory.destructive
+    assert "fusion.rollback_timeline" not in PLANNER_TOOLSET
+
+
 def test_pilot_tools_return_dimensions_mm_for_verifier() -> None:
     """C (verifier): extrude + primitivas fazem read-back e devolvem
     dimensions_mm (bbox) no output, p/ o verifier do loop comparar com

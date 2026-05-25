@@ -38,6 +38,7 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.split_body",
     "fusion.query_geometry",
     "fusion.query_timeline",
+    "fusion.rollback_timeline",
     "fusion.set_parameter",
     "fusion.export_step",
     "fusion.export_stl",
@@ -2228,6 +2229,41 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
+        def _rollback_timeline(args):
+            # T3.6: desfaz a ultima edicao deletando as features da timeline a
+            # partir de target_count (a contagem capturada ANTES da edicao).
+            # Deleta de tras pra frente p/ nao invalidar indices. Destrutivo;
+            # acionado pelo usuario (botao undo), nunca planejado pelo LLM.
+            design = _design()
+            raw = args.get("target_count")
+            try:
+                target = int(raw)
+            except (TypeError, ValueError):
+                target = -1
+            if target < 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "target_count (contagem da timeline antes da edicao) e obrigatorio.",
+                )
+            tl = design.timeline
+            if target > tl.count:
+                target = tl.count
+            removed = 0
+            for i in range(tl.count - 1, target - 1, -1):
+                try:
+                    tl.item(i).deleteMe()
+                    removed += 1
+                except Exception:
+                    pass
+            return {{
+                "message": "Rollback: {{}} feature(s) removida(s) (timeline -> {{}}).".format(
+                    removed, target
+                ),
+                "removed": removed,
+                "timeline_count": design.timeline.count,
+            }}
+
+
         def _set_parameter(args):
             # Fix #1: aceita dois formatos:
             # (a) singular legado:  name='X', expression='10mm', unit='mm'
@@ -2592,6 +2628,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _query_geometry(args)
             if tool_name == "fusion.query_timeline":
                 return _query_timeline(args)
+            if tool_name == "fusion.rollback_timeline":
+                return _rollback_timeline(args)
             if tool_name == "fusion.set_parameter":
                 return _set_parameter(args)
             if tool_name == "fusion.export_step":

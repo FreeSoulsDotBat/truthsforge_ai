@@ -425,6 +425,12 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Remove um corpo — destrutivo, exige aprovação (Onda F).",
     ),
     _t(
+        "fusion.rollback_timeline",
+        _FUSION,
+        _DESTR,
+        "Rollback da última edição: apaga features da timeline após um ponto (destrutivo; T3.6).",
+    ),
+    _t(
         "fusion.set_parameter",
         _FUSION,
         _MUT,
@@ -493,15 +499,17 @@ def _by_category(category: ToolCategory) -> tuple[str, ...]:
 def _planner_visible() -> tuple[str, ...]:
     """Tools the LLM planner is allowed to choose.
 
-    Excludes ``project_store.*`` (orchestrator-internal) and ``*.run_script``
-    (never exposed to LLM-generated plans even though the descriptor exists
-    for the policy/audit layers).
+    Excludes ``project_store.*`` (orchestrator-internal), ``*.run_script``
+    (never exposed to LLM-generated plans) and ``*.rollback_timeline`` (undo do
+    usuário acionado por botão — nunca planejado pelo LLM).
     """
 
     def visible(entry: ToolDescriptor) -> bool:
         if entry.software is ToolSoftware.project_store:
             return False
         if entry.name.endswith(".run_script"):
+            return False
+        if entry.name.endswith(".rollback_timeline"):
             return False
         return True
 
