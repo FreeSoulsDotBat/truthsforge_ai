@@ -63,8 +63,13 @@ class _FakePlanner:
 
     store: _FakeStore
     next_steps: list[ModelingPlanStep] = field(default_factory=list)
+    # T3.3: captura o bloco de reconciliação que o orchestrator injeta.
+    last_live_state_block: str | None = None
 
-    def create_plan(self, payload: ModelingPlanCreate) -> ModelingPlan:
+    def create_plan(
+        self, payload: ModelingPlanCreate, *, live_state_block: str | None = None
+    ) -> ModelingPlan:
+        self.last_live_state_block = live_state_block
         steps = list(self.next_steps)
         plan = ModelingPlan(
             project_id=payload.project_id,
@@ -92,9 +97,10 @@ class _FakeExecutor:
 
     store: _FakeStore
     fail: bool = False
-    # T3.6: controls the best-effort ``query_timeline`` probe in
-    # ``_capture_rollback_marker`` (only invoked for fusion edits).
+    # T3.2/T3.6: controls the best-effort ``query_timeline`` probe in
+    # ``_read_live_timeline`` (only invoked for fusion edits).
     probe_count: int | None = 7
+    probe_features: list[dict[str, Any]] | None = None
     probe_ok: bool = True
     probe_raises: bool = False
     single_step_calls: list[ModelingPlanStep] = field(default_factory=list)
@@ -116,7 +122,11 @@ class _FakeExecutor:
         self.single_step_calls.append(step)
         if self.probe_raises:
             raise RuntimeError("fusion offline durante a captura")
-        output = {} if self.probe_count is None else {"timeline_count": self.probe_count}
+        output: dict[str, Any] = (
+            {} if self.probe_count is None else {"timeline_count": self.probe_count}
+        )
+        if self.probe_features is not None:
+            output["timeline"] = self.probe_features
         return SimpleNamespace(
             step=step, output=output, tool_call_id=None, event="probe", ok=self.probe_ok
         )
@@ -141,6 +151,7 @@ def _orchestrator(
         store=store,
         fail=kwargs.get("execution_fails", False),
         probe_count=kwargs.get("probe_count", 7),
+        probe_features=kwargs.get("probe_features"),
         probe_ok=kwargs.get("probe_ok", True),
         probe_raises=kwargs.get("probe_raises", False),
     )
@@ -389,6 +400,81 @@ def test_propose_edit_plan_proceeds_when_rollback_capture_fails() -> None:
     assert outcome.requires_approval is False
     assert outcome.plan.status is ModelingPlanStatus.completed
     assert outcome.plan.rollback_marker is None
+
+
+def test_propose_edit_plan_injects_live_state_into_planner_for_fusion() -> None:
+    # T3.2/T3.3: o estado ao vivo do Fusion vira contexto do planner.
+    orch, store, planner, _ = _orchestrator(
+        planner_steps=[_safe_step(1, "fusion.chamfer_edges")],
+        probe_count=2,
+        probe_features=[
+            {"index": 0, "name": "Extrude1", "type": "ExtrudeFeature", "suppressed": False},
+            {"index": 1, "name": "Fillet1", "type": "FilletFeature", "suppressed": False},
+        ],
+    )
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    orch.propose_edit_plan(
+        chat,
+        payload=ModelingPlanCreate(
+            prompt="chanfrar arestas", software_override=ModelingSoftware.fusion
+        ),
+    )
+
+    block = planner.last_live_state_block
+    assert block is not None
+    assert "estado-atual-fusion" in block
+    assert "FONTE DE VERDADE" in block
+    assert "Extrude1" in block
+    assert "Fillet1" in block
+
+
+def test_propose_edit_plan_passes_no_live_state_for_non_fusion() -> None:
+    orch, store, planner, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    orch.propose_edit_plan(chat, payload=ModelingPlanCreate(prompt="bevel 2mm"))
+
+    assert planner.last_live_state_block is None
+
+
+def test_reconciliation_flags_possible_manual_edit_on_count_mismatch() -> None:
+    # T3.2: timeline ao vivo (5) ≠ histórico registrado (2 passos) → dica de
+    # possível edição manual no contexto (não autoritativa).
+    orch, store, planner, _ = _orchestrator(
+        planner_steps=[_safe_step(1, "fusion.extrude_profile")],
+        probe_count=5,
+    )
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+    parent = ModelingPlan(
+        id="m3d_plan_parent",
+        prompt="primário",
+        software_choice=ModelingSoftware.fusion,
+        steps=[
+            _safe_step(1, "fusion.add_box").model_copy(
+                update={"status": ModelingStepStatus.completed}
+            ),
+            _safe_step(2, "fusion.extrude_profile").model_copy(
+                update={"status": ModelingStepStatus.completed}
+            ),
+        ],
+    )
+    store.plans["m3d_plan_parent"] = parent
+
+    orch.propose_edit_plan(
+        chat,
+        payload=ModelingPlanCreate(prompt="editar", software_override=ModelingSoftware.fusion),
+    )
+
+    block = planner.last_live_state_block
+    assert block is not None
+    assert "edição manual" in block.lower()
 
 
 def test_propose_edit_plan_blocks_on_high_risk() -> None:

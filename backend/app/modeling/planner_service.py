@@ -117,10 +117,18 @@ class ModelingPlannerService:
     # public
     # ------------------------------------------------------------------
 
-    def create_plan(self, payload: ModelingPlanCreate) -> ModelingPlan:
-        """Synchronous plan creation. Mirrors ``ModelingService.create_plan``."""
+    def create_plan(
+        self, payload: ModelingPlanCreate, *, live_state_block: str | None = None
+    ) -> ModelingPlan:
+        """Synchronous plan creation. Mirrors ``ModelingService.create_plan``.
 
-        plan, source, fallback_reason = self._build_plan(payload)
+        T3.3: ``live_state_block`` carries the on-demand reconciliation block
+        (live Fusion timeline read by the orchestrator before an edit). It is
+        merged into the edit context so the planner parts from the real model
+        state, not stale history.
+        """
+
+        plan, source, fallback_reason = self._build_plan(payload, live_state_block=live_state_block)
         plan = plan.model_copy(
             update={"planner_source": source, "fallback_reason": fallback_reason}
         )
@@ -293,23 +301,32 @@ class ModelingPlannerService:
         )
         return plan
 
-    def _resolve_edit_context(self, payload: ModelingPlanCreate) -> str | None:
-        """P5: para planos de edição, monta o contexto do modelo atual a partir
-        do plano-pai (histórico + métricas de corpos). Retorna None quando não
-        é edição ou o pai não está disponível."""
+    def _resolve_edit_context(
+        self, payload: ModelingPlanCreate, *, live_state_block: str | None = None
+    ) -> str | None:
+        """P5/T3.3: para planos de edição, monta o contexto do modelo atual.
+
+        Combina o histórico registrado (``build_edit_context_block`` do
+        plano-pai) com o ``live_state_block`` (leitura ao vivo do Fusion,
+        reconciliação T3.2/T3.3). O bloco ao vivo vai por ÚLTIMO para que a
+        instrução "parta do estado atual" seja a última lida pelo planner.
+        Retorna None quando não é edição e não há leitura ao vivo."""
 
         if payload.kind != ModelingPlanKind.edit or not payload.parent_plan_id:
-            return None
-        if not hasattr(self.store, "get_modeling_plan"):
-            return None
-        try:
-            parent = self.store.get_modeling_plan(payload.parent_plan_id)
-        except Exception:
-            return None
-        return build_edit_context_block(parent)
+            return live_state_block
+        recorded: str | None = None
+        if hasattr(self.store, "get_modeling_plan"):
+            try:
+                parent = self.store.get_modeling_plan(payload.parent_plan_id)
+            except Exception:
+                parent = None
+            recorded = build_edit_context_block(parent)
+        if live_state_block and recorded:
+            return f"{recorded}\n\n{live_state_block}"
+        return live_state_block or recorded
 
     def _build_plan(
-        self, payload: ModelingPlanCreate
+        self, payload: ModelingPlanCreate, *, live_state_block: str | None = None
     ) -> tuple[ModelingPlan, ModelingPlannerSource, str | None]:
         model = self._resolve_planner_model()
         if model is None:
@@ -320,7 +337,7 @@ class ModelingPlannerService:
             )
         try:
             knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
-            edit_context = self._resolve_edit_context(payload)
+            edit_context = self._resolve_edit_context(payload, live_state_block=live_state_block)
             with self._tracer.record_span(
                 "planner.llm_request",
                 source=ModelingTraceSource.backend,

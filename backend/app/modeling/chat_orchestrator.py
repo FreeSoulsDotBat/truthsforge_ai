@@ -512,23 +512,34 @@ class ModelingChatOrchestrator:
     # editing (mini-plans)
     # ------------------------------------------------------------------
 
-    def _capture_rollback_marker(self, plan: ModelingPlan) -> ModelingPlan:
-        """T3.6: best-effort snapshot of the pre-edit timeline count.
+    def _load_parent_plan(self, plan_id: str | None) -> ModelingPlan | None:
+        """Best-effort load do plano-pai (não levanta quando ausente)."""
 
-        Runs ``fusion.query_timeline`` once *outside* ``plan.steps`` — so the
-        agentic loop never sees it and a failed read can never block the edit
-        — and records ``design.timeline.count`` on ``plan.rollback_marker``.
-        Any failure (non-fusion software, Fusion offline, malformed output)
-        leaves the marker ``None`` and returns the plan untouched, so the
-        edit proceeds exactly as before. ``POST /plans/{id}/rollback`` later
-        reverts the model to this count.
+        if not plan_id or not hasattr(self.store, "get_modeling_plan"):
+            return None
+        try:
+            return self.store.get_modeling_plan(plan_id)
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    def _read_live_timeline(
+        self, *, software: ModelingSoftware | None, context_plan: ModelingPlan
+    ) -> dict[str, Any] | None:
+        """T3.2/T3.6: leitura best-effort da timeline do Fusion antes da edição.
+
+        Roda ``fusion.query_timeline`` UMA vez, *fora* dos passos da edição (o
+        loop agêntico nunca a vê; uma leitura que falha nunca bloqueia a
+        edição). A saída alimenta tanto a reconciliação (T3.2/T3.3 — o planner
+        parte do modelo real) quanto o marcador de rollback (T3.6 —
+        ``timeline_count``). Retorna o dict de saída, ou ``None`` para software
+        não-fusion / qualquer falha (Fusion offline, saída malformada).
         """
 
-        if plan.software_choice != ModelingSoftware.fusion:
-            return plan
+        if software != ModelingSoftware.fusion:
+            return None
         probe = ModelingPlanStep(
             seq=1,
-            title="Capturar timeline pré-edição",
+            title="Ler estado atual da timeline",
             software=ModelingSoftware.fusion,
             tool_name="fusion.query_timeline",
             risk_level=ModelingRiskLevel.low,
@@ -536,21 +547,90 @@ class ModelingChatOrchestrator:
             input_json={},
         )
         try:
-            outcome = self.executor._execute_single_step(probe, plan=plan)
+            outcome = self.executor._execute_single_step(probe, plan=context_plan)
         except Exception:  # pragma: no cover - defensive: read must not block edit
-            logger.warning(
-                "rollback marker capture raised; edit proceeds without rollback",
-                exc_info=True,
-            )
-            return plan
+            logger.warning("live timeline read raised; edit proceeds without it", exc_info=True)
+            return None
         if not outcome.ok or not isinstance(outcome.output, dict):
+            return None
+        return outcome.output
+
+    def _apply_rollback_marker(
+        self, plan: ModelingPlan, live_output: dict[str, Any] | None
+    ) -> ModelingPlan:
+        """T3.6: grava a contagem da timeline pré-edição em ``rollback_marker``."""
+
+        if not isinstance(live_output, dict):
             return plan
-        count = outcome.output.get("timeline_count")
+        count = live_output.get("timeline_count")
         if not isinstance(count, int):
             return plan
-        captured = plan.model_copy(update={"rollback_marker": count})
-        self.store.upsert_modeling_plan(captured)
-        return captured
+        stamped = plan.model_copy(update={"rollback_marker": count})
+        self.store.upsert_modeling_plan(stamped)
+        return stamped
+
+    def _recorded_geometry_step_count(self, parent_plan: ModelingPlan | None) -> int | None:
+        """Contagem conservadora de passos concluídos no histórico registrado."""
+
+        if parent_plan is None or not parent_plan.steps:
+            return None
+        return sum(1 for step in parent_plan.steps if step.status == ModelingStepStatus.completed)
+
+    def _build_reconciliation_block(
+        self, live_output: dict[str, Any] | None, parent_plan: ModelingPlan | None
+    ) -> str | None:
+        """T3.2/T3.3: monta o bloco ``<estado-atual-fusion>`` da leitura ao vivo.
+
+        Conservador por desenho (a spec alerta contra falsa divergência por
+        granularidade sketch/feature): expõe a timeline + parâmetros REAIS e
+        instrui que o estado ao vivo VENCE o histórico, mais uma dica NÃO
+        autoritativa quando as contagens diferem. A reconciliação de fato fica
+        a cargo do planner (LLM).
+        """
+
+        if not isinstance(live_output, dict):
+            return None
+        features = live_output.get("timeline")
+        count = live_output.get("timeline_count")
+        if not isinstance(count, int):
+            count = len(features) if isinstance(features, list) else 0
+        lines = [
+            "<estado-atual-fusion>",
+            "Leitura AO VIVO da timeline do Fusion (FONTE DE VERDADE). Se divergir do "
+            "<modelo-atual> histórico, o modelo foi alterado à mão — parta SEMPRE daqui.",
+            f"Timeline atual: {count} feature(s).",
+        ]
+        if isinstance(features, list) and features:
+            named = []
+            for feat in features[:40]:
+                if not isinstance(feat, dict):
+                    continue
+                name = feat.get("name") or "?"
+                ftype = feat.get("type") or ""
+                label = f"{name} ({ftype})" if ftype else str(name)
+                if feat.get("suppressed"):
+                    label += " [suprimida]"
+                named.append(label)
+            if named:
+                lines.append("Features: " + "; ".join(named) + ".")
+        params = live_output.get("parameters")
+        if isinstance(params, list) and params:
+            named_p = []
+            for prm in params[:20]:
+                if isinstance(prm, dict) and prm.get("name"):
+                    expr = prm.get("expression")
+                    label = f"{prm['name']}={expr}" if expr is not None else str(prm["name"])
+                    named_p.append(label)
+            if named_p:
+                lines.append("Parâmetros: " + ", ".join(named_p) + ".")
+        recorded = self._recorded_geometry_step_count(parent_plan)
+        if recorded is not None and recorded != count:
+            lines.append(
+                f"(Possível edição manual: histórico tem ~{recorded} passo(s); timeline tem "
+                f"{count} feature(s). Diferenças de granularidade são normais — confie no atual.)"
+            )
+        lines.append("</estado-atual-fusion>")
+        return "\n".join(lines)
 
     def propose_edit_plan(
         self, chat: ChatSession, *, payload: ModelingPlanCreate, fluid_mode: bool = True
@@ -583,11 +663,25 @@ class ModelingChatOrchestrator:
                 ),
             }
         )
-        plan = self.planner.create_plan(edit_payload)
-        # T3.6: registra a contagem da timeline ANTES da edição rodar, para o
-        # botão "Desfazer última edição" reverter via fusion.rollback_timeline.
-        # Best-effort: nunca bloqueia a edição (ver _capture_rollback_marker).
-        plan = self._capture_rollback_marker(plan)
+        # T3.2/T3.3 + T3.6: lê o estado atual do Fusion UMA vez, ANTES de
+        # planejar. Alimenta a reconciliação (o planner parte do modelo real,
+        # não do histórico desatualizado) e o marcador de rollback. Best-effort:
+        # nunca bloqueia a edição (ver _read_live_timeline).
+        software = edit_payload.software_override
+        live_output: dict[str, Any] | None = None
+        reconciliation: str | None = None
+        if software == ModelingSoftware.fusion:
+            parent_plan = self._load_parent_plan(chat.modeling_plan_id)
+            read_context = parent_plan or ModelingPlan(
+                prompt="<leitura de estado>",
+                software_choice=ModelingSoftware.fusion,
+                status=ModelingPlanStatus.approved,
+            )
+            live_output = self._read_live_timeline(software=software, context_plan=read_context)
+            reconciliation = self._build_reconciliation_block(live_output, parent_plan)
+
+        plan = self.planner.create_plan(edit_payload, live_state_block=reconciliation)
+        plan = self._apply_rollback_marker(plan, live_output)
         high_risk = self._plan_has_high_risk(plan)
 
         if high_risk:
