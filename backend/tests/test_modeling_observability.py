@@ -804,6 +804,25 @@ def test_onda_c_features_are_registered_and_compile() -> None:
         assert f'TOOL_NAME = "{tool}"' in script
 
 
+def test_primitives_support_origin_z_offset() -> None:
+    """Posicionamento (gate caixa+tampa): primitivas ganham origin_mm com z via
+    _translate_body (no-op quando offset zero → compat). Permite empilhar/afastar
+    corpos sem ficarem sobrepostos na origem.
+    """
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    for tool in (
+        "fusion.add_box",
+        "fusion.add_cylinder",
+        "fusion.add_sphere",
+        "fusion.add_cone",
+    ):
+        script = build_autodesk_fusion_script(tool_name=tool, arguments={})
+        assert "_translate_body(" in script, tool
+        assert "_xyz_mm(" in script, tool
+
+
 def test_body_not_found_error_lists_available_bodies() -> None:
     """Gate caixa+tampa: o corretor ficava às cegas em fusion.body_not_found
     (referenciou 'Outer_Box', corpo era 'Box'). O script gerado deve listar os

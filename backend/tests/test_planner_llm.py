@@ -214,6 +214,39 @@ def test_planner_system_prompt_requires_consistent_body_names() -> None:
     assert "MESMO `name`" in content
 
 
+def test_planner_system_prompt_positions_multiple_bodies() -> None:
+    """Gate caixa+tampa (m3d_plan_de29c2b3): 2 corpos nasciam na origem (tampa
+    atravessando a caixa) e o planner trocava os eixos do over-cap. O system
+    prompt deve exigir posicionar múltiplos corpos pela intenção (encaixe vs
+    impressão separada) e preservar a correspondência de eixos.
+    """
+
+    payload = ModelingPlanCreate(prompt="caixa com tampa para impressão")
+    response = {
+        "software_choice": "fusion",
+        "confidence": 0.7,
+        "rationale": "ok",
+        "assumptions": [],
+        "risks": [],
+        "steps": [
+            {
+                "seq": 1,
+                "title": "Box",
+                "tool_name": "fusion.add_box",
+                "risk_level": "low",
+                "approval_required": False,
+                "input_json": "{}",
+            }
+        ],
+    }
+    gateway = _FakeGateway(response=response)
+    create_llm_plan(payload, gateway=gateway, model=_planner_model())
+    system = next(msg for msg in gateway.received_messages[-1] if msg["role"] == "system")
+    content = system["content"]
+    assert "POSICIONAMENTO DE MÚLTIPLOS CORPOS" in content
+    assert "CORRESPONDÊNCIA DE EIXOS" in content
+
+
 def test_create_llm_plan_rejects_tool_outside_allowlist() -> None:
     payload = ModelingPlanCreate(prompt="qualquer coisa")
     response = {

@@ -1115,6 +1115,40 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return "{{}} ({{}})".format(base, n)
 
 
+        def _xyz_mm(value, design):
+            # Extrai (x, y, z) em mm de uma lista origin_mm/center_mm; faltantes=0.
+            if not isinstance(value, (list, tuple)):
+                return (0.0, 0.0, 0.0)
+
+            def _g(i):
+                if len(value) <= i:
+                    return 0.0
+                return _eval_param(value[i], design, 0.0) or 0.0
+
+            return (_g(0), _g(1), _g(2))
+
+
+        def _translate_body(design, body, dx_cm, dy_cm, dz_cm):
+            # Move um corpo por um vetor (cm). No-op se vetor zero — mantem
+            # compat: primitiva sem origin/z NAO gera feature de move (zero
+            # impacto nos planos existentes e nos corpos que devem ficar no lugar).
+            if dx_cm == 0.0 and dy_cm == 0.0 and dz_cm == 0.0:
+                return
+            root = _root(design)
+            coll = adsk.core.ObjectCollection.create()
+            coll.add(body)
+            transform = adsk.core.Matrix3D.create()
+            transform.translation = adsk.core.Vector3D.create(dx_cm, dy_cm, dz_cm)
+            moves = root.features.moveFeatures
+            try:
+                inp = moves.createInput(coll, transform)
+                moves.add(inp)
+            except (AttributeError, RuntimeError):
+                inp = moves.createInput2(coll)
+                inp.defineAsFreeMove(transform)
+                moves.add(inp)
+
+
         def _add_box(args):
             # Onda B: primitiva direta. Cria sketch interno + extrude num
             # unico step (corpo editavel na timeline, nao TemporaryBRep).
@@ -1175,6 +1209,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if feat.bodies.count > 0:
                 body_name = _unique_body_name(design, str(args.get("name") or "Box"))
                 feat.bodies.item(0).name = body_name
+                _oz = _xyz_mm(args.get("origin_mm") or args.get("center_mm"), design)[2]
+                _translate_body(design, feat.bodies.item(0), 0.0, 0.0, _oz / 10.0)
             return {{
                 "message": "Caixa {{}}x{{}}x{{}} mm criada (corpo '{{}}').".format(
                     w, d, h, body_name
@@ -1219,6 +1255,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if feat.bodies.count > 0:
                 body_name = _unique_body_name(design, str(args.get("name") or "Cylinder"))
                 feat.bodies.item(0).name = body_name
+                _oz = _xyz_mm(args.get("center_mm") or args.get("origin_mm"), design)[2]
+                _translate_body(design, feat.bodies.item(0), 0.0, 0.0, _oz / 10.0)
             return {{
                 "message": "Cilindro o{{}}x{{}} mm criado (corpo '{{}}').".format(
                     diameter_mm, h, body_name
@@ -1266,6 +1304,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if feat.bodies.count > 0:
                 body_name = _unique_body_name(design, str(args.get("name") or "Sphere"))
                 feat.bodies.item(0).name = body_name
+                _ox, _oy, _oz = _xyz_mm(args.get("origin_mm") or args.get("center_mm"), design)
+                _translate_body(design, feat.bodies.item(0), _ox / 10.0, _oy / 10.0, _oz / 10.0)
             return {{
                 "message": "Esfera o{{}} mm criada (corpo '{{}}').".format(
                     diameter_mm, body_name
@@ -1322,6 +1362,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if feat.bodies.count > 0:
                 body_name = _unique_body_name(design, str(args.get("name") or "Cone"))
                 feat.bodies.item(0).name = body_name
+                _ox, _oy, _oz = _xyz_mm(args.get("origin_mm") or args.get("center_mm"), design)
+                _translate_body(design, feat.bodies.item(0), _ox / 10.0, _oy / 10.0, _oz / 10.0)
             shape = "cone" if top_d <= 0 else "tronco de cone"
             return {{
                 "message": "{{}} base o{{}} topo o{{}} altura {{}} mm criado ('{{}}').".format(
