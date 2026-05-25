@@ -93,6 +93,20 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
                 required=False,
                 example="new_body",
             ),
+            "profile_index": ArgSpec(
+                "Qual perfil extrudar quando o sketch tem vários (0-based). "
+                "Sem isto usa o profiles[0].",
+                type="integer",
+                unit=None,
+                required=False,
+                example=0,
+            ),
+            "profile_diameter_mm": ArgSpec(
+                "Em operation=cut, seleciona o perfil do furo pela área do círculo "
+                "(diâmetro em mm) — evita cortar a peça inteira.",
+                required=False,
+                example=10.0,
+            ),
         },
     ),
     "fusion.hole": ToolSchema(
