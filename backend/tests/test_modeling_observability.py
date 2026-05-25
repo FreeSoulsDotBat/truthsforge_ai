@@ -833,10 +833,18 @@ def test_pilot_tools_return_dimensions_mm_for_verifier() -> None:
 
     for tool in (
         "fusion.extrude_profile",
+        "fusion.revolve_profile",
+        "fusion.sweep_profile",
+        "fusion.loft_profiles",
         "fusion.add_box",
         "fusion.add_cylinder",
         "fusion.add_sphere",
         "fusion.add_cone",
+        "fusion.hole",
+        "fusion.shell_body",
+        "fusion.fillet_edges",
+        "fusion.chamfer_edges",
+        "fusion.combine_bodies",
     ):
         script = build_autodesk_fusion_script(tool_name=tool, arguments={})
         assert '"dimensions_mm"' in script, tool

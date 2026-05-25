@@ -1076,12 +1076,14 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             )
             angle_rad = float(angle_deg) * math.pi / 180.0
             input_obj.setAngleExtent(False, adsk.core.ValueInput.createByReal(angle_rad))
-            revolves.add(input_obj)
+            feat = revolves.add(input_obj)
+            dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
             return {{
                 "message": "Revolucao de {{}} graus (eixo {{}}) aplicada a '{{}}'.".format(
                     angle_deg, axis_name, sketch.name
                 ),
                 "sketch_name": sketch.name,
+                "dimensions_mm": dims,
             }}
 
 
@@ -1456,6 +1458,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     radius_mm, edges.count, selector, body.name, edge_warn
                 ),
                 "body_name": body.name,
+                "dimensions_mm": _body_dims_mm(body),
             }}
 
 
@@ -1521,6 +1524,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     distance_mm, edges.count, selector, body.name, edge_warn
                 ),
                 "body_name": body.name,
+                "dimensions_mm": _body_dims_mm(body),
             }}
 
 
@@ -1562,6 +1566,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     thickness_mm, open_sel, body.name
                 ),
                 "body_name": body.name,
+                "dimensions_mm": _body_dims_mm(body),
             }}
 
 
@@ -1696,6 +1701,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     diameter_mm, depth_mm or "through", body.name, cbore_note
                 ),
                 "body_name": body.name,
+                "dimensions_mm": _body_dims_mm(body),
             }}
 
 
@@ -1861,11 +1867,16 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             inp = combines.createInput(target, tools)
             inp.operation = op_map[operation]
             combines.add(inp)
+            try:
+                dims = _body_dims_mm(target)
+            except Exception:
+                dims = [0.0, 0.0, 0.0]  # target consumido pelo boolean (cut/intersect)
             return {{
                 "message": "Combine {{}} de {{}} body(ies) em '{{}}'.".format(
                     operation, tools.count, target.name
                 ),
                 "body_name": target.name,
+                "dimensions_mm": dims,
             }}
 
 
@@ -1897,9 +1908,11 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         "Sketch '{{}}' nao tem profile fechado.".format(ref),
                     )
                 inp.loftSections.add(sk.profiles.item(0))
-            lofts.add(inp)
+            feat = lofts.add(inp)
+            dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
             return {{
                 "message": "Loft entre {{}} profiles.".format(len(refs)),
+                "dimensions_mm": dims,
             }}
 
 
@@ -1925,11 +1938,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             inp = sweeps.createInput(
                 _resolve_profile_selection(profile_sketch, args, design), path, op
             )
-            sweeps.add(inp)
+            feat = sweeps.add(inp)
+            dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
             return {{
                 "message": "Sweep do profile '{{}}' pelo path '{{}}'.".format(
                     profile_sketch.name, path_sketch.name
                 ),
+                "dimensions_mm": dims,
             }}
 
 
