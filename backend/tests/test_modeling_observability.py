@@ -918,6 +918,34 @@ def test_create_sketch_resolves_construction_plane_by_name() -> None:
     assert "plane_ref not in construction_names" in script
 
 
+def test_add_arc_accepts_three_point_signature() -> None:
+    """Fase 4 gate bug D: add_arc com start_mm+end_mm+center_mm (3 pontos) é
+    a sinatura geométrica natural que o LLM emite ao descrever "arco de A
+    para B em torno de C". O handler deve computar sweep via atan2 quando
+    sweep_deg/end_angle_deg não foram explícitos."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.add_arc",
+        arguments={
+            "sketch": "S",
+            "start_mm": [20, 0],
+            "end_mm": [0, 20],
+            "center_mm": [20, 20],
+        },
+    )
+    ast.parse(script)
+    # Branch nova deve estar presente no script.
+    assert 'end_pair = _eval_pair(args.get("end_mm")' in script
+    assert "sweep_deg == 0 and start_pair is not None and end_pair is not None" in script
+    assert "math.atan2" in script
+    # Mensagem de erro lista as 3 sinaturas suportadas.
+    assert "start_mm+end_mm+center_mm" in script
+
+
 def test_set_parameter_infers_unit_from_expression() -> None:
     """Fase 4 gate bug C: set_parameter('Angulo', '270 deg') falhava porque
     o adaptador inferia unit só do sufixo do nome ('Angulo' não termina em

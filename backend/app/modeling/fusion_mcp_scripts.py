@@ -987,11 +987,17 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Aceitamos os dois: se start_mm faltar mas radius+start_angle
             # vierem, derivamos o ponto inicial; se sweep_deg faltar mas
             # end_angle vier, derivamos sweep = end - start.
+            # Fix T4 gate: 3a sinatura natural — start_mm + end_mm + center_mm
+            # (LLM emite isso ao descrever "arco de A para B em torno de C").
+            # Compute sweep via atan2; default = arco curto (sweep normalizado
+            # em (-180, 180]). Se o usuario quer o arco longo, deve passar
+            # sweep_deg ou angles explicitos.
             design = _design()
             center_pair = _eval_pair(args.get("center_mm"), design)
             if center_pair is None:
                 raise ToolError("fusion.invalid_dimensions", "center_mm e obrigatorio.")
             start_pair = _eval_pair(args.get("start_mm"), design)
+            end_pair = _eval_pair(args.get("end_mm"), design)
             sweep_deg = _eval_param(args.get("sweep_deg"), design, 0.0) or 0.0
             radius_mm = _eval_param(args.get("radius_mm"), design, 0.0) or 0.0
             start_angle = _eval_param(args.get("start_angle_deg"), design, 0.0) or 0.0
@@ -1003,10 +1009,24 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
             if sweep_deg == 0 and end_angle is not None:
                 sweep_deg = float(end_angle) - start_angle
+            if sweep_deg == 0 and start_pair is not None and end_pair is not None:
+                sa = math.atan2(
+                    start_pair[1] - center_pair[1], start_pair[0] - center_pair[0]
+                )
+                ea = math.atan2(
+                    end_pair[1] - center_pair[1], end_pair[0] - center_pair[0]
+                )
+                sweep_rad = ea - sa
+                while sweep_rad <= -math.pi:
+                    sweep_rad += 2 * math.pi
+                while sweep_rad > math.pi:
+                    sweep_rad -= 2 * math.pi
+                if abs(sweep_rad) > 1e-9:
+                    sweep_deg = sweep_rad * 180.0 / math.pi
             if start_pair is None or sweep_deg == 0:
                 raise ToolError(
                     "fusion.invalid_dimensions",
-                    "informe start_mm+sweep_deg OU radius_mm+start_angle_deg+end_angle_deg.",
+                    "informe start_mm+sweep_deg OU start_mm+end_mm+center_mm OU radius_mm+start_angle_deg+end_angle_deg.",
                 )
             center = adsk.core.Point3D.create(
                 center_pair[0] / 10.0, center_pair[1] / 10.0, 0
