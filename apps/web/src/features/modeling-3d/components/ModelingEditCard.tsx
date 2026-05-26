@@ -52,8 +52,14 @@ export function ModelingEditCard({ plan, isBusy, onRollback }: ModelingEditCardP
 
   const [pending, setPending] = useState(false);
   const [rolledBack, setRolledBack] = useState(false);
+  // Edições concluídas E falhas podem ser desfeitas: uma edição que falhou no
+  // meio já aplicou passos parciais (ex.: o 1º fillet entrou antes do 2º falhar),
+  // então o rollback ao ponto pré-edição é justamente o que se quer.
   const canRollback =
-    Boolean(onRollback) && plan.kind === "edit" && plan.status === "completed" && plan.rollback_marker != null;
+    Boolean(onRollback) &&
+    plan.kind === "edit" &&
+    (plan.status === "completed" || plan.status === "failed") &&
+    plan.rollback_marker != null;
 
   const handleRollback = async () => {
     if (!onRollback) return;

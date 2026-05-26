@@ -96,6 +96,16 @@ describe("ModelingEditCard — rollback (T3.6)", () => {
     expect(screen.getByText(/Desfazer última edição/i)).toBeTruthy();
   });
 
+  it("shows the undo button for a FAILED edit with a marker (partial changes)", () => {
+    render(
+      <ModelingEditCard
+        plan={plan({ status: "failed", rollback_marker: 2 } as Partial<ModelingPlan>)}
+        onRollback={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("modeling-edit-rollback")).toBeTruthy();
+  });
+
   it("hides the undo button when there is no rollback marker", () => {
     render(<ModelingEditCard plan={plan()} onRollback={vi.fn()} />);
     expect(screen.queryByTestId("modeling-edit-rollback")).toBeNull();

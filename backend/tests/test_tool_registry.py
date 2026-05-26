@@ -102,6 +102,10 @@ def test_descriptor_is_immutable() -> None:
 def test_planner_toolset_excludes_orchestrator_internal_tools() -> None:
     assert "project_store.restore_snapshot" not in PLANNER_TOOLSET
     assert "project_store.list_snapshots" not in PLANNER_TOOLSET
+    # T3.2/T3.6: leitura de timeline e undo são internos do orchestrator
+    # (reconciliação / botão de rollback), não passos que o planner deva emitir.
+    assert "fusion.query_timeline" not in PLANNER_TOOLSET
+    assert "fusion.rollback_timeline" not in PLANNER_TOOLSET
 
 
 def test_planner_toolset_excludes_run_script_tools() -> None:
@@ -207,6 +211,8 @@ def test_read_only_set_matches_allowlist() -> None:
         "project_store.list_snapshots",
         # G2.2: inspeção de geometria para seleção por índice.
         "fusion.query_geometry",
+        # T3.1: leitura da timeline (reconciliação/rollback; interna do orchestrator).
+        "fusion.query_timeline",
     }
     assert set(READ_ONLY_TOOL_NAMES) == expected
 

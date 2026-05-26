@@ -500,8 +500,10 @@ def _planner_visible() -> tuple[str, ...]:
     """Tools the LLM planner is allowed to choose.
 
     Excludes ``project_store.*`` (orchestrator-internal), ``*.run_script``
-    (never exposed to LLM-generated plans) and ``*.rollback_timeline`` (undo do
-    usuário acionado por botão — nunca planejado pelo LLM).
+    (never exposed to LLM-generated plans), ``*.rollback_timeline`` (undo do
+    usuário acionado por botão — nunca planejado pelo LLM) e
+    ``*.query_timeline`` (leitura interna do orchestrator p/ reconciliação/
+    rollback — o planner não deve gastar passo com ela).
     """
 
     def visible(entry: ToolDescriptor) -> bool:
@@ -510,6 +512,8 @@ def _planner_visible() -> tuple[str, ...]:
         if entry.name.endswith(".run_script"):
             return False
         if entry.name.endswith(".rollback_timeline"):
+            return False
+        if entry.name.endswith(".query_timeline"):
             return False
         return True
 
