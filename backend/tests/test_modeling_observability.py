@@ -878,6 +878,25 @@ def test_move_body_supports_rotation() -> None:
     assert "translation_mm e/ou rotation_deg" in script
 
 
+def test_revolve_angle_can_bind_to_parameter() -> None:
+    """Fase 4/G1.1: revolve_profile liga angle_deg a um userParameter via
+    createByString quando recebe um nome de parâmetro (modelo editável), igual
+    ao que extrude/fillet já fazem para distâncias."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.revolve_profile",
+        arguments={"sketch": "S", "angle_deg": "RevAngle_deg"},
+    )
+    ast.parse(script)
+    # revolve chama o helper de ângulo paramétrico (não só createByReal cru).
+    assert '_param_angle_input(args.get("angle_deg")' in script
+    assert "createByString" in script
+
+
 def test_pilot_tools_return_dimensions_mm_for_verifier() -> None:
     """C (verifier): extrude + primitivas fazem read-back e devolvem
     dimensions_mm (bbox) no output, p/ o verifier do loop comparar com

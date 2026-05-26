@@ -222,6 +222,25 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return adsk.core.ValueInput.createByReal(mm / 10.0)
 
 
+        def _param_angle_input(arg, design):
+            # G1.1: ValueInput para um ANGULO. Se ``arg`` referencia um
+            # userParameter existente (nome/expressao), createByString -> vinculo
+            # parametrico; senao numero em GRAUS -> radianos via createByReal.
+            # None se nao resolver.
+            if isinstance(arg, str):
+                expr = arg.strip()
+                if expr.startswith("="):
+                    expr = expr[1:].strip()
+                token = expr.lstrip("-+").strip()
+                if token and all(c.isalnum() or c == "_" for c in token):
+                    if design.userParameters.itemByName(token) is not None:
+                        return adsk.core.ValueInput.createByString(expr)
+            deg = _eval_param(arg, design)
+            if deg is None:
+                return None
+            return adsk.core.ValueInput.createByReal(float(deg) * math.pi / 180.0)
+
+
         def _param_name_or_none(arg, design):
             # G1.2: retorna o nome do parametro se ``arg`` e uma referencia
             # pura a um userParameter existente; senao None. Usado para
@@ -1076,8 +1095,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             input_obj = revolves.createInput(
                 _resolve_profile_selection(sketch, args, design), axis, op
             )
-            angle_rad = float(angle_deg) * math.pi / 180.0
-            input_obj.setAngleExtent(False, adsk.core.ValueInput.createByReal(angle_rad))
+            # G1.1: liga o angulo a um parametro quando ``angle_deg`` referencia
+            # um userParameter (createByString); senao usa o numero resolvido.
+            angle_vi = _param_angle_input(args.get("angle_deg"), design)
+            if angle_vi is None:
+                angle_vi = adsk.core.ValueInput.createByReal(float(angle_deg) * math.pi / 180.0)
+            input_obj.setAngleExtent(False, angle_vi)
             feat = revolves.add(input_obj)
             dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
             return {{
