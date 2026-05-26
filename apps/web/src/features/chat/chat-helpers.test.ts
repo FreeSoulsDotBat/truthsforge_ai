@@ -28,9 +28,21 @@ describe("chat-helpers (extracted from App.tsx)", () => {
     expect(mergeUniqueMessages(older, newer).map((m) => (m as { id: string }).id)).toEqual(["a", "b", "c"]);
   });
 
-  it("sessionHasEmptyDraft is true for a blank default chat", () => {
-    const session = { title: "Novo chat", messages: [], metadata: {} } as never;
-    expect(sessionHasEmptyDraft(session)).toBe(true);
+  it("sessionHasEmptyDraft is true only when backend marks metadata.is_empty_draft", () => {
+    const draft = {
+      title: "Novo chat",
+      messages: [],
+      metadata: { is_empty_draft: true }
+    } as never;
+    expect(sessionHasEmptyDraft(draft)).toBe(true);
+  });
+
+  it("sessionHasEmptyDraft ignores heuristic title/messages without backend flag", () => {
+    // Bug regressao: o heuristico antigo reusava qualquer "Novo chat" sem
+    // mensagens carregadas, mas o lazy-load podia esconder mensagens
+    // existentes -> startNewChat abria conversa antiga em vez de criar nova.
+    const titleOnly = { title: "Novo chat", messages: [], metadata: {} } as never;
+    expect(sessionHasEmptyDraft(titleOnly)).toBe(false);
   });
 
   it("createDefaultKnowledgeBaseDraft returns sane defaults", () => {
