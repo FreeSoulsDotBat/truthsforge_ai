@@ -897,6 +897,27 @@ def test_revolve_angle_can_bind_to_parameter() -> None:
     assert "createByString" in script
 
 
+def test_revolve_message_uses_parameter_name_for_angle() -> None:
+    """Fase 4 gate bug H: a mensagem do revolve mostrava '47.12 graus' quando
+    o usuário pediu '270 deg' via parâmetro Angulo. Raiz: _eval_param resolvia
+    o nome multiplicando param.value*10 (correto pra distância em cm, errado
+    pra ângulo em rad). O revolve real funciona (createByString), mas o
+    label engana. Fix: quando angle_deg é referência paramétrica (string),
+    mostra a string em vez do valor numerico."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.revolve_profile",
+        arguments={"sketch": "Perfil", "angle_deg": "Angulo", "axis": "z"},
+    )
+    ast.parse(script)
+    assert "raw_angle = args.get" in script
+    assert "isinstance(raw_angle, str)" in script
+
+
 def test_extrude_and_revolve_name_the_body() -> None:
     """Fase 4 gate bug I: extrude_profile/revolve_profile devem aceitar
     name/result_name/body_name (igual às primitivas add_box/cylinder/...)

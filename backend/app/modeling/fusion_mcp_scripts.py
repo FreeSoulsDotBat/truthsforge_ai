@@ -1224,9 +1224,20 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 body_name = _unique_body_name(design, str(explicit or sketch.name))
                 feat.bodies.item(0).name = body_name
             dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
+            # Fix T4 gate (Bug H): quando angle_deg eh nome de parametro,
+            # _eval_param resolveu via param.value*10. Para angulares o
+            # param.value esta em radianos, entao 270 deg virava 47.12 na
+            # mensagem (4.712 rad * 10) — texto enganoso. O revolve real
+            # esta correto pq usa createByString do parametro. Aqui so
+            # corrigimos o LABEL: se veio string, mostra a string como nome.
+            raw_angle = args.get("angle_deg")
+            if isinstance(raw_angle, str):
+                angle_label = "'{{}}'".format(raw_angle)
+            else:
+                angle_label = "{{:g}} graus".format(angle_deg)
             return {{
-                "message": "Revolucao de {{}} graus (eixo {{}}) aplicada a '{{}}'.".format(
-                    angle_deg, axis_name, sketch.name
+                "message": "Revolucao de {{}} (eixo {{}}) aplicada a '{{}}'.".format(
+                    angle_label, axis_name, sketch.name
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
