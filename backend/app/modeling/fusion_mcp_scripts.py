@@ -122,6 +122,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # reais, fora do escopo desta iteracao. Para evitar cascata,
             # fazemos fallback para XY com aviso e emitimos o nome
             # original no message do tool call (visivel via trace).
+            # Fix T4 gate: planos construidos via add_construction_plane
+            # devem ser reconhecidos por nome (sem isso, create_sketch
+            # silenciosamente cai em XY apesar do plano existir).
             root = _root(design)
             mapping = {{
                 "xy": root.xYConstructionPlane,
@@ -133,11 +136,15 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
             normalized = str(plane_ref or "xy").lower()
             plane = mapping.get(normalized)
-            if plane is None:
-                # Fallback para XY com warning no message — preferivel a
-                # cascade de sketch_not_found em add_rectangle/extrude.
-                return root.xYConstructionPlane
-            return plane
+            if plane is not None:
+                return plane
+            # Tenta resolver como plano construido pelo nome.
+            target = str(plane_ref or "").strip()
+            if target:
+                for cp in root.constructionPlanes:
+                    if cp.name == target:
+                        return cp
+            return root.xYConstructionPlane
 
 
         def _eval_param(value, design, default=None):
@@ -546,7 +553,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 or "TF_Sketch"
             )
             _KNOWN_PLANES = ("xy", "yz", "xz", "top", "front", "right")
-            fallback_applied = plane_ref.lower() not in _KNOWN_PLANES
+            # Fix T4 gate: plano construido (criado via add_construction_plane)
+            # tambem conta como resolvido — _plane_from_ref agora o reconhece.
+            construction_names = {{cp.name for cp in _root(design).constructionPlanes}}
+            fallback_applied = (
+                plane_ref.lower() not in _KNOWN_PLANES
+                and plane_ref not in construction_names
+            )
             sketch = _root(design).sketches.add(_plane_from_ref(design, plane_ref))
             sketch.name = name
             warn_suffix = (

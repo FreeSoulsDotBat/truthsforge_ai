@@ -897,6 +897,27 @@ def test_revolve_angle_can_bind_to_parameter() -> None:
     assert "createByString" in script
 
 
+def test_create_sketch_resolves_construction_plane_by_name() -> None:
+    """Fase 4 gate bug A: planos criados via add_construction_plane devem ser
+    reconhecidos por _plane_from_ref e por _create_sketch, sem cair em XY
+    silenciosamente."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.create_sketch",
+        arguments={"name": "Sketch_Holes", "plane": "Plane_Top"},
+    )
+    ast.parse(script)
+    # _plane_from_ref deve consultar os constructionPlanes antes do fallback.
+    assert "root.constructionPlanes" in script
+    # _create_sketch deve considerar plano construído como NÃO-fallback.
+    assert "construction_names" in script
+    assert "plane_ref not in construction_names" in script
+
+
 def test_pilot_tools_return_dimensions_mm_for_verifier() -> None:
     """C (verifier): extrude + primitivas fazem read-back e devolvem
     dimensions_mm (bbox) no output, p/ o verifier do loop comparar com
