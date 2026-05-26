@@ -721,6 +721,37 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Drift do trace placa-parametrizada: chaves sem sufixo
             # (radius/diameter) com sintaxe de expressao ("=hole_diameter/2").
             args = dict(args)
+
+            # Fix T4 gate: o planner as vezes empacota multiplas chamadas em
+            # 1 step (ex.: 4 furos num unico add_circle). O normalizador
+            # embrulha a lista em {{"_raw": [...]}}; aqui desempacotamos e
+            # iteramos. Mantemos so itens dict para evitar recursao maligna.
+            raw_batch = args.get("_raw")
+            if isinstance(raw_batch, list):
+                batch_results = []
+                batch_messages = []
+                for item in raw_batch:
+                    if not isinstance(item, dict):
+                        continue
+                    inner = _add_circle(item)
+                    batch_results.append(inner)
+                    inner_msg = inner.get("message") if isinstance(inner, dict) else None
+                    if inner_msg:
+                        batch_messages.append(inner_msg)
+                if not batch_results:
+                    raise ToolError(
+                        "fusion.invalid_dimensions",
+                        "add_circle batch vazio: forneca pelo menos um item valido.",
+                    )
+                summary = "{{}} circulos adicionados em batch.".format(len(batch_results))
+                return {{
+                    "message": summary,
+                    "batch": True,
+                    "count": len(batch_results),
+                    "items": batch_results,
+                    "messages": batch_messages,
+                }}
+
             for _canon, _alias in (("diameter_mm", "diameter"), ("radius_mm", "radius")):
                 if args.get(_canon) is None and args.get(_alias) is not None:
                     args[_canon] = args[_alias]

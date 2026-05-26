@@ -918,6 +918,25 @@ def test_create_sketch_resolves_construction_plane_by_name() -> None:
     assert "plane_ref not in construction_names" in script
 
 
+def test_add_circle_unpacks_batch_from_raw() -> None:
+    """Fase 4 gate bug B: o planner às vezes empacota múltiplas chamadas de
+    add_circle num único step (ex.: 4 furos). O normalizador embrulha em
+    {"_raw": [...]}; o handler deve desempacotar e iterar."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.add_circle",
+        arguments={"sketch": "s", "diameter_mm": 8},
+    )
+    ast.parse(script)
+    assert 'raw_batch = args.get("_raw")' in script
+    assert "isinstance(raw_batch, list)" in script
+    assert '"batch": True' in script
+
+
 def test_pilot_tools_return_dimensions_mm_for_verifier() -> None:
     """C (verifier): extrude + primitivas fazem read-back e devolvem
     dimensions_mm (bbox) no output, p/ o verifier do loop comparar com
