@@ -138,7 +138,7 @@ pedirem. Ordenados por frequência esperada:
 | fillet variável | raio por aresta / chord-length |
 | chamfer 2-distâncias | distância+ângulo |
 | construction plane | por ângulo / 3 pontos / tangente |
-| `move_body` rotação | completar com `rotation_deg` + eixo (hoje só translação) |
+| ~~`move_body` rotação~~ ✅ Fase 4 | `rotation_deg` + `axis` (x/y/z ou vetor) + `center_mm`; backward-compat com translação |
 | `fusion.add_text` | texto gravado/em relevo |
 
 ### Arquivos

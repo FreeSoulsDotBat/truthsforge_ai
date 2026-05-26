@@ -2000,30 +2000,59 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
         # ---- Onda F: modificacao direta de bodies ----
 
         def _move_body(args):
-            # Onda F: translada (e opcionalmente nao rotaciona ainda) um body.
+            # Onda F + G3: translada E/OU rotaciona um body. Translacao via
+            # translation_mm=[x,y,z]; rotacao via rotation_deg + axis (x/y/z ou
+            # vetor [x,y,z]) em torno de center_mm (default = centro do bbox).
             design = _design()
             body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
-            trans = _eval_pair(args.get("translation_mm"), design)
             tx = ty = tz = 0.0
             raw = args.get("translation_mm")
             if isinstance(raw, (list, tuple)) and len(raw) >= 3:
                 tx = _eval_param(raw[0], design, 0.0) or 0.0
                 ty = _eval_param(raw[1], design, 0.0) or 0.0
                 tz = _eval_param(raw[2], design, 0.0) or 0.0
-            elif trans is not None:
-                tx, ty = trans
-            if tx == 0 and ty == 0 and tz == 0:
+            else:
+                trans = _eval_pair(raw, design)
+                if trans is not None:
+                    tx, ty = trans
+            rot_deg = _eval_param(args.get("rotation_deg"), design, 0.0) or 0.0
+            axis_arg = args.get("axis")
+            axis_map = {{"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}}
+            if isinstance(axis_arg, (list, tuple)) and len(axis_arg) >= 3:
+                ax = (float(axis_arg[0]), float(axis_arg[1]), float(axis_arg[2]))
+                axis_label = "vec"
+            else:
+                axis_label = str(axis_arg or "z").lower()
+                ax = axis_map.get(axis_label, (0.0, 0.0, 1.0))
+            if tx == 0 and ty == 0 and tz == 0 and rot_deg == 0:
                 raise ToolError(
                     "fusion.invalid_dimensions",
-                    "translation_mm precisa ter ao menos um componente nao-zero.",
+                    "Informe translation_mm e/ou rotation_deg nao-zero.",
                 )
             root = _root(design)
             coll = adsk.core.ObjectCollection.create()
             coll.add(body)
             transform = adsk.core.Matrix3D.create()
-            transform.translation = adsk.core.Vector3D.create(
-                tx / 10.0, ty / 10.0, tz / 10.0
-            )
+            if rot_deg != 0:
+                center = args.get("center_mm")
+                if isinstance(center, (list, tuple)) and len(center) >= 3:
+                    cx = (_eval_param(center[0], design, 0.0) or 0.0) / 10.0
+                    cy = (_eval_param(center[1], design, 0.0) or 0.0) / 10.0
+                    cz = (_eval_param(center[2], design, 0.0) or 0.0) / 10.0
+                else:
+                    bb = body.boundingBox
+                    cx = (bb.minPoint.x + bb.maxPoint.x) / 2.0
+                    cy = (bb.minPoint.y + bb.maxPoint.y) / 2.0
+                    cz = (bb.minPoint.z + bb.maxPoint.z) / 2.0
+                transform.setToRotation(
+                    rot_deg * math.pi / 180.0,
+                    adsk.core.Vector3D.create(ax[0], ax[1], ax[2]),
+                    adsk.core.Point3D.create(cx, cy, cz),
+                )
+            if tx != 0 or ty != 0 or tz != 0:
+                trans_m = adsk.core.Matrix3D.create()
+                trans_m.translation = adsk.core.Vector3D.create(tx / 10.0, ty / 10.0, tz / 10.0)
+                transform.transformBy(trans_m)
             moves = root.features.moveFeatures
             # G5: moveFeatures.createInput(entities, transform) foi deprecada
             # em favor de createInput2(entities)+defineAsFreeMove(transform).
@@ -2035,8 +2064,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 inp.defineAsFreeMove(transform)
                 moves.add(inp)
             return {{
-                "message": "Body '{{}}' movido ({{}},{{}},{{}})mm.".format(
-                    body.name, tx, ty, tz
+                "message": "Body '{{}}' movido t=({{}},{{}},{{}})mm rot={{}}deg/{{}}.".format(
+                    body.name, tx, ty, tz, rot_deg, axis_label
                 ),
                 "body_name": body.name,
             }}

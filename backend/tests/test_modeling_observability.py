@@ -859,6 +859,25 @@ def test_rollback_timeline_is_destructive_and_not_planner_visible() -> None:
     assert "fusion.rollback_timeline" not in PLANNER_TOOLSET
 
 
+def test_move_body_supports_rotation() -> None:
+    """Fase 4/G3: move_body completa translação com rotação (rotation_deg + axis
+    em torno de center_mm). Backward-compat: translation_mm-só continua válido."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.move_body",
+        arguments={"body_ref": "Body1", "rotation_deg": 90, "axis": "z"},
+    )
+    ast.parse(script)
+    assert "setToRotation" in script
+    assert "rotation_deg" in script and "center_mm" in script
+    # exige ao menos um movimento (translação OU rotação)
+    assert "translation_mm e/ou rotation_deg" in script
+
+
 def test_pilot_tools_return_dimensions_mm_for_verifier() -> None:
     """C (verifier): extrude + primitivas fazem read-back e devolvem
     dimensions_mm (bbox) no output, p/ o verifier do loop comparar com
