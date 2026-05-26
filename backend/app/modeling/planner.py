@@ -738,6 +738,13 @@ def _build_messages(
         "  motor mede a geometria real e AUTO-CORRIGE se divergir — ex.: um `cut`\n"
         "  que consome a peça vira bbox ~0 e dispara correção. Num furo numa placa,\n"
         "  o bbox externo NÃO muda: use as dimensões da placa.\n"
+        "- PARAMETRIZAÇÃO (modelo editável): quando o usuário pedir um modelo\n"
+        "  PARAMÉTRICO/editável (ou ditar relações entre cotas), crie os parâmetros\n"
+        "  com `fusion.set_parameter` (ex.: `Diameter_mm=20`) e passe os NOMES deles\n"
+        "  nos campos dimensionais (`distance_mm`, `radius_mm`, `height_mm`,\n"
+        "  `angle_deg`...) em vez de números crus — o adapter liga via expressão e\n"
+        "  mudar o parâmetro depois recomputa a geometria. Cotas fixas simples\n"
+        "  podem seguir com números crus.\n"
         "\n"
         "Ferramentas disponíveis (com argumentos/unidades/exemplos quando conhecidos):\n"
         + tool_schemas.render_tool_schemas(list(PLANNER_TOOLSET))
