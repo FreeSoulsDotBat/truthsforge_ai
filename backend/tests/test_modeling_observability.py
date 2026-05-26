@@ -897,6 +897,30 @@ def test_revolve_angle_can_bind_to_parameter() -> None:
     assert "createByString" in script
 
 
+def test_revolve_profile_derives_axis_from_axis_line() -> None:
+    """Fase 4 gate bug G: revolve_profile devia aceitar axis_line (2 pontos
+    3D que definem o eixo) além de axis="x"/"y"/"z". Sem isso, o LLM
+    emitindo axis_line=[[0,0,0],[0,0,1]] caía no default 'y' silenciosamente
+    e o revolve falhava com ASM_PATH_TANGENT."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.revolve_profile",
+        arguments={
+            "sketch": "Perfil",
+            "axis_line": [[0, 0, 0], [0, 0, 1]],
+            "angle_deg": "Angulo",
+        },
+    )
+    ast.parse(script)
+    # O handler precisa ler axis_line e derivar axis pelo maior componente.
+    assert 'axis_line = args.get("axis_line")' in script
+    assert "mag = max(abs(dx), abs(dy), abs(dz))" in script
+
+
 def test_create_sketch_resolves_construction_plane_by_name() -> None:
     """Fase 4 gate bug A: planos criados via add_construction_plane devem ser
     reconhecidos por _plane_from_ref e por _create_sketch, sem cair em XY

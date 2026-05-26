@@ -1147,7 +1147,37 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 "intersect": adsk.fusion.FeatureOperations.IntersectFeatureOperation,
             }}
             op = operation_map.get(operation, operation_map["new_body"])
-            axis_name = str(args.get("axis") or "y").lower()
+            # Fix T4 gate: o LLM as vezes emite ``axis_line`` (formato
+            # geometrico: 2 pontos 3D definindo a reta) em vez de ``axis``
+            # ("x"/"y"/"z"). O handler antigo ignorava axis_line e caia no
+            # default "y", causando ASM_PATH_TANGENT quando o eixo Y cruzava
+            # o perfil. Derivamos o axis nativo pelo maior componente do
+            # vetor end-start; se for arbitrario (nao alinhado a x/y/z) cai
+            # no default antigo para evitar regressao.
+            axis_name = str(args.get("axis") or "").lower().strip()
+            if axis_name not in ("x", "y", "z"):
+                axis_line = args.get("axis_line")
+                if (
+                    isinstance(axis_line, (list, tuple))
+                    and len(axis_line) == 2
+                    and isinstance(axis_line[0], (list, tuple))
+                    and isinstance(axis_line[1], (list, tuple))
+                    and len(axis_line[0]) >= 3
+                    and len(axis_line[1]) >= 3
+                ):
+                    dx = float(axis_line[1][0]) - float(axis_line[0][0])
+                    dy = float(axis_line[1][1]) - float(axis_line[0][1])
+                    dz = float(axis_line[1][2]) - float(axis_line[0][2])
+                    mag = max(abs(dx), abs(dy), abs(dz))
+                    if mag > 1e-9:
+                        if abs(dx) == mag:
+                            axis_name = "x"
+                        elif abs(dy) == mag:
+                            axis_name = "y"
+                        elif abs(dz) == mag:
+                            axis_name = "z"
+            if axis_name not in ("x", "y", "z"):
+                axis_name = "y"
             root = _root(design)
             axis_map = {{
                 "x": root.xConstructionAxis,
