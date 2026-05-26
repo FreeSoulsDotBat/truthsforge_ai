@@ -51,4 +51,5 @@ Cobrir o fluxo real "mexi no modelo à mão, agora continue daqui": antes de pla
 - [x] Reconciliação com histórico e injeção no planner (`<estado-atual-fusion>`).
 - [x] Edição não-high-risk **auto-executa por padrão** (aprovação só para high-risk/destrutivo) — decisão do dono, sobrepõe DT-006 no caminho de edição.
 - [x] **Rollback da última edição**: marcador de timeline pré-edição + endpoint de restore + botão na UI (via rollback nativo do Fusion / DT-005).
-- [x] Testes verdes (unit/fakes: orchestrator, service, rota, card). **[ ] Gate do dono (Fusion real) pendente** — leitura ao vivo + reconciliação + rollback precisam da validação manual no Fusion.
+- [x] Testes verdes (unit/fakes: orchestrator, service, rota, card).
+- [x] **Gate do dono (Fusion real) APROVADO (2026-05-26)** — edição à mão, reconciliação e rollback validados; "Desfazer última edição" reverteu o modelo. Achados do gate corrigidos em PR #46: (1) payload do envelope HTTP (`_inner_fusion_payload`); (2) `kind`/`rollback_marker` no metadata do chat (edição renderiza como card de edição); (3) `query_timeline` fora do `PLANNER_TOOLSET`; (4) reconciliação factual (sem falsa "edição manual" por contagem); (5) rollback habilitado em edição que falhou; (6) `rollback_timeline` checa retorno de `deleteMe()` + fallback `entity.deleteMe()`.
