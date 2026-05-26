@@ -315,6 +315,40 @@ def test_planner_system_prompt_asks_for_expected_dimensions() -> None:
     assert "expected_dimensions_mm" in content
 
 
+def test_planner_system_prompt_warns_against_asymmetric_repeat_formulas() -> None:
+    """Fix T4 gate (Bug J): no Cenário A re-rodado o LLM acertou o 1º furo
+    e inventou subtrações extras nos seguintes (subtraía Diametro_Furo da
+    posição), deslocando as posições para fora da face e falhando o sketch.
+    O system prompt deve exigir MESMA fórmula em todos os pontos simétricos,
+    variando só os sinais."""
+
+    payload = ModelingPlanCreate(prompt="placa com 4 furos nos cantos")
+    response = {
+        "software_choice": "fusion",
+        "confidence": 0.7,
+        "rationale": "ok",
+        "assumptions": [],
+        "risks": [],
+        "steps": [
+            {
+                "seq": 1,
+                "title": "hole",
+                "tool_name": "fusion.hole",
+                "risk_level": "low",
+                "approval_required": False,
+                "input_json": "{}",
+            }
+        ],
+    }
+    gateway = _FakeGateway(response=response)
+    create_llm_plan(payload, gateway=gateway, model=_planner_model())
+    system = next(msg for msg in gateway.received_messages[-1] if msg["role"] == "system")
+    content = system["content"]
+    assert "PADRÕES SIMÉTRICOS" in content
+    assert "MESMA fórmula" in content
+    assert "NUNCA invente termos adicionais" in content
+
+
 def test_planner_system_prompt_nudges_parametric_modeling() -> None:
     """Fase 4/G1.1: em modelos editáveis/paramétricos, o planner deve criar
     userParameters e passar os NOMES nos campos dimensionais (o adapter liga via

@@ -748,6 +748,20 @@ def _build_messages(
         "  `angle_deg`...) em vez de números crus — o adapter liga via expressão e\n"
         "  mudar o parâmetro depois recomputa a geometria. Cotas fixas simples\n"
         "  podem seguir com números crus.\n"
+        "- PADRÕES SIMÉTRICOS: para múltiplas instâncias da MESMA feature em\n"
+        "  posições simétricas (ex.: 4 furos nos 4 cantos de uma placa), use\n"
+        "  EXATAMENTE a MESMA fórmula em todas as instâncias, variando SÓ os\n"
+        "  sinais entre elas. NUNCA invente termos adicionais entre instâncias\n"
+        "  (ex.: subtrair o diâmetro do furo da posição num canto e não nos\n"
+        "  outros). NUNCA omita campos como `depth_mm` na 2ª+ instância depois\n"
+        "  de tê-los na 1ª — repita o MESMO valor. Exemplo correto para 4\n"
+        "  furos nos cantos de uma placa centrada:\n"
+        '    canto 1: position_mm=["Comprimento/2 - margem", "Largura/2 - margem"]\n'
+        '    canto 2: position_mm=["Comprimento/2 - margem", "-(Largura/2 - margem)"]\n'
+        '    canto 3: position_mm=["-(Comprimento/2 - margem)", "Largura/2 - margem"]\n'
+        '    canto 4: position_mm=["-(Comprimento/2 - margem)", "-(Largura/2 - margem)"]\n'
+        "  Bug pego no gate: o LLM acertou o 1º furo e inventou subtrações\n"
+        "  extras nos próximos, deslocando posições para fora da face.\n"
         "\n"
         "Ferramentas disponíveis (com argumentos/unidades/exemplos quando conhecidos):\n"
         + tool_schemas.render_tool_schemas(list(PLANNER_TOOLSET))
