@@ -607,23 +607,16 @@ class ModelingChatOrchestrator:
         self.store.upsert_modeling_plan(stamped)
         return stamped
 
-    def _recorded_geometry_step_count(self, parent_plan: ModelingPlan | None) -> int | None:
-        """Contagem conservadora de passos concluídos no histórico registrado."""
-
-        if parent_plan is None or not parent_plan.steps:
-            return None
-        return sum(1 for step in parent_plan.steps if step.status == ModelingStepStatus.completed)
-
-    def _build_reconciliation_block(
-        self, live_output: dict[str, Any] | None, parent_plan: ModelingPlan | None
-    ) -> str | None:
+    def _build_reconciliation_block(self, live_output: dict[str, Any] | None) -> str | None:
         """T3.2/T3.3: monta o bloco ``<estado-atual-fusion>`` da leitura ao vivo.
 
-        Conservador por desenho (a spec alerta contra falsa divergência por
-        granularidade sketch/feature): expõe a timeline + parâmetros REAIS e
-        instrui que o estado ao vivo VENCE o histórico, mais uma dica NÃO
-        autoritativa quando as contagens diferem. A reconciliação de fato fica
-        a cargo do planner (LLM).
+        FACTUAL e não-alarmista de propósito: expõe a timeline + parâmetros
+        REAIS como referência e instrui que, se algo divergir do histórico, o
+        estado ao vivo é o atual. **NÃO** declara "edição manual" por contagem
+        — passos registrados × features da timeline divergem por granularidade
+        sketch/feature (seria falso positivo e empurra o planner a operações
+        defensivas redundantes, ex.: um 2º fillet). A reconciliação de fato
+        fica a cargo do planner (LLM).
         """
 
         if not isinstance(live_output, dict):
@@ -634,9 +627,9 @@ class ModelingChatOrchestrator:
             count = len(features) if isinstance(features, list) else 0
         lines = [
             "<estado-atual-fusion>",
-            "Leitura AO VIVO da timeline do Fusion (FONTE DE VERDADE). Se divergir do "
-            "<modelo-atual> histórico, o modelo foi alterado à mão — parta SEMPRE daqui.",
-            f"Timeline atual: {count} feature(s).",
+            "Estado atual do modelo no Fusion (timeline ao vivo). Se algo aqui diferir do "
+            "<modelo-atual> (histórico), considere ESTE o estado real ao planejar.",
+            f"Timeline: {count} feature(s).",
         ]
         if isinstance(features, list) and features:
             named = []
@@ -661,12 +654,6 @@ class ModelingChatOrchestrator:
                     named_p.append(label)
             if named_p:
                 lines.append("Parâmetros: " + ", ".join(named_p) + ".")
-        recorded = self._recorded_geometry_step_count(parent_plan)
-        if recorded is not None and recorded != count:
-            lines.append(
-                f"(Possível edição manual: histórico tem ~{recorded} passo(s); timeline tem "
-                f"{count} feature(s). Diferenças de granularidade são normais — confie no atual.)"
-            )
         lines.append("</estado-atual-fusion>")
         return "\n".join(lines)
 
@@ -716,7 +703,7 @@ class ModelingChatOrchestrator:
                 status=ModelingPlanStatus.approved,
             )
             live_output = self._read_live_timeline(software=software, context_plan=read_context)
-            reconciliation = self._build_reconciliation_block(live_output, parent_plan)
+            reconciliation = self._build_reconciliation_block(live_output)
 
         plan = self.planner.create_plan(edit_payload, live_state_block=reconciliation)
         plan = self._apply_rollback_marker(plan, live_output)

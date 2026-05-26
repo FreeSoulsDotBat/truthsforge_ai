@@ -442,7 +442,6 @@ def test_propose_edit_plan_injects_live_state_into_planner_for_fusion() -> None:
     block = planner.last_live_state_block
     assert block is not None
     assert "estado-atual-fusion" in block
-    assert "FONTE DE VERDADE" in block
     assert "Extrude1" in block
     assert "Fillet1" in block
 
@@ -458,9 +457,10 @@ def test_propose_edit_plan_passes_no_live_state_for_non_fusion() -> None:
     assert planner.last_live_state_block is None
 
 
-def test_reconciliation_flags_possible_manual_edit_on_count_mismatch() -> None:
-    # T3.2: timeline ao vivo (5) ≠ histórico registrado (2 passos) → dica de
-    # possível edição manual no contexto (não autoritativa).
+def test_reconciliation_block_is_factual_without_false_manual_edit_hint() -> None:
+    # T3.2 (revisado): o bloco NÃO declara "edição manual" por contagem
+    # (passos × features divergem por granularidade → falso positivo que
+    # empurrava o planner a operações redundantes, ex.: 2º fillet).
     orch, store, planner, _ = _orchestrator(
         planner_steps=[_safe_step(1, "fusion.extrude_profile")],
         probe_count=5,
@@ -490,7 +490,8 @@ def test_reconciliation_flags_possible_manual_edit_on_count_mismatch() -> None:
 
     block = planner.last_live_state_block
     assert block is not None
-    assert "edição manual" in block.lower()
+    assert "edição manual" not in block.lower()
+    assert "Timeline: 5 feature(s)." in block
 
 
 def test_inner_fusion_payload_parses_http_envelope() -> None:
