@@ -502,8 +502,13 @@ function App() {
     if (fetchedSessionDetailsRef.current.has(activeSessionId)) return;
     fetchedSessionDetailsRef.current.add(activeSessionId);
     chatStickToBottomRef.current = true;
-    void loadSessionPage(activeSessionId).finally(() => {
-      fetchedSessionDetailsRef.current.delete(activeSessionId);
+    // O Set vira "já tentei carregar essa session nesta sessão de browser".
+    // Limpar no .finally causava loop quando o servidor devolvia messages: []
+    // (ex.: draft vazio) porque loadSessionPage chama setSessions → muda a
+    // ref de `sessions` → effect re-dispara → guarda de messages.length não
+    // pega → refetch infinito.
+    void loadSessionPage(activeSessionId).catch((error) => {
+      console.error("Failed to load session detail", error);
     });
   }, [activeSessionId, loadSessionPage, sessions]);
 
