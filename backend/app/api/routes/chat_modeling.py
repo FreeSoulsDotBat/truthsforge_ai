@@ -79,6 +79,12 @@ def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
         "knowledge_base_ids": plan.knowledge_base_ids,
         "planner_source": plan.planner_source.value if plan.planner_source else None,
         "fallback_reason": plan.fallback_reason,
+        # ``kind`` decide o card no frontend: ``edit`` → ModelingEditCard (com
+        # "Desfazer última edição"); ``primary`` → ModelingPlanCard. Sem isto a
+        # edição era SEMPRE desenhada como plano primário (T3.6/regressão do gate).
+        "kind": plan.kind.value,
+        "parent_plan_id": plan.parent_plan_id,
+        "rollback_marker": plan.rollback_marker,
         # ``trace_id`` permite que o frontend chame
         # ``GET /api/modeling/plans/{id}/trace`` ou
         # ``GET /api/modeling/traces/{trace_id}`` ao abrir o modal de

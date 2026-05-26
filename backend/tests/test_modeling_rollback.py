@@ -169,3 +169,30 @@ def test_rollback_route_returns_404_when_missing(monkeypatch) -> None:
     resp = TestClient(app).post("/api/3d/plans/missing/rollback")
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# chat message metadata (regressão: card de edição + botão de rollback)
+# ---------------------------------------------------------------------------
+
+
+def test_chat_plan_metadata_includes_kind_parent_and_marker() -> None:
+    # Regressão (gate 2026-05-25): o metadata embutido na mensagem do chat
+    # omitia kind/parent_plan_id/rollback_marker → o frontend desenhava TODA
+    # edição como plano primário (sem ModelingEditCard, sem botão de rollback).
+    from app.api.routes.chat_modeling import _modeling_plan_metadata
+
+    plan = ModelingPlan(
+        prompt="editar o cubo: adicionar fillet",
+        software_choice=ModelingSoftware.fusion,
+        kind=ModelingPlanKind.edit,
+        parent_plan_id="m3d_plan_primary",
+        rollback_marker=4,
+        status=ModelingPlanStatus.completed,
+    )
+
+    meta = _modeling_plan_metadata(plan)
+
+    assert meta["kind"] == "edit"
+    assert meta["parent_plan_id"] == "m3d_plan_primary"
+    assert meta["rollback_marker"] == 4
