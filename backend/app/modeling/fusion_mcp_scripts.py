@@ -2247,21 +2247,50 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     "target_count (contagem da timeline antes da edicao) e obrigatorio.",
                 )
             tl = design.timeline
-            if target > tl.count:
-                target = tl.count
+            before = tl.count
+            if target > before:
+                target = before
             removed = 0
-            for i in range(tl.count - 1, target - 1, -1):
+            errors = []
+            for i in range(before - 1, target - 1, -1):
+                obj = tl.item(i)
+                done = False
+                # TimelineObject.deleteMe() devolve BOOL (nem sempre levanta) — o
+                # codigo antigo ignorava o retorno e contava como removido mesmo
+                # quando falhava. Checa o bool E captura a excecao real do Fusion.
                 try:
-                    tl.item(i).deleteMe()
+                    if obj.deleteMe():
+                        done = True
+                except Exception as exc:
+                    errors.append("tl[{{}}].deleteMe: {{}}".format(i, exc))
+                if not done:
+                    # Fallback: deleta a feature/entidade subjacente.
+                    try:
+                        ent = obj.entity
+                        if ent is not None and hasattr(ent, "deleteMe") and ent.deleteMe():
+                            done = True
+                    except Exception as exc:
+                        errors.append("tl[{{}}].entity.deleteMe: {{}}".format(i, exc))
+                if done:
                     removed += 1
-                except Exception:
-                    pass
+            after = design.timeline.count
+            if removed == 0 and target < before:
+                # Nao reverteu nada quando deveria: falha ALTA (nao "completed"
+                # silencioso) com o motivo real do Fusion p/ diagnostico/gate.
+                raise ToolError(
+                    "fusion.rollback_failed",
+                    "Rollback nao removeu features (timeline segue em {{}}). {{}}".format(
+                        after, " | ".join(errors[:6]) or "deleteMe sem efeito e sem excecao"
+                    ),
+                )
+            msg = "Rollback: {{}}/{{}} feature(s) removida(s) (timeline {{}} -> {{}}).".format(
+                removed, before - target, before, after
+            )
             return {{
-                "message": "Rollback: {{}} feature(s) removida(s) (timeline -> {{}}).".format(
-                    removed, target
-                ),
+                "message": msg,
                 "removed": removed,
-                "timeline_count": design.timeline.count,
+                "timeline_count": after,
+                "errors": errors[:12],
             }}
 
 
