@@ -26,6 +26,21 @@ Levar o workspace **Sólido** à cobertura completa e paramétrica de verdade: d
 - **T4.3** — Implementar features de sólido restantes (lista priorizada de G3 em `adapter-gaps-roadmap.md`), com geometria esperada para verificação.
 - **T4.4** — Testes por feature (mock) + asserções de verificação; atualizar `adapter-gaps-roadmap.md` marcando o que foi fechado.
 
+## Progresso (autônomo, 2026-05-26 — código + testes mock; **gate do dono pendente**)
+
+Já no código (parte de ondas anteriores, confirmado/testado; itens **[novo]** desta leva):
+- **G1.1** distâncias paramétricas: `_param_value_input` ligado em `extrude_profile`/`fillet_edges`/`chamfer_edges`/`shell_body`; **`_param_angle_input` + `revolve_profile` (angle_deg) [novo]**; **nudge condicional no system prompt** p/ o LLM criar `userParameters` e passar NOMES nos campos dimensionais **[novo]**.
+- **G1.2** dimensões de sketch: `_param_name_or_none` ligado em `add_rectangle`/`add_circle`.
+- **G2.1** selectors semânticos: `longest/shortest` (arestas), `+x/-x/+y/-y/+z/-z`, `planar/cylindrical`, `largest` (faces).
+- **G2.2** `fusion.query_geometry` (read-only).
+- **G3**: `add_ellipse`, `add_slot`, `split_body` + **`move_body` rotação (`rotation_deg`+`axis`+`center_mm`) [novo]**.
+
+Pendente (precisa do gate / é demanda-dirigido):
+- **Recompute paramétrico real** (mudar parâmetro recomputa furos/fillets) — só fecha DT-002 no Fusion real.
+- **Selectors estáveis a recompute** — validar no Fusion.
+- **G3 restantes** (draft, rib, chamfer 2-distância, planos por ângulo/3-pontos, add_text, hole v2) — dependem de entity-refs e APIs version-sensitive (G5); fazer **sob demanda + smoke no Fusion**, não em lote às cegas.
+- **G1.2 completo** (todas as primitivas via sketch dims) — maior custo.
+
 ## Contratos / invariantes
 
 - Toda nova feature entra pela allowlist de fonte única (`tool_registry.py`).
