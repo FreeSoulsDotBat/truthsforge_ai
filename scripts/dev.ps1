@@ -1,3 +1,7 @@
+param(
+  [switch]$Build
+)
+
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -141,7 +145,20 @@ $RedisCommanderPort = Get-DevPort -Name "REDIS_COMMANDER_PORT" -DefaultValue "80
 Assert-DevPortAvailable -ServiceName "pgAdmin" -EnvName "PGADMIN_PORT" -Port $PgAdminPort -ContainerName "truths-forge-pgadmin" -SuggestedPort 18080
 
 Write-Host "Starting Truth's Forge AI full container dev stack..."
-docker compose --env-file $EnvFile -f $ComposeFile -f $ComposeDevFile up --build -d
+# `--build` so quando -Build (Dockerfile mudou). No caminho rapido,
+# verificar imagens travava o script por minutos no Windows/WSL2 mesmo
+# sem mudancas; sem o flag, ``up -d`` retorna em segundos.
+$ComposeUpArgs = @(
+  "compose",
+  "--env-file", $EnvFile,
+  "-f", $ComposeFile,
+  "-f", $ComposeDevFile,
+  "up", "-d"
+)
+if ($Build) {
+  $ComposeUpArgs += "--build"
+}
+docker @ComposeUpArgs
 if ($LASTEXITCODE -ne 0) {
   throw "docker compose up failed"
 }
