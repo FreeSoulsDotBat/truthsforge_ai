@@ -687,13 +687,16 @@ def _build_messages(
         "  `fusion.add_box`, `fusion.add_cylinder`, `fusion.add_cone` criam o corpo\n"
         "  em UM step (sem sketch/revolve manual). Use-as para bola/esfera, caixa,\n"
         "  cilindro e cone — é mais robusto que montar o perfil à mão.\n"
-        "- NOMES DE CORPO: ao criar uma primitiva (`add_box`/`add_cylinder`/\n"
-        "  `add_sphere`/`add_cone`) passe SEMPRE um `name` único e descritivo\n"
-        '  (ex.: "BoxOuter", "LidOuter"). O corpo recebe ESSE nome. Nas tools\n'
-        "  seguintes que operam num corpo (`shell_body`, `fillet_edges`,\n"
-        "  `chamfer_edges`, `hole`, `pattern_*`, `mirror_feature`, `combine_bodies`,\n"
-        "  `export_*`) referencie o corpo em `body` pelo MESMO `name` que você deu.\n"
-        "  NUNCA referencie um corpo por um nome que você não definiu (ex.: usar\n"
+        "- NOMES DE CORPO: ao criar um corpo (primitivas `add_box`/`add_cylinder`/\n"
+        "  `add_sphere`/`add_cone` E TAMBÉM `extrude_profile`/`revolve_profile`/\n"
+        "  `loft_profiles`/`sweep_profile`) passe SEMPRE um `name` único e\n"
+        '  descritivo (ex.: "BoxOuter", "LidOuter", "Revolvido"). Se o usuário\n'
+        '  pediu um nome específico ("nomeie o corpo \\"Revolvido\\""), use\n'
+        "  EXATAMENTE esse nome. O corpo recebe ESSE nome. Nas tools seguintes\n"
+        "  que operam num corpo (`shell_body`, `fillet_edges`, `chamfer_edges`,\n"
+        "  `hole`, `pattern_*`, `mirror_feature`, `combine_bodies`, `move_body`,\n"
+        "  `export_*`) referencie o corpo em `body` pelo MESMO `name` que você\n"
+        "  deu. NUNCA referencie um corpo por um nome que você não definiu (ex.:\n"
         '  body="Outer_Box" sem ter criado a primitiva com name="Outer_Box").\n'
         "- POSICIONAMENTO DE MÚLTIPLOS CORPOS: toda primitiva nasce CENTRADA na\n"
         "  origem em z=0. Ao criar MAIS DE UM corpo, posicione cada corpo extra\n"

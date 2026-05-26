@@ -212,6 +212,11 @@ def test_planner_system_prompt_requires_consistent_body_names() -> None:
     content = system["content"]
     assert "NOMES DE CORPO" in content
     assert "MESMO `name`" in content
+    # Fix T4 gate (Bug I): o nudge agora cobre tambem extrude/revolve/loft/sweep.
+    # Sem isso, o LLM esquecia ``name`` no extrude/revolve e o move_body por
+    # nome batia em "Corpo nao encontrado".
+    assert "extrude_profile" in content
+    assert "revolve_profile" in content
 
 
 def test_planner_system_prompt_positions_multiple_bodies() -> None:
