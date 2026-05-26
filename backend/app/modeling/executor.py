@@ -107,6 +107,43 @@ def _unwrap_inner_fusion_result(output: dict[str, Any]) -> dict[str, Any]:
     return promoted
 
 
+def inner_fusion_payload(output: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Extrai o payload real de um tool fusion do envelope do adapter HTTP.
+
+    Tools fusion **bem-sucedidas** devolvem o dict do script como JSON
+    *stringificado* em ``output["message"]`` (duplicado em
+    ``output["result"]["message"]``); :func:`_unwrap_inner_fusion_result` só
+    promove campos ao topo em FALHA. Para ler campos estruturados de um
+    SUCESSO (``dimensions_mm``, ``timeline_count``, ``timeline``...) é preciso
+    parsear aqui. O formato direto (mock/in_process/fakes — dict já plano)
+    volta inalterado; entrada não-dict vira ``None``.
+
+    Fonte única usada pelo verifier geométrico (item C, ``agent_loop``) e pela
+    reconciliação/rollback (``chat_orchestrator``). Sem isto o read-back ficava
+    mudo no Fusion real (gate 2026-05-26): o envelope mascarava as dimensões.
+    """
+
+    if not isinstance(output, dict):
+        return None
+    candidates = [output.get("message")]
+    result = output.get("result")
+    if isinstance(result, dict):
+        candidates.append(result.get("message"))
+    for cand in candidates:
+        if not isinstance(cand, str):
+            continue
+        stripped = cand.strip()
+        if not (stripped.startswith("{") and stripped.endswith("}")):
+            continue
+        try:
+            inner = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(inner, dict):
+            return inner
+    return output
+
+
 def envelope_into_output(
     envelope: ModelingErrorEnvelope, *, base: dict[str, Any]
 ) -> dict[str, Any]:

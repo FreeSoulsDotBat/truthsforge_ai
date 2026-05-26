@@ -33,7 +33,6 @@ state-machine logic.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -62,7 +61,7 @@ from app.modeling.chat_state import (
     ChatModelingEvent,
     transition,
 )
-from app.modeling.executor import ModelingExecutorService
+from app.modeling.executor import ModelingExecutorService, inner_fusion_payload
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner_service import ModelingPlannerService
 from app.modeling.policy import apply_plan_approval
@@ -558,40 +557,14 @@ class ModelingChatOrchestrator:
 
     @staticmethod
     def _inner_fusion_payload(output: dict[str, Any] | None) -> dict[str, Any] | None:
-        """Extrai o payload real de um tool fusion do envelope do adapter.
+        """Delegação p/ ``executor.inner_fusion_payload`` (fonte única).
 
-        Tools fusion BEM-SUCEDIDAS devolvem o dict do script como JSON
-        *stringificado* em ``output["message"]`` (duplicado em
-        ``output["result"]["message"]``); o executor só promove os campos ao
-        topo quando é FALHA (``_unwrap_inner_fusion_result``). Para ler campos
-        estruturados de um sucesso (``timeline_count``, ``timeline``...) é
-        preciso parsear aqui. Aceita também o formato direto (dict já plano) —
-        robustez p/ mock/in_process e testes com fakes.
+        Mantida como método para o ``_read_live_timeline`` e os testes; a lógica
+        de desempacotar o envelope HTTP do fusion vive em ``executor`` e é
+        compartilhada com o verifier geométrico (item C).
         """
 
-        if not isinstance(output, dict):
-            return None
-        # Formato direto (mock/in_process/fakes): campos já no topo.
-        if "timeline_count" in output or "timeline" in output:
-            return output
-        # Envelope HTTP: JSON stringificado em message / result.message.
-        candidates = [output.get("message")]
-        result = output.get("result")
-        if isinstance(result, dict):
-            candidates.append(result.get("message"))
-        for cand in candidates:
-            if not isinstance(cand, str):
-                continue
-            stripped = cand.strip()
-            if not (stripped.startswith("{") and stripped.endswith("}")):
-                continue
-            try:
-                inner = json.loads(stripped)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(inner, dict):
-                return inner
-        return output
+        return inner_fusion_payload(output)
 
     def _apply_rollback_marker(
         self, plan: ModelingPlan, live_output: dict[str, Any] | None

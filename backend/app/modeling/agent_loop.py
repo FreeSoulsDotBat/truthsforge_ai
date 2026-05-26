@@ -38,7 +38,7 @@ from app.core.contracts import (
     ModelingTraceSource,
     now_utc,
 )
-from app.modeling.executor import ModelingExecutorService
+from app.modeling.executor import ModelingExecutorService, inner_fusion_payload
 from app.modeling.observability import current_trace_id
 
 logger = logging.getLogger(__name__)
@@ -250,7 +250,11 @@ def build_dimension_verifier(
 
     def verifier(step: ModelingPlanStep, output: dict[str, Any]) -> dict[str, Any] | None:
         expected = (step.input_json or {}).get(expected_key)
-        measured = (output or {}).get(measured_key)
+        # As tools fusion devolvem o read-back dentro do envelope HTTP (JSON
+        # stringificado); sem desempacotar, ``dimensions_mm`` nunca aparecia e o
+        # verifier ficava mudo no Fusion real. ``inner_fusion_payload`` cai no
+        # formato direto p/ mock/in_process/testes.
+        measured = (inner_fusion_payload(output) or {}).get(measured_key)
 
         def _diverged(exp: Any, meas: Any) -> bool:
             return (

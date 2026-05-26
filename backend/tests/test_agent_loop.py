@@ -196,6 +196,34 @@ def test_build_dimension_verifier_compares_list_dims() -> None:
     assert div["z"]["expected"] == 30 and div["z"]["measured"] == 0.0
 
 
+def test_verifier_reads_dimensions_from_http_envelope() -> None:
+    """C (gate 2026-05-26): tools fusion devolvem ``dimensions_mm`` DENTRO do
+    envelope HTTP (JSON stringificado em message/result.message). O verifier
+    precisa desempacotar via ``inner_fusion_payload`` — senão ficava mudo no
+    Fusion real (lia o nível errado → None → nenhuma divergência detectada)."""
+
+    import json as _json
+
+    from app.modeling.agent_loop import build_dimension_verifier
+
+    verifier = build_dimension_verifier()
+    step = _step(1, "fusion.extrude_profile", expected_dimensions_mm=[60, 40, 30])
+    blob = _json.dumps({"ok": True, "dimensions_mm": [60.0, 40.0, 0.0]})
+    enveloped = {
+        "ok": True,
+        "input": {},
+        "result": {"message": blob, "success": True},
+        "message": blob,
+        "software": "fusion",
+    }
+    div = verifier(step, enveloped)
+    assert div is not None and "z" in div
+    assert div["z"]["measured"] == 0.0
+    # Conforme (sem divergência) também desempacota o envelope.
+    ok_blob = _json.dumps({"ok": True, "dimensions_mm": [60.0, 40.0, 30.0]})
+    assert verifier(step, {"result": {"message": ok_blob}, "message": ok_blob}) is None
+
+
 def test_loop_threads_divergence_to_corrector() -> None:
     """C (verifier): quando o tool foi OK mas a geometria divergiu, o loop injeta
     a divergência no output que vai ao corretor (para o LLM ver esperado×medido).
