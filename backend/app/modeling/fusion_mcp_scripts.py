@@ -2402,6 +2402,21 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # template e qualquer ``X`` cru e interpretado como expressao.
             design = _design()
 
+            def _infer_unit_from_expr(raw_expr):
+                # Fix T4 gate: o LLM as vezes manda a unidade DENTRO da
+                # expression (ex.: "270 deg", "5mm", "1.5 rad"). Quando o
+                # nome do parametro nao tem sufixo (_deg/_mm/...) e nao ha
+                # ``unit`` explicito, o fallback "mm" do _unit_for fazia
+                # userParameters.add rejeitar "270 deg" com "Invalid
+                # expression". Aqui detectamos a unidade no fim da string.
+                if not isinstance(raw_expr, str):
+                    return None
+                stripped = raw_expr.strip().lower().replace(" ", "")
+                for candidate in ("deg", "rad", "mm", "cm"):
+                    if stripped.endswith(candidate):
+                        return candidate
+                return None
+
             def _unit_for(param_name, default_unit):
                 lower_name = str(param_name).lower()
                 if lower_name.endswith("_mm"):
@@ -2447,7 +2462,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 for raw_name, raw_value in bulk.items():
                     param_name = str(raw_name).strip()
                     expression = str(raw_value).strip()
-                    unit = _unit_for(param_name, default_unit)
+                    unit = (
+                        _infer_unit_from_expr(expression)
+                        or _unit_for(param_name, default_unit)
+                    )
                     _ensure_param(param_name, expression, unit, "")
                     applied.append(param_name)
                 return {{
@@ -2489,7 +2507,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     for raw_name, raw_value in implicit_bulk.items():
                         param_name = str(raw_name).strip()
                         expression = str(raw_value).strip()
-                        unit = _unit_for(param_name, default_unit)
+                        unit = (
+                            _infer_unit_from_expr(expression)
+                            or _unit_for(param_name, default_unit)
+                        )
                         _ensure_param(param_name, expression, unit, "")
                         applied.append(param_name)
                     return {{
@@ -2519,7 +2540,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         expression = str(args.get(alias_key)).strip()
                         alias_unit = alias_unit_hint
                         break
-            unit = str(args.get("unit") or alias_unit or _unit_for(name, "mm"))
+            unit = str(
+                args.get("unit")
+                or alias_unit
+                or _infer_unit_from_expr(expression)
+                or _unit_for(name, "mm")
+            )
             comment = str(args.get("comment") or "")
             _ensure_param(name, expression, unit, comment)
             return {{"message": "Parâmetro '{{}}' = {{}}.".format(name, expression)}}

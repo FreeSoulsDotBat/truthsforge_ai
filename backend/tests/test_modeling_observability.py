@@ -918,6 +918,26 @@ def test_create_sketch_resolves_construction_plane_by_name() -> None:
     assert "plane_ref not in construction_names" in script
 
 
+def test_set_parameter_infers_unit_from_expression() -> None:
+    """Fase 4 gate bug C: set_parameter('Angulo', '270 deg') falhava porque
+    o adaptador inferia unit só do sufixo do nome ('Angulo' não termina em
+    '_deg'). Quando a expression carrega a unidade (270 deg / 5 mm / 1 rad)
+    a inferência deve usar essa unit antes do fallback heurístico."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.set_parameter",
+        arguments={"name": "Angulo", "expression": "270 deg"},
+    )
+    ast.parse(script)
+    assert "_infer_unit_from_expr" in script
+    # Helper trabalha em string normalizada (lowercase, sem espacos).
+    assert 'for candidate in ("deg", "rad", "mm", "cm")' in script
+
+
 def test_add_circle_unpacks_batch_from_raw() -> None:
     """Fase 4 gate bug B: o planner às vezes empacota múltiplas chamadas de
     add_circle num único step (ex.: 4 furos). O normalizador embrulha em
