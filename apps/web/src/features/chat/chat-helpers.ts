@@ -74,11 +74,13 @@ export function mergeUniqueMessages(older: ChatMessage[], newer: ChatMessage[]):
 }
 
 export function sessionHasEmptyDraft(session: ChatSession): boolean {
+  // Confia SO no flag explicito do backend. Antes o heuristico aceitava
+  // qualquer sessao com titulo "Novo chat"/"New chat" + messages.length=0,
+  // mas o lazy-load de detalhes ainda nao tinha carregado as mensagens
+  // -> startNewChat reusava conversas antigas com conteudo. Agora so
+  // reusa se o servidor marcou a sessao como draft vazio.
   const metadata = session.metadata as Record<string, unknown> | undefined;
-  if (metadata?.is_empty_draft === true) return true;
-  if ((session.messages?.length ?? 0) > 0) return false;
-  const normalizedTitle = session.title.trim().toLowerCase();
-  return normalizedTitle === "novo chat" || normalizedTitle === "new chat";
+  return metadata?.is_empty_draft === true;
 }
 
 export function createChatAttachmentPreview(platformFile: PlatformFile): ChatMessageAttachment {
