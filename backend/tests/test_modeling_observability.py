@@ -897,6 +897,30 @@ def test_revolve_angle_can_bind_to_parameter() -> None:
     assert "createByString" in script
 
 
+def test_extrude_and_revolve_name_the_body() -> None:
+    """Fase 4 gate bug I: extrude_profile/revolve_profile devem aceitar
+    name/result_name/body_name (igual às primitivas add_box/cylinder/...)
+    e nomear o body criado, senão edits subsequentes que referenciam o
+    corpo por nome batem em 'Corpo nao encontrado: Revolvido. Corpos
+    disponiveis: [Body1]'."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    for tool in ("fusion.extrude_profile", "fusion.revolve_profile"):
+        script = build_autodesk_fusion_script(
+            tool_name=tool,
+            arguments={"sketch": "Perfil", "name": "Revolvido"},
+        )
+        ast.parse(script)
+        # Handler precisa ler name/result_name/body_name e setar feat.bodies[0].name.
+        assert 'args.get("name")' in script
+        assert 'args.get("result_name")' in script
+        assert 'args.get("body_name")' in script
+        assert "_unique_body_name(design" in script
+
+
 def test_revolve_profile_derives_axis_from_axis_line() -> None:
     """Fase 4 gate bug G: revolve_profile devia aceitar axis_line (2 pontos
     3D que definem o eixo) além de axis="x"/"y"/"z". Sem isso, o LLM

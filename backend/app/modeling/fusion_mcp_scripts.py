@@ -883,12 +883,27 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 _param_value_input(args.get("distance_mm"), design),
             )
             ext = extrudes.add(input_obj)
+            # Fix T4 gate: nomeia o body criado para que edits subsequentes
+                                                                 # consigam referenciar por nome. As primitivas (add_box/cylinder/...)
+            # ja faziam isso; extrude/revolve nao faziam, e edits que pediam
+            # move_body/fillet/etc. por nome batiam em "Corpo nao encontrado".
+            body_name = None
+            if ext.bodies.count > 0:
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or sketch.name))
+                ext.bodies.item(0).name = body_name
             dims = _body_dims_mm(ext.bodies.item(0)) if ext.bodies.count > 0 else [0.0, 0.0, 0.0]
             return {{
                 "message": "Extrusão de {{}} mm aplicada (operation={{}}).{{}}".format(
                     distance_mm, operation, operation_warning
                 ),
                 "sketch_name": sketch.name,
+                "body_name": body_name,
                 "dimensions_mm": dims,
             }}
 
@@ -1196,12 +1211,25 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 angle_vi = adsk.core.ValueInput.createByReal(float(angle_deg) * math.pi / 180.0)
             input_obj.setAngleExtent(False, angle_vi)
             feat = revolves.add(input_obj)
+            # Fix T4 gate: nomeia o body criado para que edits subsequentes
+            # consigam referenciar por nome (vide _extrude_profile).
+            body_name = None
+            if feat.bodies.count > 0:
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or sketch.name))
+                feat.bodies.item(0).name = body_name
             dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
             return {{
                 "message": "Revolucao de {{}} graus (eixo {{}}) aplicada a '{{}}'.".format(
                     angle_deg, axis_name, sketch.name
                 ),
                 "sketch_name": sketch.name,
+                "body_name": body_name,
                 "dimensions_mm": dims,
             }}
 
