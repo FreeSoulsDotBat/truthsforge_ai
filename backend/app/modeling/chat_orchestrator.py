@@ -65,9 +65,31 @@ from app.modeling.executor import ModelingExecutorService, inner_fusion_payload
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner_service import ModelingPlannerService
 from app.modeling.policy import apply_plan_approval
-from app.modeling.tool_registry import is_high_risk
+from app.modeling.tool_registry import READ_ONLY_TOOL_NAMES, is_high_risk
 
 logger = logging.getLogger(__name__)
+
+
+# Fix T4 gate: edits que so mudam parametros (set_parameter) NAO criam
+# entradas na timeline do Fusion — o tool re-avalia as formulas sem
+# adicionar feature. Como o rollback atual usa ``timeline_count`` como
+# marker (T3.6), reverter um edit parameter-only seria sempre no-op
+# (count antes == count depois). A UI esconde o botao Reverter quando
+# ``rollback_marker`` e None (vide ModelingEditCard.canRollback), entao
+# nao gravamos marker para esses planos — evita prometer um rollback
+# que nao tem como ser cumprido.
+_NON_TIMELINE_MODIFYING_TOOLS: frozenset[str] = frozenset(
+    {"fusion.set_parameter", "blender.set_parameter"} | READ_ONLY_TOOL_NAMES
+)
+
+
+def _is_parameter_only_edit(plan: ModelingPlan) -> bool:
+    """True se TODOS os steps do plan sao parameter-changes ou read-only."""
+    if not plan.steps:
+        return False
+    return all(
+        step.tool_name in _NON_TIMELINE_MODIFYING_TOOLS for step in plan.steps
+    )
 
 
 @dataclass
@@ -569,12 +591,19 @@ class ModelingChatOrchestrator:
     def _apply_rollback_marker(
         self, plan: ModelingPlan, live_output: dict[str, Any] | None
     ) -> ModelingPlan:
-        """T3.6: grava a contagem da timeline pré-edição em ``rollback_marker``."""
+        """T3.6: grava a contagem da timeline pré-edição em ``rollback_marker``.
+
+        Fix T4 gate: edits parameter-only (so ``set_parameter`` / read-only)
+        nao geram entrada na timeline, entao rollback via marker seria no-op.
+        Deixa ``rollback_marker=None`` para a UI esconder o botao Reverter.
+        """
 
         if not isinstance(live_output, dict):
             return plan
         count = live_output.get("timeline_count")
         if not isinstance(count, int):
+            return plan
+        if _is_parameter_only_edit(plan):
             return plan
         stamped = plan.model_copy(update={"rollback_marker": count})
         self.store.upsert_modeling_plan(stamped)

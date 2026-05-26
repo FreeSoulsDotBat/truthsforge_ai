@@ -382,6 +382,35 @@ def test_propose_edit_plan_captures_rollback_marker_for_fusion() -> None:
     assert outcome.requires_approval is False
 
 
+def test_propose_edit_plan_skips_rollback_marker_for_parameter_only_edit() -> None:
+    """Fix T4 gate: edits que só mudam parâmetros (fusion.set_parameter) não
+    criam entrada na timeline → rollback via timeline_count seria no-op.
+    O orchestrator deve manter rollback_marker=None nesse caso para a UI
+    esconder o botão Reverter (vide ModelingEditCard.canRollback)."""
+
+    orch, store, _, executor = _orchestrator(
+        planner_steps=[_safe_step(1, "fusion.set_parameter")],
+        probe_count=2,
+    )
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    outcome = orch.propose_edit_plan(
+        chat,
+        payload=ModelingPlanCreate(
+            prompt="ajustar Angulo para 180deg", software_override=ModelingSoftware.fusion
+        ),
+    )
+
+    # A sondagem da timeline rodou (best-effort, ainda útil para reconciliation),
+    # mas o marker NÃO é gravado porque o rollback não tem como reverter
+    # mudanças de parâmetro.
+    assert [s.tool_name for s in executor.single_step_calls] == ["fusion.query_timeline"]
+    assert outcome.plan.rollback_marker is None
+    assert store.plans[outcome.plan.id].rollback_marker is None
+
+
 def test_propose_edit_plan_skips_rollback_capture_for_non_fusion() -> None:
     orch, store, _, executor = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.editing)
