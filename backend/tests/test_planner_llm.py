@@ -347,6 +347,12 @@ def test_planner_system_prompt_warns_against_asymmetric_repeat_formulas() -> Non
     assert "PADRÕES SIMÉTRICOS" in content
     assert "MESMA fórmula" in content
     assert "NUNCA invente termos adicionais" in content
+    # Fix T4 gate (Bug J'): o LLM emitiu `face:"Placa.top_face"` +
+    # `Placa.bounding_box.max_x` no 2o furo; o nudge agora rejeita essas
+    # sintaxes inventadas explicitamente.
+    assert "REFERÊNCIAS EM CAMPOS DE TOOL" in content
+    assert "bounding_box" in content
+    assert "target_face" in content
 
 
 def test_planner_system_prompt_nudges_parametric_modeling() -> None:

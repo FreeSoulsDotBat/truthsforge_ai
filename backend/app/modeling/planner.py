@@ -762,6 +762,16 @@ def _build_messages(
         '    canto 4: position_mm=["-(Comprimento/2 - margem)", "-(Largura/2 - margem)"]\n'
         "  Bug pego no gate: o LLM acertou o 1º furo e inventou subtrações\n"
         "  extras nos próximos, deslocando posições para fora da face.\n"
+        "- REFERÊNCIAS EM CAMPOS DE TOOL: SEMPRE referencie o corpo pelo\n"
+        "  campo `body` com o NOME do corpo (string). NUNCA use chaves\n"
+        '  inventadas como `face: "X.top_face"`, `target_face`, `surface`,\n'
+        '  nem expressões `<body>.bounding_box.max_x`, `<body>.center`, etc.\n'
+        "  Essas sintaxes NÃO existem nos handlers e fazem o step cair em\n"
+        "  fallback errado. Em `position_mm` use APENAS números crus ou\n"
+        "  expressões com parâmetros JÁ criados via `set_parameter` (ex.:\n"
+        '  `"Comprimento/2 - 15"`, `"-(Largura/2 - 15 mm)"`). Bug pego no\n'
+        '  gate: 1 dos 4 furos veio com `face: "Placa.top_face"` +\n'
+        "  `Placa.bounding_box.max_x - 20 mm`, e o Fusion rejeitou o sketch.\n"
         "\n"
         "Ferramentas disponíveis (com argumentos/unidades/exemplos quando conhecidos):\n"
         + tool_schemas.render_tool_schemas(list(PLANNER_TOOLSET))
