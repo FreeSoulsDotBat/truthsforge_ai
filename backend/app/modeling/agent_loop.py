@@ -289,6 +289,86 @@ def build_dimension_verifier(
     return verifier
 
 
+def build_surface_verifier(
+    *,
+    area_tolerance_mm2: float = 5.0,
+) -> GeometryVerifier:
+    """Builder de ``GeometryVerifier`` para superfícies (Fase 5 T5.3b).
+
+    Compara o que o passo **declarou esperar** com o read-back:
+    - ``expected_surface_area_mm2`` (escalar) × ``surface_area_mm2`` (medido).
+    - ``expected_is_closed`` (bool) × ``is_closed`` (medido) — útil antes do
+      ``thicken_surface``: se o stitch deixou aresta livre, o thicken
+      simétrico falha. O verifier reage e o corretor pode aumentar a
+      tolerância do stitch ou inserir um patch.
+
+    No-op quando o passo não declara nenhum dos dois campos (backward-compat
+    com planos antigos que só usam ``expected_dimensions_mm``).
+    """
+
+    def verifier(step: ModelingPlanStep, output: dict[str, Any]) -> dict[str, Any] | None:
+        input_json = step.input_json or {}
+        payload = inner_fusion_payload(output) or {}
+        divergences: dict[str, Any] = {}
+
+        expected_area = input_json.get("expected_surface_area_mm2")
+        measured_area = payload.get("surface_area_mm2")
+        if (
+            isinstance(expected_area, int | float)
+            and isinstance(measured_area, int | float)
+            and abs(float(measured_area) - float(expected_area)) > area_tolerance_mm2
+        ):
+            divergences["surface_area_mm2"] = {
+                "expected": expected_area,
+                "measured": measured_area,
+                "delta": round(float(measured_area) - float(expected_area), 3),
+            }
+
+        expected_closed = input_json.get("expected_is_closed")
+        measured_closed = payload.get("is_closed")
+        if (
+            isinstance(expected_closed, bool)
+            and isinstance(measured_closed, bool)
+            and expected_closed != measured_closed
+        ):
+            divergences["is_closed"] = {
+                "expected": expected_closed,
+                "measured": measured_closed,
+                # mensagem semantica pro corretor: dificil reagir só com bool.
+                "hint": (
+                    "Body ficou aberto (provavel gap na costura). "
+                    "Aumente tolerance_mm do stitch, adicione patch nas "
+                    "arestas livres (query_geometry → free_edges) ou refaca "
+                    "a casca."
+                    if expected_closed
+                    else "Body ficou fechado quando esperado aberto."
+                ),
+            }
+        return divergences or None
+
+    return verifier
+
+
+def combine_verifiers(*verifiers: GeometryVerifier) -> GeometryVerifier:
+    """Combina múltiplos verifiers em um só, agregando divergências (Fase 5).
+
+    Cada verifier roda independente; divergências de todos são mescladas no
+    payload final passado ao corretor. Verifiers None são ignorados.
+    """
+
+    actives: list[GeometryVerifier] = [v for v in verifiers if v is not None]
+
+    def verifier(step: ModelingPlanStep, output: dict[str, Any]) -> dict[str, Any] | None:
+        merged: dict[str, Any] = {}
+        for v in actives:
+            div = v(step, output)
+            if div:
+                merged.update(div)
+        return merged or None
+
+    return verifier
+
+
 def run_plan_with_optional_loop(
     executor: ModelingExecutorService,
     planner: Any,
@@ -311,7 +391,15 @@ def run_plan_with_optional_loop(
         loop = ModelingAgentLoop(
             executor,
             corrector=planner.build_corrector(),
-            verifier=build_dimension_verifier(),
+            # T5.3b (Fase 5): verifier combinado (dimensoes + superficie).
+            # Step que declarar apenas expected_dimensions_mm continua tendo
+            # comportamento legado; quem declarar expected_surface_area_mm2
+            # ou expected_is_closed ganha o check adicional sem precisar
+            # mudar o caminho do loop.
+            verifier=combine_verifiers(
+                build_dimension_verifier(),
+                build_surface_verifier(),
+            ),
         )
         return loop.run(plan)
     return executor.execute_plan(plan)
@@ -324,5 +412,7 @@ __all__ = [
     "GeometryVerifier",
     "PlanRollback",
     "build_dimension_verifier",
+    "build_surface_verifier",
+    "combine_verifiers",
     "run_plan_with_optional_loop",
 ]

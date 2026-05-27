@@ -401,6 +401,30 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Costura 2+ SurfaceBodies; pode fechar volume e virar sólido — Fase 5 T5.2e.",
     ),
     _t(
+        "fusion.trim_surface",
+        _FUSION,
+        _MUT,
+        "Apara SurfaceBody com ferramenta (sketch/face/surface); keep=largest default — Fase 5 T5.2a.",
+    ),
+    _t(
+        "fusion.extend_surface",
+        _FUSION,
+        _MUT,
+        "Estende SurfaceBody ao longo de arestas livres (natural/perpendicular/tangent) — Fase 5 T5.2b.",
+    ),
+    _t(
+        "fusion.offset_surface",
+        _FUSION,
+        _MUT,
+        "Cria SurfaceBody paralela a face(s)/superfície(s) por distância — Fase 5 T5.2c.",
+    ),
+    _t(
+        "fusion.unstitch_surface",
+        _FUSION,
+        _MUT,
+        "Quebra body em superfícies individuais por face — inverso do stitch — Fase 5 T5.2f.",
+    ),
+    _t(
         "fusion.move_body",
         _FUSION,
         _MUT,

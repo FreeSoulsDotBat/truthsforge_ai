@@ -123,12 +123,12 @@ obrigatória**). Ver AGENTS.md / ADR.
 | `sweep_profile` `as_surface=true` | mutative | `SweepFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b |
 | `loft_profiles` `as_surface=true` | mutative | `LoftFeatures.createInput` + `input.isSolid=False` (aceita open profiles) | ✅ T5.1a/b |
 | `create_surface_patch` | mutative | `PatchFeatures.createInput(boundary, op)` | ✅ T5.1b |
-| `trim_surface` | mutative | `TrimFeatures.createInput(surface, trim_tool)` + cell-to-remove | 🚧 Fase 5 |
-| `extend_surface` | mutative | `ExtendFeatures.createInput(edges, distance, extendType)` | 🚧 Fase 5 |
-| `offset_surface` | mutative | `OffsetFeatures.createInput(face\|surface, distance, op)` | 🚧 Fase 5 |
+| `trim_surface` | mutative | `TrimFeatures.createInput(trimming_tool, surface)` + `keep=largest` | ✅ T5.2a |
+| `extend_surface` | mutative | `ExtendFeatures.createInput(edges, distance, extendType)` | ✅ T5.2b |
+| `offset_surface` | mutative | `OffsetFeatures.createInput(face\|surface, distance, op)` | ✅ T5.2c |
 | `thicken_surface` | mutative | `ThickenFeatures.createInput(surfaces, thickness, isSymmetric, op, isChainSelection)` | ✅ T5.2d |
 | `stitch_surfaces` | mutative | `StitchFeatures.createInput(surfaces, tolerance, op)` | ✅ T5.2e |
-| `unstitch_surface` | mutative | `UnstitchFeatures.createInput(faces)` | 🚧 Fase 5 |
+| `unstitch_surface` | mutative | `UnstitchFeatures.createInput(faces, isChainSelection)` | ✅ T5.2f |
 
 ## 3. Operações em detalhe
 

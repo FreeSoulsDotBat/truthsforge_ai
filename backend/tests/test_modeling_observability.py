@@ -1004,6 +1004,99 @@ def test_create_surface_patch_registered_and_compiles() -> None:
     assert "_collect_edges_for_patch" in script_edges
 
 
+def test_remaining_surface_edit_tools_registered_and_compile() -> None:
+    """T5.2a/b/c/f (Fase 5): trim/extend/offset/unstitch fecham a edição de
+    superfície. Cada uma entra na allowlist, no registry como mutative e o
+    script compila com args realistas."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+    from app.modeling.tool_registry import FUSION_TOOLS, PLANNER_TOOLSET, descriptor
+
+    tools_args: dict[str, dict[str, object]] = {
+        "fusion.trim_surface": {
+            "surface_ref": "Casca",
+            "trim_tool_ref": "CurvaCorte",
+            "keep": "largest",
+            "name": "CascaAparada",
+        },
+        "fusion.extend_surface": {
+            "edge_ids": [3, 5],
+            "body_ref": "Casca",
+            "distance_mm": 10.0,
+            "extend_type": "natural",
+        },
+        "fusion.offset_surface": {
+            "surface_refs": ["Casca"],
+            "distance_mm": 2.0,
+            "operation": "new_body",
+            "name": "CascaOffset",
+        },
+        "fusion.unstitch_surface": {
+            "surface_ref": "Carenagem",
+            "face_ids": [3, 4],
+        },
+    }
+
+    for tool, args in tools_args.items():
+        assert tool in FUSION_SCRIPT_TOOLS, f"{tool} ausente em FUSION_SCRIPT_TOOLS"
+        assert tool in FUSION_TOOLS, f"{tool} ausente em FUSION_TOOLS"
+        assert tool in PLANNER_TOOLSET, f"{tool} ausente em PLANNER_TOOLSET"
+        desc = descriptor(tool)
+        assert desc is not None and desc.category.value == "mutative"
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+
+
+def test_query_geometry_exposes_surface_metadata() -> None:
+    """T5.3a (Fase 5): query_geometry passa a expor is_solid/is_closed/
+    surface_area_mm2/free_edge_count por body. Sem isso o verifier de
+    superfície não enxerga se o stitch fechou o volume."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.query_geometry",
+        arguments={"limit": 50},
+    )
+    ast.parse(script)
+    # Os 4 campos novos precisam ser populados no payload dos bodies.
+    for key in (
+        '"is_solid"',
+        '"is_closed"',
+        '"surface_area_mm2"',
+        '"free_edge_count"',
+    ):
+        assert key in script, f"query_geometry sem campo {key}"
+
+
+def test_select_edges_supports_free_edges_selector() -> None:
+    """T5.3a: selector free_edges retorna arestas com <= 1 face — entrada
+    típica de extend_surface após sweep as_surface deixar bordas livres."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    # O selector é processado pelo script renderizado de qualquer tool de
+    # edge (escolhemos extend_surface, que naturalmente lida com edges).
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.extend_surface",
+        arguments={"edge_ids": [0], "body_ref": "Casca", "distance_mm": 5},
+    )
+    ast.parse(script)
+    # _select_edges precisa ter o ramo free_edges no script.
+    assert 'selector == "free_edges"' in script
+    assert "edge.faces.count" in script
+
+
 def test_thicken_and_stitch_registered_and_compile() -> None:
     """T5.2d/T5.2e (Fase 5): thicken_surface (ponte surface→solid) e
     stitch_surfaces (costura de SurfaceBodies, pode fechar volume e virar

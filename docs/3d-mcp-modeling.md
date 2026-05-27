@@ -466,15 +466,76 @@ O LLM só pode escolher entre:
 - `blender.{create_mesh_primitive, apply_bevel, apply_boolean, apply_subdivision,
 apply_solidify, assign_material, measure_object, repair_non_manifold, validate_mesh,
 validate_printability, export_stl, export_obj, export_3mf}`
-- `fusion.{open_design, create_sketch, add_rectangle, add_circle, extrude_profile,
-set_parameter, export_step, export_stl, export_3mf, validate_dimensions,
-validate_printability}`
+- `fusion.{open_design, create_sketch, add_rectangle, add_circle, add_polygon,
+add_line, add_arc, add_ellipse, add_slot, add_spline, add_box, add_cylinder,
+add_sphere, add_cone, extrude_profile, revolve_profile, sweep_profile,
+loft_profiles, fillet_edges, chamfer_edges, shell_body, hole,
+pattern_rectangular, pattern_circular, mirror_feature, move_body, scale_body,
+split_body, combine_bodies, delete_body, add_construction_plane,
+create_surface_patch, thicken_surface, stitch_surfaces, trim_surface,
+extend_surface, offset_surface, unstitch_surface, set_parameter, query_geometry,
+export_step, export_stl, export_3mf, validate_dimensions, validate_printability}`
 
 O fallback heurístico para Fusion também usa o contrato real: abre/cria design,
 cria sketch, adiciona perfil retangular ou circular dimensionado pelo prompt, extruda,
 valida printability e exporta STL como artifact versionado. Ele não gera scripts livres
 nem tenta detalhes CAD fora da allowlist; geometrias complexas dependem do planner LLM ou
 de tools Fusion futuras.
+
+## Cobertura de superfície (NURBS — Fase 5)
+
+A Fase 5 do replan v4 cobre o workspace **Surface** do Fusion (carenagens,
+cascas finas, geometrias NURBS espessadas em sólido). O contrato canônico
+de cada operação vive em
+`specs/005-modeling-3d-fusion/contracts/fusion-operations.md` §3.10.
+
+**Criação de superfície (T5.1):**
+
+- Flag `as_surface: true` em `extrude_profile`/`revolve_profile`/
+  `sweep_profile`/`loft_profiles` — produz `SurfaceBody` (NURBS) em vez
+  de Body sólido. Aceita `openProfile` (curva aberta no sketch) quando
+  o sketch não tem profile fechado.
+- `fusion.create_surface_patch` — preenche um boundary fechado (`sketch=`
+  ou `edge_ids=[...] + body_ref=`) com uma superfície NURBS.
+
+**Edição de superfície (T5.2):**
+
+- `fusion.thicken_surface` — espessa SurfaceBody(ies) gerando Body
+  sólido. **Ponte surface→solid**: é o passo que devolve a peça ao
+  pipeline de sólido (fillet/chamfer/export). `thickness_mm` paramétrico
+  (G1.1).
+- `fusion.stitch_surfaces` — costura ≥ 2 SurfaceBodies por arestas
+  livres; o resultado é SurfaceBody **ou** Body sólido (Fusion decide se
+  a costura fechou volume). `is_surface` no output reflete o que saiu.
+- `fusion.trim_surface` — apara SurfaceBody com sketch/face/surface;
+  `keep="largest"` default escolhe a célula a manter por área.
+- `fusion.extend_surface` — estende SurfaceBody ao longo de arestas
+  livres (`edge_ids` de `query_geometry`, tipos `natural`/
+  `perpendicular`/`tangent`).
+- `fusion.offset_surface` — cria SurfaceBody paralela a face(s) ou
+  SurfaceBody(ies) por distância.
+- `fusion.unstitch_surface` — inverso do stitch; quebra body em
+  superfícies individuais por face.
+
+**Read-back e verificação adaptada (T5.3):**
+
+- `query_geometry` expõe por body: `is_solid`, `is_closed`,
+  `surface_area_mm2`, `free_edge_count`.
+- Selector `free_edges` em arestas (≤ 1 face) — entrada típica de
+  `extend_surface`/`create_surface_patch` quando o sweep deixa
+  aberturas.
+- `build_surface_verifier` (em `agent_loop.py`): tools de superfície
+  aceitam `expected_surface_area_mm2` e `expected_is_closed` no passo
+  do planner. Se o read-back divergir, o loop agêntico auto-corrige
+  (ex.: aumenta `tolerance_mm` do stitch ou insere patch nas arestas
+  livres antes do thicken simétrico falhar). Combinado com o verifier
+  de dimensões via `combine_verifiers`.
+
+**Peça-exemplo do gate (Nível 2 — CS-002):** carenagem por sweep de
+spline em modo superfície, fechada com 2 patches nas tampas via
+`edge_ids` de `query_geometry`, costurada com `stitch_surfaces` e
+espessada em sólido com `thicken_surface` antes de fillet/export. Fluxo
+completo na §3.10.10 do contracts.
 
 ## Printability via bmesh
 

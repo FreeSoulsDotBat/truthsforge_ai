@@ -274,6 +274,156 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
                 required=False,
                 example="Carenagem",
             ),
+            "expected_is_closed": ArgSpec(
+                "Quando true, espera-se que a costura feche o volume "
+                "(precondição típica antes do thicken_surface). Se ficar aberta, "
+                "o loop auto-corrige (aumentar tolerance ou inserir patch).",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=True,
+            ),
+            "expected_surface_area_mm2": ArgSpec(
+                "Área total esperada do(s) body(ies) resultante(s) em mm² "
+                "(read-back/verificação). Tolerância padrão ±5 mm².",
+                unit="mm²",
+                required=False,
+                example=15000.0,
+            ),
+        },
+    ),
+    "fusion.trim_surface": ToolSchema(
+        summary="Apara SurfaceBody com ferramenta de corte (sketch/face/surface) — Fase 5.",
+        args={
+            "surface_ref": ArgSpec(
+                "SurfaceBody alvo. Aliases: surface, body_ref, body.",
+                type="string",
+                unit=None,
+                example="Casca",
+            ),
+            "trim_tool_ref": ArgSpec(
+                "Ferramenta de corte (sketch ou body). Aliases: trim_tool, "
+                "tool_ref, trimming_tool.",
+                type="string",
+                unit=None,
+                example="CurvaCorte",
+            ),
+            "keep": ArgSpec(
+                "Critério da célula a manter: 'largest' (default, maior área) ou outro.",
+                type="string",
+                unit=None,
+                required=False,
+                example="largest",
+            ),
+            "name": ArgSpec(
+                "Nome do SurfaceBody resultante.",
+                type="string",
+                unit=None,
+                required=False,
+                example="CascaApanhada",
+            ),
+        },
+    ),
+    "fusion.extend_surface": ToolSchema(
+        summary="Estende SurfaceBody ao longo de arestas livres — Fase 5.",
+        args={
+            "edge_ids": ArgSpec(
+                "Lista de índices de arestas LIVRES do body. Use "
+                "query_geometry com selector 'free_edges' antes para "
+                "descobrir os índices.",
+                type="array",
+                unit=None,
+                example=[3, 5],
+            ),
+            "body_ref": ArgSpec(
+                "Nome do body cujas arestas serão estendidas.",
+                type="string",
+                unit=None,
+                example="Casca",
+            ),
+            "distance_mm": ArgSpec(
+                "Distância da extensão em mm. Aceita userParameter (G1.1).",
+                example=10.0,
+            ),
+            "extend_type": ArgSpec(
+                "natural | perpendicular | tangent (default natural).",
+                type="string",
+                unit=None,
+                required=False,
+                example="natural",
+            ),
+        },
+    ),
+    "fusion.offset_surface": ToolSchema(
+        summary="Cria SurfaceBody paralela a face(s)/superfície(s) — Fase 5.",
+        args={
+            "face_ids": ArgSpec(
+                "Lista de índices de faces (de query_geometry) a fazer offset. "
+                "Exclusivo com surface_refs.",
+                type="array",
+                unit=None,
+                required=False,
+                example=[0, 1, 2],
+            ),
+            "surface_refs": ArgSpec(
+                "Lista de nomes de SurfaceBodies a fazer offset (inteiros). "
+                "Aliases: surfaces. Exclusivo com face_ids.",
+                type="array",
+                unit=None,
+                required=False,
+                example=["Casca"],
+            ),
+            "body_ref": ArgSpec(
+                "Body cujas faces serão usadas (requerido com face_ids).",
+                type="string",
+                unit=None,
+                required=False,
+                example="Casca",
+            ),
+            "distance_mm": ArgSpec(
+                "Distância do offset em mm (positivo = exterior). Aceita userParameter (G1.1).",
+                example=2.0,
+            ),
+            "operation": ArgSpec(
+                "new_body | join (default new_body).",
+                type="string",
+                unit=None,
+                required=False,
+                example="new_body",
+            ),
+            "name": ArgSpec(
+                "Nome do SurfaceBody resultante.",
+                type="string",
+                unit=None,
+                required=False,
+                example="CascaOffset",
+            ),
+        },
+    ),
+    "fusion.unstitch_surface": ToolSchema(
+        summary="Quebra body/SurfaceBody em superfícies individuais por face — Fase 5.",
+        args={
+            "face_ids": ArgSpec(
+                "Lista de índices de faces a desunir. Vazio = todas as faces "
+                "do body (unstitch completo).",
+                type="array",
+                unit=None,
+                required=False,
+                example=[3, 4],
+            ),
+            "surface_ref": ArgSpec(
+                "Body cujas faces serão desunidas. Aliases: body_ref, body, body_name.",
+                type="string",
+                unit=None,
+                example="Carenagem",
+            ),
+            "is_chain_selection": ArgSpec(
+                "Selecionar faces conectadas tangencialmente (default false). Alias: chain.",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=False,
+            ),
         },
     ),
     "fusion.create_surface_patch": ToolSchema(
@@ -316,6 +466,12 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
                 unit=None,
                 required=False,
                 example="TampaPatch",
+            ),
+            "expected_surface_area_mm2": ArgSpec(
+                "Área esperada do patch em mm² (read-back/verificação opcional).",
+                unit="mm²",
+                required=False,
+                example=2400.0,
             ),
         },
     ),

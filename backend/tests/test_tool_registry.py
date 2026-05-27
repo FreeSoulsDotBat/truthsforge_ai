@@ -184,6 +184,10 @@ def test_planner_toolset_matches_allowlist() -> None:
         "fusion.create_surface_patch",
         "fusion.thicken_surface",
         "fusion.stitch_surfaces",
+        "fusion.trim_surface",
+        "fusion.extend_surface",
+        "fusion.offset_surface",
+        "fusion.unstitch_surface",
     }
     assert set(PLANNER_TOOLSET) == expected
 

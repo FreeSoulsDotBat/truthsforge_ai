@@ -29,18 +29,23 @@ Cobrir o workspace **Surface** do Fusion: criação e edição de superfícies N
 - **T5.1** — Implementar criação de superfície:
   - **T5.1a** ✅ — flag `as_surface` em `extrude_profile`/`revolve_profile`/`sweep_profile`/`loft_profiles` (`input.isSolid = False`); output ganha `is_surface: bool`; backward-compat (sem flag = sólido). Cobertura por `test_create_surface_variants_via_as_surface_flag` + schemas em `tool_schemas.py`.
   - **T5.1b** ✅ — `create_surface_patch` (`PatchFeatures.createInput` com boundary via sketch OU `edge_ids` + `body_ref`); helper `_profile_or_open` aplicado nos 4 handlers da T5.1a → openProfile aceito quando `as_surface=true` e sketch tem só curvas abertas; helper `_collect_edges_for_patch` valida intervalo `[0, body.edges.count)`. Output do patch traz `surface_area_mm2` + `is_surface: true` + `body_name`. Cobertura: `test_create_surface_patch_registered_and_compiles`, `test_open_profile_fallback_in_surface_handlers`, `test_planner_toolset_matches_allowlist` atualizado.
-- **T5.2** — Implementar edição de superfície (**caminho crítico do gate executado primeiro**: thicken + stitch fecham a carenagem; trim/extend/offset/unstitch ficam para rodada subsequente):
-  - **T5.2d** ✅ — `thicken_surface` (`ThickenFeatures.createInput(coll, thickness, isSymmetric, op, isChainSelection)`) — ponte surface → solid. Aceita aliases `surfaces`/`body_refs`; thickness via `_param_value_input` (paramétrico G1.1); `is_symmetric` e `chain` opt-in; output traz `body_name`/`dimensions_mm`/`is_surface=false`.
-  - **T5.2e** ✅ — `stitch_surfaces` (`StitchFeatures.createInput(coll, tolerance, op)`) — costura ≥ 2 superfícies; resultado pode ser SurfaceBody ou Body sólido (Fusion detecta se fechou volume); `is_surface` no output reflete o que saiu.
-  - **T5.2a** — `trim_surface` (`TrimFeatures`) com seleção de célula a manter por área (`keep="largest"` default).
-  - **T5.2b** — `extend_surface` (`ExtendFeatures`).
-  - **T5.2c** — `offset_surface` (`OffsetFeatures`).
-  - **T5.2f** — `unstitch_surface` (`UnstitchFeatures`).
-- **T5.3** — Selectors e verificação adaptada:
-  - **T5.3a** — `query_geometry` lista SurfaceBody + `is_solid`/`surface_area_mm2`/`is_closed`; novo selector `free_edges` em `_select_edges`.
-  - **T5.3b** — Verifier ganha modo `surface` (`build_surface_verifier`): compara área esperada × medida e exige `is_closed=true` antes do thicken; fia no `run_plan_with_optional_loop`.
-  - **T5.3c** — `expected_surface_area_mm2`/`expected_is_closed` no schema do planner (nudge + EXECUTION_PLAN_SCHEMA).
-- **T5.4** — Testes por tool (mock) + asserções; `test_fusion_script_template_compiles_for_every_tool` cobre o novo conjunto; atualizar `../adapter-gaps-roadmap.md` marcando "Surfaces" fora da nota "Fora de escopo" (decisão consolidada no spec.md, §Premissas).
+- **T5.2** ✅ — Edição de superfície completa:
+  - **T5.2d** ✅ `thicken_surface` (`ThickenFeatures`) — ponte surface → solid (thickness paramétrico G1.1).
+  - **T5.2e** ✅ `stitch_surfaces` (`StitchFeatures`) — costura ≥ 2 SurfaceBodies; `is_surface` reflete se costura fechou volume.
+  - **T5.2a** ✅ `trim_surface` (`TrimFeatures`) — `keep="largest"` default; tool de corte aceita sketch ou body.
+  - **T5.2b** ✅ `extend_surface` (`ExtendFeatures`) — `edge_ids` + `distance_mm` + `extend_type` (natural/perpendicular/tangent).
+  - **T5.2c** ✅ `offset_surface` (`OffsetFeatures`) — aceita `face_ids+body_ref` OU `surface_refs`.
+  - **T5.2f** ✅ `unstitch_surface` (`UnstitchFeatures`) — `face_ids` opcional (vazio = unstitch completo do body).
+- **T5.3** ✅ — Selectors e verificação adaptada:
+  - **T5.3a** ✅ `query_geometry` expõe `is_solid`/`is_closed`/`surface_area_mm2`/`free_edge_count` por body; selector `free_edges` em `_select_edges` (arestas com ≤ 1 face).
+  - **T5.3b** ✅ `build_surface_verifier` em `agent_loop.py` compara `expected_surface_area_mm2` (tolerância 5 mm² default) e `expected_is_closed` (com `hint` semântico para o corretor); `combine_verifiers` plugado no `run_plan_with_optional_loop` ao lado do dimensional. Backward-compat: passo sem `expected_*` é no-op.
+  - **T5.3c** ✅ Schemas das tools de superfície aceitam `expected_surface_area_mm2`/`expected_is_closed`; nudge novo no system prompt do planner ensina quando declarar (ex.: antes do `thicken_surface`).
+- **T5.4** ✅ — Testes mock + docs:
+  - `test_fusion_script_template_compiles_for_every_tool` cobre as 7 tools novas.
+  - Testes específicos: `test_thicken_and_stitch_registered_and_compile`, `test_remaining_surface_edit_tools_registered_and_compile`, `test_query_geometry_exposes_surface_metadata`, `test_select_edges_supports_free_edges_selector`, `test_build_surface_verifier_detects_area_and_closed_divergence`, `test_combine_verifiers_merges_divergences`.
+  - `test_planner_toolset_matches_allowlist` atualizado com as 7.
+  - `adapter-gaps-roadmap.md` §8 atualizado (surfaces saíram do "Fora de escopo") + nova §9 com resumo.
+  - `docs/3d-mcp-modeling.md` ganhou seção "Cobertura de superfície (NURBS — Fase 5)" + toolset do planner atualizado.
 
 ## Contratos / invariantes
 
@@ -68,7 +73,9 @@ Cobrir o workspace **Surface** do Fusion: criação e edição de superfícies N
 
 - [x] **T5.0** — Mapeamento API Fusion → tools de superfície no contracts (§3.10).
 - [x] **T5.1** — Criação de superfície (T5.1a `as_surface` ✅; T5.1b `create_surface_patch` + openProfiles ✅).
-- [~] **T5.2** — Edição de superfície (T5.2d `thicken_surface` ✅; T5.2e `stitch_surfaces` ✅; trim/extend/offset/unstitch pendentes).
+- [x] **T5.2** — Edição de superfície (T5.2a/b/c/d/e/f todas ✅).
+- [x] **T5.3** — `query_geometry`/selectors/verifier adaptados a superfície (T5.3a/b/c ✅).
+- [x] **T5.4** — Testes mock + adapter-gaps-roadmap atualizado + docs/3d-mcp-modeling.md atualizado.
 - [ ] **T5.3** — `query_geometry`/selectors/verifier adaptados a superfície.
 - [ ] **T5.4** — Testes verdes; `adapter-gaps-roadmap.md` atualizado; documentação dupla (Docusaurus + SDD).
-- [ ] **Gate do dono** — carenagem Nível 2 aprovada no Fusion real.
+- [~] **Gate do dono** — carenagem Nível 2 aprovada no Fusion real (mock-completa; gate pendente).

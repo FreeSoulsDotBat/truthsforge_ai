@@ -196,6 +196,74 @@ def test_build_dimension_verifier_compares_list_dims() -> None:
     assert div["z"]["expected"] == 30 and div["z"]["measured"] == 0.0
 
 
+def test_build_surface_verifier_detects_area_and_closed_divergence() -> None:
+    """T5.3b (Fase 5): build_surface_verifier compara expected_surface_area_mm2
+    e expected_is_closed contra o read-back. Cobre o caminho crítico do gate
+    da carenagem: stitch deixar gap → is_closed=False → loop auto-corrige
+    (aumenta tolerance ou insere patch) antes do thicken simétrico falhar."""
+
+    from app.modeling.agent_loop import build_surface_verifier
+
+    verifier = build_surface_verifier(area_tolerance_mm2=5.0)
+
+    # Step do stitch declara que a costura precisa fechar.
+    step = _step(
+        1,
+        "fusion.stitch_surfaces",
+        expected_is_closed=True,
+        expected_surface_area_mm2=15000.0,
+    )
+
+    # Caso conforme.
+    ok = {"is_closed": True, "surface_area_mm2": 15001.0}
+    assert verifier(step, ok) is None
+
+    # Caso divergente: ficou aberto E área errada.
+    div = verifier(step, {"is_closed": False, "surface_area_mm2": 13000.0})
+    assert div is not None
+    assert div["is_closed"]["expected"] is True and div["is_closed"]["measured"] is False
+    assert "hint" in div["is_closed"]  # hint orienta o corretor.
+    assert div["surface_area_mm2"]["delta"] == -2000.0
+
+    # Sem expected_* no step → no-op (backward-compat).
+    step_legacy = _step(2, "fusion.extrude_profile", distance_mm=10)
+    assert verifier(step_legacy, {"surface_area_mm2": 99.0}) is None
+
+
+def test_combine_verifiers_merges_divergences() -> None:
+    """T5.3b: combine_verifiers permite plugar dimensão + superfície no MESMO
+    loop sem duplicar caminho de execução. Divergências de ambos são mescladas."""
+
+    from app.modeling.agent_loop import (
+        build_dimension_verifier,
+        build_surface_verifier,
+        combine_verifiers,
+    )
+
+    combined = combine_verifiers(
+        build_dimension_verifier(),
+        build_surface_verifier(),
+    )
+    step = _step(
+        1,
+        "fusion.thicken_surface",
+        expected_dimensions_mm=[60, 40, 30],
+        expected_is_closed=True,
+    )
+    # bbox certo mas surface aberta — só is_closed diverge.
+    div = combined(
+        step,
+        {"dimensions_mm": [60.0, 40.0, 30.0], "is_closed": False},
+    )
+    assert div is not None and "is_closed" in div and "x" not in div
+    # ambos divergem — payload tem chaves dos dois verifiers.
+    div2 = combined(
+        step,
+        {"dimensions_mm": [60.0, 40.0, 0.0], "is_closed": False},
+    )
+    assert div2 is not None and "z" in div2 and "is_closed" in div2
+
+
 def test_verifier_reads_dimensions_from_http_envelope() -> None:
     """C (gate 2026-05-26): tools fusion devolvem ``dimensions_mm`` DENTRO do
     envelope HTTP (JSON stringificado em message/result.message). O verifier

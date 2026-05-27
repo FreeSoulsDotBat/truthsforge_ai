@@ -33,6 +33,10 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.create_surface_patch",
     "fusion.thicken_surface",
     "fusion.stitch_surfaces",
+    "fusion.trim_surface",
+    "fusion.extend_surface",
+    "fusion.offset_surface",
+    "fusion.unstitch_surface",
     "fusion.add_construction_plane",
     "fusion.add_spline",
     "fusion.move_body",
@@ -342,12 +346,24 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _select_edges(body, selector):
-            # Onda C + G2.1: selectors SEMANTICOS (o LLM nao conhece edge
+            # Onda C + G2.1 + T5.3a: selectors SEMANTICOS (o LLM nao conhece edge
             # tokens do Fusion). Suportados:
             #   all / top / bottom / vertical / horizontal (Onda C)
             #   longest / shortest (G2.1, por comprimento)
+            #   free_edges (T5.3a, arestas com <2 faces — bordas livres de
+            #   SurfaceBody; entrada tipica de extend_surface).
             selector = str(selector or "all").lower()
             coll = adsk.core.ObjectCollection.create()
+            if selector == "free_edges":
+                for i in range(body.edges.count):
+                    edge = body.edges.item(i)
+                    try:
+                        face_count = edge.faces.count
+                    except Exception:
+                        face_count = 0
+                    if face_count <= 1:
+                        coll.add(edge)
+                return coll
             if _select_edges_extra(body, selector, coll):
                 return coll
             bbox = body.boundingBox
@@ -2121,6 +2137,250 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
+        def _trim_surface(args):
+            # T5.2a (Fase 5): apara SurfaceBody com uma ferramenta (sketch
+            # curve, outra superficie ou face). API: trimFeatures.createInput
+            # (trimmingTool, surfaceToTrim) — escolhe célula a manter por
+            # criterio keep ("largest" default por area). Versoes diferentes
+            # do Fusion expõem createInput vs createInput2 — tentamos a
+            # forma de 2 args primeiro.
+            design = _design()
+            surface_ref = (
+                args.get("surface_ref")
+                or args.get("surface")
+                or args.get("body_ref")
+                or args.get("body")
+            )
+            tool_ref = (
+                args.get("trim_tool_ref")
+                or args.get("trim_tool")
+                or args.get("tool_ref")
+                or args.get("trimming_tool")
+            )
+            if not surface_ref or not tool_ref:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "trim_surface precisa de surface_ref + trim_tool_ref.",
+                )
+            surface_body = _find_body(design, surface_ref)
+            # tool pode ser body ou sketch — tentamos sketch primeiro pra
+            # pegar a curva (mais comum em trim de superficie).
+            tool_entity = None
+            try:
+                tool_entity = _find_sketch(design, tool_ref)
+            except Exception:
+                tool_entity = None
+            if tool_entity is None:
+                tool_entity = _find_body(design, tool_ref)
+            trims = _root(design).features.trimFeatures
+            inp = trims.createInput(tool_entity, surface_body)
+            feat = trims.add(inp)
+            keep = str(args.get("keep") or "largest").lower()
+            body_name = None
+            if feat.bodies.count > 0:
+                # T5.2a v1: aceita "largest" via comparacao de area; outras
+                # estrategias (keep=index, keep=face_ids) podem vir depois.
+                target = feat.bodies.item(0)
+                if keep == "largest" and feat.bodies.count > 1:
+                    best_area = -1.0
+                    for bi in range(feat.bodies.count):
+                        try:
+                            area = feat.bodies.item(bi).physicalProperties.area
+                        except Exception:
+                            area = 0.0
+                        if area > best_area:
+                            best_area = area
+                            target = feat.bodies.item(bi)
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or "Trimmed"))
+                target.name = body_name
+            dims = (
+                _body_dims_mm(feat.bodies.item(0))
+                if feat.bodies.count > 0
+                else [0.0, 0.0, 0.0]
+            )
+            return {{
+                "message": "Trim de superficie aplicado (keep={{}}).".format(keep),
+                "body_name": body_name,
+                "dimensions_mm": dims,
+                "is_surface": True,
+            }}
+
+
+        def _extend_surface(args):
+            # T5.2b (Fase 5): estende SurfaceBody ao longo de arestas livres.
+            # API: extendFeatures.createInput(edges, ValueInput distance,
+            # SurfaceExtendType). edge_ids referem-se ao body_ref (default
+            # primeiro body); use selector "free_edges" via query_geometry
+            # para descobrir os indices.
+            design = _design()
+            edge_ids = args.get("edge_ids") or args.get("edges")
+            distance_mm = _eval_param(args.get("distance_mm"), design, 0.0) or 0.0
+            if distance_mm <= 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "distance_mm precisa ser positivo.",
+                )
+            extend_type_name = str(args.get("extend_type") or "natural").lower()
+            extend_type_map = {{
+                "natural": adsk.fusion.SurfaceExtendTypes.NaturalSurfaceExtendType,
+                "perpendicular": adsk.fusion.SurfaceExtendTypes.PerpendicularSurfaceExtendType,
+                "tangent": adsk.fusion.SurfaceExtendTypes.TangentSurfaceExtendType,
+            }}
+            extend_type = extend_type_map.get(
+                extend_type_name, extend_type_map["natural"]
+            )
+            body_ref = args.get("body_ref") or args.get("body") or args.get("body_name")
+            if not edge_ids:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "extend_surface precisa de edge_ids (use query_geometry com selector free_edges).",
+                )
+            edges = _collect_edges_for_patch(design, edge_ids, body_ref)
+            extends = _root(design).features.extendFeatures
+            distance_vi = _param_value_input(args.get("distance_mm"), design)
+            inp = extends.createInput(edges, distance_vi, extend_type)
+            feat = extends.add(inp)
+            return {{
+                "message": "Superficie estendida {{}} mm ({{}} aresta(s), tipo={{}}).".format(
+                    distance_mm, edges.count, extend_type_name
+                ),
+                "feature_id": feat.entityToken if hasattr(feat, "entityToken") else None,
+                "is_surface": True,
+            }}
+
+
+        def _offset_surface(args):
+            # T5.2c (Fase 5): cria SurfaceBody paralela a face(s)/superficie(s).
+            # API: offsetFeatures.createInput(inputSurfaces, ValueInput distance,
+            # FeatureOperation). Aceita lista de faces ou SurfaceBody inteiro.
+            design = _design()
+            distance_mm = _eval_param(args.get("distance_mm"), design, 0.0) or 0.0
+            if distance_mm == 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "distance_mm precisa ser diferente de zero.",
+                )
+            operation = str(args.get("operation") or "new_body").lower()
+            op_map = {{
+                "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+                "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
+            }}
+            op = op_map.get(operation, op_map["new_body"])
+            # Resolucao: se face_ids veio, monta ObjectCollection<BRepFace>
+            # usando body_ref; senao usa surface_refs (collection de bodies).
+            face_ids = args.get("face_ids") or args.get("faces")
+            surface_refs = args.get("surface_refs") or args.get("surfaces")
+            inputs = None
+            source_label = ""
+            if face_ids:
+                body_ref = args.get("body_ref") or args.get("body") or args.get("body_name")
+                body = _find_body(design, body_ref)
+                inputs = adsk.core.ObjectCollection.create()
+                face_count = body.faces.count
+                for raw in face_ids:
+                    try:
+                        i = int(raw)
+                    except Exception:
+                        raise ToolError(
+                            "fusion.invalid_arg",
+                            "face_id '{{}}' nao eh inteiro.".format(raw),
+                        )
+                    if 0 <= i < face_count:
+                        inputs.add(body.faces.item(i))
+                source_label = "{{}} face(s)".format(inputs.count)
+            elif surface_refs:
+                inputs = _collect_surface_bodies(design, surface_refs)
+                source_label = "{{}} superficie(s)".format(inputs.count)
+            else:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "offset_surface precisa de face_ids+body_ref OU surface_refs.",
+                )
+            offsets = _root(design).features.offsetFeatures
+            distance_vi = _param_value_input(args.get("distance_mm"), design)
+            inp = offsets.createInput(inputs, distance_vi, op)
+            feat = offsets.add(inp)
+            body_name = None
+            if feat.bodies.count > 0:
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or "Offset"))
+                feat.bodies.item(0).name = body_name
+            dims = (
+                _body_dims_mm(feat.bodies.item(0))
+                if feat.bodies.count > 0
+                else [0.0, 0.0, 0.0]
+            )
+            return {{
+                "message": "Offset de {{}} mm aplicado ({{}}).".format(
+                    distance_mm, source_label
+                ),
+                "body_name": body_name,
+                "dimensions_mm": dims,
+                "is_surface": True,
+            }}
+
+
+        def _unstitch_surface(args):
+            # T5.2f (Fase 5): quebra body/SurfaceBody em superficies individuais
+            # por face — inverso do stitch. Util para reparar trecho especifico
+            # (unstitch -> patch novo -> stitch). API:
+            # unstitchFeatures.createInput(faces, isChainSelection).
+            design = _design()
+            face_ids = args.get("face_ids") or args.get("faces")
+            surface_ref = (
+                args.get("surface_ref")
+                or args.get("body_ref")
+                or args.get("body")
+                or args.get("body_name")
+            )
+            faces_coll = adsk.core.ObjectCollection.create()
+            if face_ids:
+                body = _find_body(design, surface_ref)
+                face_count = body.faces.count
+                for raw in face_ids:
+                    try:
+                        i = int(raw)
+                    except Exception:
+                        raise ToolError(
+                            "fusion.invalid_arg",
+                            "face_id '{{}}' nao eh inteiro.".format(raw),
+                        )
+                    if 0 <= i < face_count:
+                        faces_coll.add(body.faces.item(i))
+            elif surface_ref:
+                # Sem face_ids, unstitch o body inteiro (todas as faces).
+                body = _find_body(design, surface_ref)
+                for fi in range(body.faces.count):
+                    faces_coll.add(body.faces.item(fi))
+            else:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "unstitch_surface precisa de face_ids+body_ref OU surface_ref.",
+                )
+            is_chain = bool(args.get("is_chain_selection") or args.get("chain"))
+            unstitches = _root(design).features.unstitchFeatures
+            inp = unstitches.createInput(faces_coll, is_chain)
+            feat = unstitches.add(inp)
+            return {{
+                "message": "Unstitch aplicado ({{}} face(s), chain={{}}).".format(
+                    faces_coll.count, is_chain
+                ),
+                "bodies_count": feat.bodies.count if hasattr(feat, "bodies") else 0,
+                "is_surface": True,
+            }}
+
+
         def _hole(args):
             # Onda C: furo via circulo + cut-extrude na face superior do body.
             # MVP pragmatico (nao usa holeFeatures, que exige point/face refs
@@ -2698,6 +2958,29 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         "edge_index": ei,
                         "length_mm": round(length_mm, 2),
                     }})
+                # T5.3a (Fase 5): expor is_solid/is_closed/surface_area_mm2 e
+                # contagem de arestas livres para SurfaceBody. O LLM precisa
+                # ver isso para decidir: stitch fechou? thicken pode rodar?
+                # Sem isso o verifier de dimensoes nao detecta "stitch deixou
+                # gap" — a peca-exemplo (carenagem) escorrega.
+                try:
+                    is_solid = bool(body.isSolid)
+                except Exception:
+                    is_solid = True
+                try:
+                    surface_area_mm2 = round(body.physicalProperties.area * 100.0, 2)
+                except Exception:
+                    surface_area_mm2 = 0.0
+                free_edge_count = 0
+                for ei2 in range(body.edges.count):
+                    try:
+                        if body.edges.item(ei2).faces.count <= 1:
+                            free_edge_count += 1
+                    except Exception:
+                        pass
+                # is_closed = True quando todas as arestas tem >= 2 faces (sem
+                # bordas livres) — caracterizacao geometrica de body fechado.
+                is_closed = free_edge_count == 0
                 bodies_out.append({{
                     "body_index": bi,
                     "name": body.name,
@@ -2708,6 +2991,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     ],
                     "face_count": body.faces.count,
                     "edge_count": body.edges.count,
+                    "free_edge_count": free_edge_count,
+                    "is_solid": is_solid,
+                    "is_closed": is_closed,
+                    "surface_area_mm2": surface_area_mm2,
                     "faces": faces_out,
                     "edges": edges_out,
                 }})
@@ -3216,6 +3503,14 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _thicken_surface(args)
             if tool_name == "fusion.stitch_surfaces":
                 return _stitch_surfaces(args)
+            if tool_name == "fusion.trim_surface":
+                return _trim_surface(args)
+            if tool_name == "fusion.extend_surface":
+                return _extend_surface(args)
+            if tool_name == "fusion.offset_surface":
+                return _offset_surface(args)
+            if tool_name == "fusion.unstitch_surface":
+                return _unstitch_surface(args)
             if tool_name == "fusion.add_construction_plane":
                 return _add_construction_plane(args)
             if tool_name == "fusion.add_spline":

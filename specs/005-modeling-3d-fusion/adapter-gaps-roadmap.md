@@ -187,6 +187,54 @@ As ondas C-F nunca rodaram contra Fusion real. APIs sensíveis a versão:
 
 ## 8. Fora de escopo (mesmo pós-gaps)
 
-Sheet metal, sculpt/T-Spline, surfaces NURBS avançadas, simulação (FEA),
-CAM/usinagem, generative design, drawings 2D, render fotorrealista,
-import de CAD externo. Reavaliar só se o produto pedir explicitamente.
+~~Sheet metal, sculpt/T-Spline, surfaces NURBS avançadas~~ — **superados
+pelo v4**: as ondas de cobertura do `plan.md` (Fases 5/6/7) absorvem essas
+áreas como demanda explícita do dono (ver `spec.md` §Premissas).
+Permanece fora deste roadmap: simulação (FEA), CAM/usinagem, generative
+design, drawings 2D, render fotorrealista, import de CAD externo.
+
+## 9. Cobertura de superfície (Fase 5) — ENTREGUE
+
+A Fase 5 (cobertura do workspace **Surface** do Fusion) ficou
+mock-completa na branch `feat/3d-modelling-updates`. Resumo do que entrou
+no adapter; detalhes em
+[`micro/fase-5-superficies.md`](micro/fase-5-superficies.md) e
+[`contracts/fusion-operations.md`](contracts/fusion-operations.md) §3.10.
+
+**Criação (T5.1):**
+- Flag `as_surface: bool` em `extrude_profile` / `revolve_profile` /
+  `sweep_profile` / `loft_profiles` — `input.isSolid = False` quando
+  ligado; aceita openProfile (curva aberta) via helper `_profile_or_open`
+  quando o sketch não tem profile fechado.
+- `fusion.create_surface_patch` — boundary via `sketch` OU `edge_ids`
+  (+ `body_ref`) usando `_collect_edges_for_patch` para validar
+  intervalo contra `body.edges.count`.
+
+**Edição (T5.2):**
+- `fusion.thicken_surface` — ponte surface→solid via `ThickenFeatures`
+  com `is_symmetric`/`chain`; ValueInput paramétrico (G1.1).
+- `fusion.stitch_surfaces` — costura ≥ 2 SurfaceBodies; output reflete
+  `is_surface` (Fusion decide se costura fechou volume).
+- `fusion.trim_surface` — `TrimFeatures` com `keep="largest"` default
+  (escolhe célula por área).
+- `fusion.extend_surface` — `ExtendFeatures` com tipos
+  natural/perpendicular/tangent.
+- `fusion.offset_surface` — `OffsetFeatures` por `face_ids`+`body_ref`
+  ou `surface_refs`.
+- `fusion.unstitch_surface` — `UnstitchFeatures` (inverso do stitch).
+
+**Read-back + verifier (T5.3):**
+- `query_geometry` expõe `is_solid` / `is_closed` / `surface_area_mm2` /
+  `free_edge_count` por body.
+- Selector `free_edges` em `_select_edges` (arestas com ≤ 1 face).
+- `build_surface_verifier` + `combine_verifiers` em
+  `agent_loop.py`: compara `expected_surface_area_mm2`/
+  `expected_is_closed` declarados no step contra o read-back; fia no
+  `run_plan_with_optional_loop`.
+- Schema/nudge: tools de superfície aceitam `expected_*` e o system
+  prompt orienta declarar `expected_is_closed: true` antes do
+  `thicken_surface`.
+
+**Gate da Fase 5 pendente:** carenagem Nível 2 no Fusion real (peça
+aprovada pelo dono 2026-05-27). Fluxo-alvo detalhado na §3.10.10 do
+contracts.
