@@ -116,6 +116,112 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
                 required=False,
                 example=[60, 40, 4],
             ),
+            "as_surface": ArgSpec(
+                "Produz SurfaceBody (NURBS) em vez de Body sólido — Fase 5. "
+                "Default false (sólido). Combine com thicken_surface depois para "
+                "voltar a sólido com espessura controlada.",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=False,
+            ),
+        },
+    ),
+    "fusion.revolve_profile": ToolSchema(
+        summary="Revolve um perfil de sketch em torno de um eixo.",
+        args={
+            "sketch": ArgSpec(
+                "Sketch cujo perfil será revolvido.",
+                type="string",
+                unit=None,
+                example="Perfil",
+            ),
+            "axis": ArgSpec(
+                "Eixo de revolução: x | y | z.",
+                type="string",
+                unit=None,
+                required=False,
+                example="y",
+            ),
+            "angle_deg": ArgSpec(
+                "Ângulo da revolução em graus (default 360 = corpo completo). "
+                "Aceita nome de userParameter para vínculo paramétrico.",
+                unit="deg",
+                required=False,
+                example=360,
+            ),
+            "operation": ArgSpec(
+                "new_body | join | cut | intersect.",
+                type="string",
+                unit=None,
+                required=False,
+                example="new_body",
+            ),
+            "as_surface": ArgSpec(
+                "Produz SurfaceBody em vez de Body sólido — Fase 5. Default false. "
+                "Em modo surface, o meio-perfil NÃO precisa cruzar o eixo.",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=False,
+            ),
+        },
+    ),
+    "fusion.sweep_profile": ToolSchema(
+        summary="Varre um perfil de sketch ao longo de um caminho (path sketch).",
+        args={
+            "profile": ArgSpec(
+                "Sketch do perfil (corte transversal).",
+                type="string",
+                unit=None,
+                example="Perfil",
+            ),
+            "path": ArgSpec(
+                "Sketch do caminho de varredura.",
+                type="string",
+                unit=None,
+                example="Caminho",
+            ),
+            "operation": ArgSpec(
+                "new_body | join | cut.",
+                type="string",
+                unit=None,
+                required=False,
+                example="new_body",
+            ),
+            "as_surface": ArgSpec(
+                "Produz SurfaceBody em vez de Body sólido — Fase 5. Default false.",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=False,
+            ),
+        },
+    ),
+    "fusion.loft_profiles": ToolSchema(
+        summary="Loft entre 2+ perfis de sketch ordenados.",
+        args={
+            "profiles": ArgSpec(
+                "Lista de sketches ordenados (cada um com profile único).",
+                type="array",
+                unit=None,
+                example=["Secao1", "Secao2", "Secao3"],
+            ),
+            "operation": ArgSpec(
+                "new_body | join | cut.",
+                type="string",
+                unit=None,
+                required=False,
+                example="new_body",
+            ),
+            "as_surface": ArgSpec(
+                "Produz SurfaceBody em vez de Body sólido — Fase 5. Default false. "
+                "Em modo surface, aceita perfis abertos (curvas).",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=False,
+            ),
         },
     ),
     "fusion.hole": ToolSchema(

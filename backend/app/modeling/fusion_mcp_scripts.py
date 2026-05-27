@@ -878,6 +878,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
             extrudes = _root(design).features.extrudeFeatures
             input_obj = extrudes.createInput(profile, operation_map[operation])
+            # T5.1a (Fase 5): as_surface=true forca SurfaceBody em vez de Body
+            # solido (input.isSolid=False). Backward-compat: sem o flag, comportamento
+            # antigo. Open profiles continuam dependendo de T5.1b.
+            as_surface = bool(args.get("as_surface"))
+            if as_surface:
+                input_obj.isSolid = False
             input_obj.setDistanceExtent(
                 False,
                 _param_value_input(args.get("distance_mm"), design),
@@ -898,13 +904,15 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 body_name = _unique_body_name(design, str(explicit or sketch.name))
                 ext.bodies.item(0).name = body_name
             dims = _body_dims_mm(ext.bodies.item(0)) if ext.bodies.count > 0 else [0.0, 0.0, 0.0]
+            kind_label = "Superficie extrudada" if as_surface else "Extrusao"
             return {{
-                "message": "Extrusão de {{}} mm aplicada (operation={{}}).{{}}".format(
-                    distance_mm, operation, operation_warning
+                "message": "{{}} de {{}} mm aplicada (operation={{}}).{{}}".format(
+                    kind_label, distance_mm, operation, operation_warning
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
                 "dimensions_mm": dims,
+                "is_surface": as_surface,
             }}
 
 
@@ -1204,6 +1212,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             input_obj = revolves.createInput(
                 _resolve_profile_selection(sketch, args, design), axis, op
             )
+            # T5.1a (Fase 5): as_surface=true forca SurfaceBody (isSolid=False)
+            # antes do setAngleExtent. Aceita meio-perfil aberto sem cruzar o
+            # eixo (no modo solido o perfil precisa cruzar; em surface nao).
+            as_surface = bool(args.get("as_surface"))
+            if as_surface:
+                input_obj.isSolid = False
             # G1.1: liga o angulo a um parametro quando ``angle_deg`` referencia
             # um userParameter (createByString); senao usa o numero resolvido.
             angle_vi = _param_angle_input(args.get("angle_deg"), design)
@@ -1235,13 +1249,15 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 angle_label = "'{{}}'".format(raw_angle)
             else:
                 angle_label = "{{:g}} graus".format(angle_deg)
+            kind_label = "Superficie revolvida" if as_surface else "Revolucao"
             return {{
-                "message": "Revolucao de {{}} (eixo {{}}) aplicada a '{{}}'.".format(
-                    angle_label, axis_name, sketch.name
+                "message": "{{}} de {{}} (eixo {{}}) aplicada a '{{}}'.".format(
+                    kind_label, angle_label, axis_name, sketch.name
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
                 "dimensions_mm": dims,
+                "is_surface": as_surface,
             }}
 
 
@@ -2058,6 +2074,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             op = op_map.get(operation, op_map["new_body"])
             lofts = _root(design).features.loftFeatures
             inp = lofts.createInput(op)
+            # T5.1a (Fase 5): as_surface=true antes do lofts.add.
+            as_surface = bool(args.get("as_surface"))
+            if as_surface:
+                inp.isSolid = False
             for ref in refs:
                 sk = _find_sketch(design, ref)
                 if sk.profiles.count == 0:
@@ -2068,9 +2088,11 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 inp.loftSections.add(sk.profiles.item(0))
             feat = lofts.add(inp)
             dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
+            kind_label = "Loft de superficie" if as_surface else "Loft"
             return {{
-                "message": "Loft entre {{}} profiles.".format(len(refs)),
+                "message": "{{}} entre {{}} profiles.".format(kind_label, len(refs)),
                 "dimensions_mm": dims,
+                "is_surface": as_surface,
             }}
 
 
@@ -2096,13 +2118,19 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             inp = sweeps.createInput(
                 _resolve_profile_selection(profile_sketch, args, design), path, op
             )
+            # T5.1a (Fase 5): as_surface=true antes do sweeps.add.
+            as_surface = bool(args.get("as_surface"))
+            if as_surface:
+                inp.isSolid = False
             feat = sweeps.add(inp)
             dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
+            kind_label = "Sweep de superficie" if as_surface else "Sweep"
             return {{
-                "message": "Sweep do profile '{{}}' pelo path '{{}}'.".format(
-                    profile_sketch.name, path_sketch.name
+                "message": "{{}} do profile '{{}}' pelo path '{{}}'.".format(
+                    kind_label, profile_sketch.name, path_sketch.name
                 ),
                 "dimensions_mm": dims,
+                "is_surface": as_surface,
             }}
 
 

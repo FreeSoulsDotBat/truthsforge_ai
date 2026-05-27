@@ -27,8 +27,8 @@ Cobrir o workspace **Surface** do Fusion: criação e edição de superfícies N
 
 - **T5.0** ✅ **Mapeamento API Fusion → tools de superfície** em [`../contracts/fusion-operations.md`](../contracts/fusion-operations.md) §3.10 (11 itens: 4 expansões `as_surface` + 7 tools novas + selectors/read-back + fluxo da carenagem). Tabela-resumo §2 também atualizada com status 🚧 Fase 5.
 - **T5.1** — Implementar criação de superfície:
-  - **T5.1a** — flag `as_surface` em `extrude_profile`/`revolve_profile`/`sweep_profile`/`loft_profiles` (`input.isSolid = False`); suporte a `openProfiles` no extrude/sweep/loft.
-  - **T5.1b** — `create_surface_patch` (`PatchFeatures`) com boundary via sketch ou `edge_ids`.
+  - **T5.1a** ✅ — flag `as_surface` em `extrude_profile`/`revolve_profile`/`sweep_profile`/`loft_profiles` (`input.isSolid = False`); output ganha `is_surface: bool`; backward-compat (sem flag = sólido). Cobertura por `test_create_surface_variants_via_as_surface_flag` + schemas em `tool_schemas.py`.
+  - **T5.1b** — `create_surface_patch` (`PatchFeatures`) com boundary via sketch ou `edge_ids`; **e** suporte a `openProfiles` nos 4 handlers da T5.1a (precisa adaptar `_resolve_profile_selection` ou criar caminho alternativo quando `profile.isClosed=False`).
 - **T5.2** — Implementar edição de superfície:
   - **T5.2a** — `trim_surface` (`TrimFeatures`) com seleção de célula a manter por área (`keep="largest"` default).
   - **T5.2b** — `extend_surface` (`ExtendFeatures`).
@@ -67,7 +67,7 @@ Cobrir o workspace **Surface** do Fusion: criação e edição de superfícies N
 ## Definição de pronto (Fase 5)
 
 - [x] **T5.0** — Mapeamento API Fusion → tools de superfície no contracts (§3.10).
-- [ ] **T5.1** — Criação de superfície (4 expansões `as_surface` + `create_surface_patch`).
+- [~] **T5.1** — Criação de superfície (4 expansões `as_surface` ✅ T5.1a; `create_surface_patch` + openProfiles pendente T5.1b).
 - [ ] **T5.2** — Edição de superfície (trim/extend/offset/thicken/stitch/unstitch).
 - [ ] **T5.3** — `query_geometry`/selectors/verifier adaptados a superfície.
 - [ ] **T5.4** — Testes verdes; `adapter-gaps-roadmap.md` atualizado; documentação dupla (Docusaurus + SDD).

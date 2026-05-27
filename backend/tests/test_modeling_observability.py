@@ -966,6 +966,37 @@ def test_revolve_profile_derives_axis_from_axis_line() -> None:
     assert "mag = max(abs(dx), abs(dy), abs(dz))" in script
 
 
+def test_create_surface_variants_via_as_surface_flag() -> None:
+    """T5.1a (Fase 5): extrude/revolve/sweep/loft aceitam as_surface=true e
+    setam isSolid=False antes do add. Backward-compat: sem o flag, comportamento
+    antigo (sólido). Output ganha is_surface no payload."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    cases: dict[str, dict[str, object]] = {
+        "fusion.extrude_profile": {"sketch": "Perfil", "distance_mm": 5, "as_surface": True},
+        "fusion.revolve_profile": {
+            "sketch": "Perfil",
+            "axis": "y",
+            "angle_deg": 360,
+            "as_surface": True,
+        },
+        "fusion.sweep_profile": {"profile": "Perfil", "path": "Caminho", "as_surface": True},
+        "fusion.loft_profiles": {"profiles": ["Sec1", "Sec2"], "as_surface": True},
+    }
+
+    for tool, args in cases.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        # O handler precisa ler as_surface e forcar isSolid=False antes do add.
+        assert 'args.get("as_surface")' in script, f"{tool} nao le as_surface"
+        assert "isSolid = False" in script, f"{tool} nao seta isSolid=False"
+        # Resultado expoe is_surface para o verifier/UI distinguir SurfaceBody.
+        assert '"is_surface"' in script, f"{tool} nao retorna is_surface"
+
+
 def test_create_sketch_resolves_construction_plane_by_name() -> None:
     """Fase 4 gate bug A: planos criados via add_construction_plane devem ser
     reconhecidos por _plane_from_ref e por _create_sketch, sem cair em XY
