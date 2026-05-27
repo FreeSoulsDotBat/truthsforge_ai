@@ -773,6 +773,14 @@ def _build_messages(
         '    canto 4: position_mm=["-(Comprimento/2 - margem)", "-(Largura/2 - margem)"]\n'
         "  Bug pego no gate: o LLM acertou o 1º furo e inventou subtrações\n"
         "  extras nos próximos, deslocando posições para fora da face.\n"
+        "- REFERÊNCIAS ESTÁVEIS (T4.2): toda tool de criação devolve um\n"
+        "  `stable_id` no payload — uma string curta de 12 chars (UUID).\n"
+        "  Esse id sobrevive a rename pelo usuário E a recompute paramétrico,\n"
+        "  ao contrário do `body_name` (que o usuário pode renomear) e do\n"
+        "  índice (que muda com reorder). Quando precisar referenciar um body\n"
+        "  criado em passos anteriores em edições, PREFIRA o `stable_id`\n"
+        "  ao `body_name`. `_find_body` aceita ambos. Use `query_geometry`\n"
+        "  para listar `stable_id`/`name` correntes dos bodies.\n"
         "- REFERÊNCIAS EM CAMPOS DE TOOL: SEMPRE referencie o corpo pelo\n"
         "  campo `body` com o NOME do corpo (string). NUNCA use chaves\n"
         '  inventadas como `face: "X.top_face"`, `target_face`, `surface`,\n'

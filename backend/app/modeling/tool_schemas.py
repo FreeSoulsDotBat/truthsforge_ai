@@ -426,6 +426,132 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
             ),
         },
     ),
+    "fusion.convert_to_sheet_metal": ToolSchema(
+        summary="Converte BRepBody sólido fino em SheetMetal Component — Fase 6.",
+        args={
+            "body_ref": ArgSpec(
+                "Nome do body a converter (precisa ser uma chapa fina com face "
+                "base planar). Aliases: body, body_name.",
+                type="string",
+                unit=None,
+                example="ChapaBase",
+            ),
+            "thickness_mm": ArgSpec(
+                "Espessura da chapa em mm. Opcional — se omitido, usa a "
+                "SheetMetalRule default do design.",
+                required=False,
+                example=1.5,
+            ),
+            "name": ArgSpec(
+                "Nome do SheetMetalBody resultante.",
+                type="string",
+                unit=None,
+                required=False,
+                example="ChapaSM",
+            ),
+        },
+    ),
+    "fusion.flange_edge": ToolSchema(
+        summary="Cria flange a partir de aresta(s) de sheet metal — Fase 6.",
+        args={
+            "body_ref": ArgSpec(
+                "Body sheet metal alvo.",
+                type="string",
+                unit=None,
+                example="ChapaSM",
+            ),
+            "edge_ids": ArgSpec(
+                "Lista de índices de arestas (de query_geometry). Exclusivo com edge_selector.",
+                type="array",
+                unit=None,
+                required=False,
+                example=[0, 2],
+            ),
+            "edge_selector": ArgSpec(
+                "Selector semântico (all|top|bottom|...) se preferir não passar "
+                "edge_ids. Exclusivo com edge_ids.",
+                type="string",
+                unit=None,
+                required=False,
+                example="top",
+            ),
+            "height_mm": ArgSpec(
+                "Altura da flange em mm. Aceita userParameter (G1.1).",
+                example=20.0,
+            ),
+            "angle_deg": ArgSpec(
+                "Ângulo da flange (default 90°). Aceita userParameter.",
+                unit="deg",
+                required=False,
+                example=90,
+            ),
+        },
+    ),
+    "fusion.bend_edge": ToolSchema(
+        summary="Aplica bend em aresta interior de chapa — Fase 6.",
+        args={
+            "body_ref": ArgSpec(
+                "Body sheet metal alvo.",
+                type="string",
+                unit=None,
+                example="ChapaSM",
+            ),
+            "edge_ids": ArgSpec(
+                "Lista de índices de arestas interiores (de query_geometry).",
+                type="array",
+                unit=None,
+                example=[3],
+            ),
+            "angle_deg": ArgSpec(
+                "Ângulo do bend em graus (default 90°). Aceita userParameter.",
+                unit="deg",
+                required=False,
+                example=90,
+            ),
+            "radius_mm": ArgSpec(
+                "Raio do bend em mm (default 1 mm).",
+                required=False,
+                example=2.0,
+            ),
+        },
+    ),
+    "fusion.unbend": ToolSchema(
+        summary="Achata bends de sheet metal (flat pattern) — Fase 6.",
+        args={
+            "body_ref": ArgSpec(
+                "Body sheet metal alvo.",
+                type="string",
+                unit=None,
+                example="ChapaSM",
+            ),
+            "face_ids": ArgSpec(
+                "Faces a manter como root (de query_geometry). Omitido = Fusion "
+                "escolhe a primeira face planar automaticamente.",
+                type="array",
+                unit=None,
+                required=False,
+                example=[0],
+            ),
+        },
+    ),
+    "fusion.rebend": ToolSchema(
+        summary="Re-aplica bends previamente unbended — Fase 6.",
+        args={
+            "body_ref": ArgSpec(
+                "Body sheet metal alvo.",
+                type="string",
+                unit=None,
+                example="ChapaSM",
+            ),
+            "face_ids": ArgSpec(
+                "Faces a redobrar (de query_geometry). Omitido = primeira face planar.",
+                type="array",
+                unit=None,
+                required=False,
+                example=[0],
+            ),
+        },
+    ),
     "fusion.create_surface_patch": ToolSchema(
         summary="Cria SurfaceBody preenchendo um boundary fechado — Fase 5.",
         args={

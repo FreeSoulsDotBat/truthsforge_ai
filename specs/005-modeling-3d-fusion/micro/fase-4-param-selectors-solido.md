@@ -37,7 +37,7 @@ Já no código (parte de ondas anteriores, confirmado/testado; itens **[novo]** 
 
 Pendente (precisa do gate / é demanda-dirigido):
 - **Recompute paramétrico real** (mudar parâmetro recomputa furos/fillets) — só fecha DT-002 no Fusion real.
-- **Selectors estáveis a recompute** — validar no Fusion.
+- **Selectors estáveis a recompute (T4.2)** — body-level ✅ entregue: `_attach_stable_id`/`_stable_id_of` + UUID curto attached via `body.attributes.add("TF", "stable_id", ...)` em todos os criadores (extrude/revolve/primitivas/patch/thicken/stitch/trim/offset/sheetmetal); `_find_body` checa stable_id antes de nome/índice; `query_geometry` expõe `stable_id` por body; nudge no system prompt. Cobertura por `test_stable_id_attached_to_body_creators`. **T4.2b (faces/edges)** — fica como follow-up: atributos em B-Rep faces/edges não persistem entre recomputes do mesmo jeito; requer estratégia diferente (TempIds da Fusion API ou atributos em features).
 - **G3 restantes** (draft, rib, chamfer 2-distância, planos por ângulo/3-pontos, add_text, hole v2) — dependem de entity-refs e APIs version-sensitive (G5); fazer **sob demanda + smoke no Fusion**, não em lote às cegas.
 - **G1.2 completo** (todas as primitivas via sketch dims) — maior custo.
 

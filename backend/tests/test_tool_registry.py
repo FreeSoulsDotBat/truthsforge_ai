@@ -188,6 +188,12 @@ def test_planner_toolset_matches_allowlist() -> None:
         "fusion.extend_surface",
         "fusion.offset_surface",
         "fusion.unstitch_surface",
+        # Fase 6 (Sheet metal)
+        "fusion.convert_to_sheet_metal",
+        "fusion.flange_edge",
+        "fusion.bend_edge",
+        "fusion.unbend",
+        "fusion.rebend",
     }
     assert set(PLANNER_TOOLSET) == expected
 

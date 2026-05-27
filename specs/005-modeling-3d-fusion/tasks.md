@@ -27,7 +27,7 @@ Além do gate do dono, nenhuma fase fecha sem cumprir as **Regras transversais**
 | 3 | Edição manual (read-back/reconciliação) | [`micro/fase-3-edicao-manual.md`](./micro/fase-3-edicao-manual.md) | `[x]` | ✅ **Gate do dono APROVADO (2026-05-26)**: edição à mão + reconciliação + "Desfazer última edição" reverteu no Fusion real. Código T3.1–T3.6 + testes verdes. Achados do gate corrigidos (envelope HTTP, `kind` no metadata do chat, `query_timeline` fora do planner, rollback em edição falha, `deleteMe` robusto). |
 | 4 | Parametrização real + selectors + features de sólido | [`micro/fase-4-param-selectors-solido.md`](./micro/fase-4-param-selectors-solido.md) | `[ ]` | Nível 1 aprofundado |
 | 5 | Superfícies (NURBS) | [`micro/fase-5-superficies.md`](./micro/fase-5-superficies.md) | `[~]` | Código + testes ✅ (11 ops + verifier surface); **gate Fusion real pendente** (carenagem Nível 2 aprovada como peça-exemplo) |
-| 6 | Sheet metal | [`micro/fase-6-sheet-metal.md`](./micro/fase-6-sheet-metal.md) | `[ ]` | Nível 3 |
+| 6 | Sheet metal | [`micro/fase-6-sheet-metal.md`](./micro/fase-6-sheet-metal.md) | `[~]` | 5 tools (convert/flange/bend/unbend/rebend) + testes mock ✅; gate Fusion real (Nível 3) pendente |
 | 7 | Sculpt / T-Spline | [`micro/fase-7-sculpt.md`](./micro/fase-7-sculpt.md) | `[ ]` | Nível 4 |
 | 8 | Assemblies / componentes / juntas / materiais (ADR-018) | [`micro/fase-8-assemblies.md`](./micro/fase-8-assemblies.md) | `[ ]` | Nível 5 |
 | 9 | Determinismo do LLM (Structured Outputs + sanitizer + retry agêntico) | [`micro/fase-9-llm-determinism.md`](./micro/fase-9-llm-determinism.md) | `[ ]` | Cenários A/B/C reexecutados sem ajuste manual de prompt; redução mensurável de variabilidade |

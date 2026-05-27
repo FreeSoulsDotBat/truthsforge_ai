@@ -425,6 +425,36 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Quebra body em superfícies individuais por face — inverso do stitch — Fase 5 T5.2f.",
     ),
     _t(
+        "fusion.convert_to_sheet_metal",
+        _FUSION,
+        _MUT,
+        "Converte BRepBody sólido fino em SheetMetal Component — Fase 6 T6.1.",
+    ),
+    _t(
+        "fusion.flange_edge",
+        _FUSION,
+        _MUT,
+        "Cria flange em aresta(s) de sheet metal (altura + ângulo) — Fase 6 T6.2.",
+    ),
+    _t(
+        "fusion.bend_edge",
+        _FUSION,
+        _MUT,
+        "Aplica bend em aresta interior de chapa (ângulo + raio) — Fase 6 T6.3.",
+    ),
+    _t(
+        "fusion.unbend",
+        _FUSION,
+        _MUT,
+        "Achata bends de sheet metal (flat pattern) — Fase 6 T6.4.",
+    ),
+    _t(
+        "fusion.rebend",
+        _FUSION,
+        _MUT,
+        "Re-aplica bends previamente unbended — Fase 6 T6.5.",
+    ),
+    _t(
         "fusion.move_body",
         _FUSION,
         _MUT,

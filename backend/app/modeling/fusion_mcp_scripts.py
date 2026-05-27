@@ -37,6 +37,11 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.extend_surface",
     "fusion.offset_surface",
     "fusion.unstitch_surface",
+    "fusion.convert_to_sheet_metal",
+    "fusion.flange_edge",
+    "fusion.bend_edge",
+    "fusion.unbend",
+    "fusion.rebend",
     "fusion.add_construction_plane",
     "fusion.add_spline",
     "fusion.move_body",
@@ -284,13 +289,22 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _find_body(design, body_ref=None):
-            # Onda C: resolve body por nome, indice (int/str) ou ultimo criado.
+            # Onda C + T4.2 (Fase 4): resolve body por:
+            #   1. stable_id (TF.stable_id attribute) — sobrevive a rename.
+            #   2. nome do body.
+            #   3. indice (int/str) — volatil a reorder.
+            #   4. ultimo criado quando ref vazio.
             bodies = _root(design).bRepBodies
             if bodies.count == 0:
                 raise ToolError("fusion.no_body", "Nenhum corpo solido na cena.")
             if body_ref is None or body_ref == "":
                 return bodies.item(bodies.count - 1)
             ref = str(body_ref)
+            # T4.2: stable_id primeiro — sobrevive a rename do usuario e a
+            # recompute, ao contrario de nome/indice.
+            for i in range(bodies.count):
+                if _stable_id_of(bodies.item(i)) == ref:
+                    return bodies.item(i)
             for i in range(bodies.count):
                 if bodies.item(i).name == ref:
                     return bodies.item(i)
@@ -909,11 +923,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 _param_value_input(args.get("distance_mm"), design),
             )
             ext = extrudes.add(input_obj)
-            # Fix T4 gate: nomeia o body criado para que edits subsequentes
-                                                                 # consigam referenciar por nome. As primitivas (add_box/cylinder/...)
-            # ja faziam isso; extrude/revolve nao faziam, e edits que pediam
-            # move_body/fillet/etc. por nome batiam em "Corpo nao encontrado".
             body_name = None
+            stable_id = None
             if ext.bodies.count > 0:
                 explicit = (
                     args.get("name")
@@ -923,6 +934,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
                 body_name = _unique_body_name(design, str(explicit or sketch.name))
                 ext.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(ext.bodies.item(0))
             dims = _body_dims_mm(ext.bodies.item(0)) if ext.bodies.count > 0 else [0.0, 0.0, 0.0]
             kind_label = "Superficie extrudada" if as_surface else "Extrusao"
             return {{
@@ -931,6 +943,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
+                "stable_id": stable_id,
                 "dimensions_mm": dims,
                 "is_surface": as_surface,
             }}
@@ -1251,6 +1264,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Fix T4 gate: nomeia o body criado para que edits subsequentes
             # consigam referenciar por nome (vide _extrude_profile).
             body_name = None
+            stable_id = None
             if feat.bodies.count > 0:
                 explicit = (
                     args.get("name")
@@ -1260,13 +1274,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
                 body_name = _unique_body_name(design, str(explicit or sketch.name))
                 feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
             dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
-            # Fix T4 gate (Bug H): quando angle_deg eh nome de parametro,
-            # _eval_param resolveu via param.value*10. Para angulares o
-            # param.value esta em radianos, entao 270 deg virava 47.12 na
-            # mensagem (4.712 rad * 10) — texto enganoso. O revolve real
-            # esta correto pq usa createByString do parametro. Aqui so
-            # corrigimos o LABEL: se veio string, mostra a string como nome.
             raw_angle = args.get("angle_deg")
             if isinstance(raw_angle, str):
                 angle_label = "'{{}}'".format(raw_angle)
@@ -1279,6 +1288,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
+                "stable_id": stable_id,
                 "dimensions_mm": dims,
                 "is_surface": as_surface,
             }}
@@ -1314,6 +1324,34 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             while "{{}} ({{}})".format(base, n) in existing:
                 n += 1
             return "{{}} ({{}})".format(base, n)
+
+
+        def _attach_stable_id(entity, value=None):
+            # T4.2 (Fase 4): anexa um attribute TF.stable_id no body criado.
+            # Sobrevive a recompute paramétrico E a rename pelo usuário —
+            # o LLM pode referenciar o body por stable_id mesmo que o nome
+            # mude entre edições. Retorna o UUID curto gerado, ou None se
+            # a API rejeitar (best-effort).
+            try:
+                import uuid as _uuid
+                sid = str(value) if value else _uuid.uuid4().hex[:12]
+                entity.attributes.add("TF", "stable_id", sid)
+                return sid
+            except Exception:
+                return None
+
+
+        def _stable_id_of(entity):
+            # T4.2: lê o attribute TF.stable_id de um body/feature. None se
+            # ausente ou se a API não expor attributes (ex.: SurfaceBody em
+            # versões antigas do Fusion).
+            try:
+                attr = entity.attributes.itemByName("TF", "stable_id")
+                if attr is not None:
+                    return attr.value
+            except Exception:
+                pass
+            return None
 
 
         def _xyz_mm(value, design):
@@ -1419,10 +1457,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             inp.setDistanceExtent(False, adsk.core.ValueInput.createByReal(h / 10.0))
             feat = extrudes.add(inp)
             body_name = sketch.name
+            stable_id = None
             dims = [0.0, 0.0, 0.0]
             if feat.bodies.count > 0:
                 body_name = _unique_body_name(design, str(args.get("name") or "Box"))
                 feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
                 _oz = _xyz_mm(args.get("origin_mm") or args.get("center_mm"), design)[2]
                 _translate_body(design, feat.bodies.item(0), 0.0, 0.0, _oz / 10.0)
                 dims = _body_dims_mm(feat.bodies.item(0))
@@ -1432,6 +1472,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
+                "stable_id": stable_id,
                 "dimensions_mm": dims,
             }}
 
@@ -1468,10 +1509,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             inp.setDistanceExtent(False, adsk.core.ValueInput.createByReal(h / 10.0))
             feat = extrudes.add(inp)
             body_name = sketch.name
+            stable_id = None
             dims = [0.0, 0.0, 0.0]
             if feat.bodies.count > 0:
                 body_name = _unique_body_name(design, str(args.get("name") or "Cylinder"))
                 feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
                 _oz = _xyz_mm(args.get("center_mm") or args.get("origin_mm"), design)[2]
                 _translate_body(design, feat.bodies.item(0), 0.0, 0.0, _oz / 10.0)
                 dims = _body_dims_mm(feat.bodies.item(0))
@@ -1481,6 +1524,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
+                "stable_id": stable_id,
                 "dimensions_mm": dims,
             }}
 
@@ -1520,10 +1564,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             inp.setAngleExtent(False, adsk.core.ValueInput.createByReal(2 * math.pi))
             feat = revolves.add(inp)
             body_name = sketch.name
+            stable_id = None
             dims = [0.0, 0.0, 0.0]
             if feat.bodies.count > 0:
                 body_name = _unique_body_name(design, str(args.get("name") or "Sphere"))
                 feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
                 _ox, _oy, _oz = _xyz_mm(args.get("origin_mm") or args.get("center_mm"), design)
                 _translate_body(design, feat.bodies.item(0), _ox / 10.0, _oy / 10.0, _oz / 10.0)
                 dims = _body_dims_mm(feat.bodies.item(0))
@@ -1533,6 +1579,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
+                "stable_id": stable_id,
                 "dimensions_mm": dims,
             }}
 
@@ -1581,10 +1628,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             inp.setAngleExtent(False, adsk.core.ValueInput.createByReal(2 * math.pi))
             feat = revolves.add(inp)
             body_name = sketch.name
+            stable_id = None
             dims = [0.0, 0.0, 0.0]
             if feat.bodies.count > 0:
                 body_name = _unique_body_name(design, str(args.get("name") or "Cone"))
                 feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
                 _ox, _oy, _oz = _xyz_mm(args.get("origin_mm") or args.get("center_mm"), design)
                 _translate_body(design, feat.bodies.item(0), _ox / 10.0, _oy / 10.0, _oz / 10.0)
                 dims = _body_dims_mm(feat.bodies.item(0))
@@ -1595,6 +1644,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
+                "stable_id": stable_id,
                 "dimensions_mm": dims,
             }}
 
@@ -1937,6 +1987,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
                 body_name = _unique_body_name(design, str(explicit or "Patch"))
                 feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
+            else:
+                stable_id = None
             dims = (
                 _body_dims_mm(feat.bodies.item(0))
                 if feat.bodies.count > 0
@@ -1951,6 +2004,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return {{
                 "message": "Patch de superficie criado ({{}}).".format(source_label),
                 "body_name": body_name,
+                "stable_id": stable_id,
                 "dimensions_mm": dims,
                 "surface_area_mm2": area_mm2,
                 "is_surface": True,
@@ -2046,6 +2100,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
                 body_name = _unique_body_name(design, str(explicit or "Thickened"))
                 feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
+            else:
+                stable_id = None
             dims = (
                 _body_dims_mm(feat.bodies.item(0))
                 if feat.bodies.count > 0
@@ -2058,6 +2115,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     " [simetrico]" if is_symmetric else "",
                 ),
                 "body_name": body_name,
+                "stable_id": stable_id,
                 "dimensions_mm": dims,
                 "is_surface": False,
             }}
@@ -2113,6 +2171,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
                 body_name = _unique_body_name(design, str(explicit or "Stitched"))
                 first.name = body_name
+                stable_id = _attach_stable_id(first)
+            else:
+                stable_id = None
             dims = (
                 _body_dims_mm(feat.bodies.item(0))
                 if feat.bodies.count > 0
@@ -2131,6 +2192,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     " - resultado solido" if not is_surface_result else "",
                 ),
                 "body_name": body_name,
+                "stable_id": stable_id,
                 "dimensions_mm": dims,
                 "surface_area_mm2": area_mm2,
                 "is_surface": is_surface_result,
@@ -2199,6 +2261,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
                 body_name = _unique_body_name(design, str(explicit or "Trimmed"))
                 target.name = body_name
+                stable_id = _attach_stable_id(target)
+            else:
+                stable_id = None
             dims = (
                 _body_dims_mm(feat.bodies.item(0))
                 if feat.bodies.count > 0
@@ -2207,6 +2272,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return {{
                 "message": "Trim de superficie aplicado (keep={{}}).".format(keep),
                 "body_name": body_name,
+                "stable_id": stable_id,
                 "dimensions_mm": dims,
                 "is_surface": True,
             }}
@@ -2316,6 +2382,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
                 body_name = _unique_body_name(design, str(explicit or "Offset"))
                 feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
+            else:
+                stable_id = None
             dims = (
                 _body_dims_mm(feat.bodies.item(0))
                 if feat.bodies.count > 0
@@ -2326,6 +2395,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     distance_mm, source_label
                 ),
                 "body_name": body_name,
+                "stable_id": stable_id,
                 "dimensions_mm": dims,
                 "is_surface": True,
             }}
@@ -2378,6 +2448,245 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 ),
                 "bodies_count": feat.bodies.count if hasattr(feat, "bodies") else 0,
                 "is_surface": True,
+            }}
+
+
+        def _convert_to_sheet_metal(args):
+            # Fase 6 T6.1: converte BRepBody solido fino em SheetMetal Component
+            # via convertToSheetMetalFeatures. Body alvo precisa ser fino o
+            # bastante e ter uma face base planar (Fusion decide). Args:
+            # body_ref, thickness_mm (opcional — usa SheetMetalRule default).
+            design = _design()
+            body_ref = (
+                args.get("body_ref")
+                or args.get("body")
+                or args.get("body_name")
+            )
+            body = _find_body(design, body_ref)
+            coll = adsk.core.ObjectCollection.create()
+            coll.add(body)
+            converts = _root(design).features.convertToSheetMetalFeatures
+            inp = converts.createInput(coll)
+            # API mais recente expoe thickness via property opcional.
+            thickness_raw = args.get("thickness_mm")
+            if thickness_raw is not None:
+                try:
+                    inp.thickness = _param_value_input(thickness_raw, design)
+                except Exception:
+                    pass
+            feat = converts.add(inp)
+            body_name = None
+            if feat.bodies.count > 0:
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or "SheetMetalBody"))
+                feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
+            else:
+                stable_id = None
+            dims = (
+                _body_dims_mm(feat.bodies.item(0))
+                if feat.bodies.count > 0
+                else [0.0, 0.0, 0.0]
+            )
+            return {{
+                "message": "Convertido para SheetMetal{{}}.".format(
+                    " (thickness={{}}mm)".format(thickness_raw)
+                    if thickness_raw is not None
+                    else ""
+                ),
+                "body_name": body_name,
+                "stable_id": stable_id,
+                "dimensions_mm": dims,
+                "is_sheet_metal": True,
+            }}
+
+
+        def _flange_edge(args):
+            # Fase 6 T6.2: cria flange a partir de aresta(s) de um body sheet
+            # metal. API: flangeFeatures.createInput(edges) + .height/.angle.
+            # Args: edge_ids (lista, +body_ref) ou edge_selector semantico,
+            # height_mm, angle_deg (default 90), bend_position (inside/outside).
+            design = _design()
+            body_ref = args.get("body_ref") or args.get("body") or args.get("body_name")
+            edge_ids = args.get("edge_ids") or args.get("edges")
+            edge_selector = args.get("edge_selector")
+            if edge_ids:
+                edges = _collect_edges_for_patch(design, edge_ids, body_ref)
+            elif edge_selector:
+                edges = _select_edges(_find_body(design, body_ref), edge_selector)
+            else:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "flange_edge precisa de edge_ids OU edge_selector (+ body_ref).",
+                )
+            if edges.count == 0:
+                raise ToolError(
+                    "fusion.no_edges",
+                    "Nenhuma aresta selecionada para flange.",
+                )
+            height_mm = _eval_param(args.get("height_mm"), design, 0.0) or 0.0
+            if height_mm <= 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "height_mm precisa ser positivo.",
+                )
+            angle_deg = _eval_param(args.get("angle_deg"), design, 90.0)
+            if not angle_deg:
+                angle_deg = 90.0
+            flanges = _root(design).features.flangeFeatures
+            inp = flanges.createInput(edges)
+            try:
+                inp.height = _param_value_input(args.get("height_mm"), design)
+            except Exception:
+                inp.height = adsk.core.ValueInput.createByReal(float(height_mm) / 10.0)
+            try:
+                angle_vi = _param_angle_input(args.get("angle_deg"), design)
+                if angle_vi is None:
+                    angle_vi = adsk.core.ValueInput.createByReal(
+                        float(angle_deg) * math.pi / 180.0
+                    )
+                inp.angle = angle_vi
+            except Exception:
+                pass
+            feat = flanges.add(inp)
+            return {{
+                "message": "Flange ({{}} aresta(s), {{}}mm @ {{}}deg).".format(
+                    edges.count, height_mm, angle_deg
+                ),
+                "feature_count": feat.bodies.count if hasattr(feat, "bodies") else 0,
+                "is_sheet_metal": True,
+            }}
+
+
+        def _bend_edge(args):
+            # Fase 6 T6.3: aplica bend em aresta interior (alternativa ao
+            # flange — bend opera em chapa ja contigua sem criar geometria
+            # nova). API: bendFeatures.createInput(edges, angle, radius).
+            design = _design()
+            body_ref = args.get("body_ref") or args.get("body") or args.get("body_name")
+            edge_ids = args.get("edge_ids") or args.get("edges")
+            if not edge_ids:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "bend_edge precisa de edge_ids (+ body_ref).",
+                )
+            edges = _collect_edges_for_patch(design, edge_ids, body_ref)
+            angle_deg = _eval_param(args.get("angle_deg"), design, 90.0) or 90.0
+            radius_mm = _eval_param(args.get("radius_mm"), design, 1.0) or 1.0
+            bends = _root(design).features.bendFeatures
+            angle_vi = _param_angle_input(args.get("angle_deg"), design)
+            if angle_vi is None:
+                angle_vi = adsk.core.ValueInput.createByReal(
+                    float(angle_deg) * math.pi / 180.0
+                )
+            radius_vi = _param_value_input(args.get("radius_mm"), design)
+            inp = bends.createInput(edges, angle_vi, radius_vi)
+            bends.add(inp)
+            return {{
+                "message": "Bend ({{}} aresta(s), {{}}deg, r={{}}mm).".format(
+                    edges.count, angle_deg, radius_mm
+                ),
+                "is_sheet_metal": True,
+            }}
+
+
+        def _unbend(args):
+            # Fase 6 T6.4: achata bend(s) de body sheet metal. Util para
+            # gerar flat pattern. API: unbendFeatures.createInput(faces).
+            # Aceita face_ids especifico OU achata todo o body se face_ids
+            # omitido (Fusion seleciona automaticamente).
+            design = _design()
+            body_ref = args.get("body_ref") or args.get("body") or args.get("body_name")
+            body = _find_body(design, body_ref)
+            face_ids = args.get("face_ids") or args.get("faces")
+            faces_coll = adsk.core.ObjectCollection.create()
+            if face_ids:
+                face_count = body.faces.count
+                for raw in face_ids:
+                    try:
+                        i = int(raw)
+                    except Exception:
+                        raise ToolError(
+                            "fusion.invalid_arg",
+                            "face_id '{{}}' nao eh inteiro.".format(raw),
+                        )
+                    if 0 <= i < face_count:
+                        faces_coll.add(body.faces.item(i))
+            else:
+                # Sem face_ids: pega a primeira face planar como root.
+                for fi in range(body.faces.count):
+                    f = body.faces.item(fi)
+                    try:
+                        if f.geometry.surfaceType == adsk.core.SurfaceTypes.PlaneSurfaceType:
+                            faces_coll.add(f)
+                            break
+                    except Exception:
+                        continue
+            if faces_coll.count == 0:
+                raise ToolError(
+                    "fusion.no_face",
+                    "Nenhuma face plana encontrada para unbend.",
+                )
+            unbends = _root(design).features.unbendFeatures
+            try:
+                inp = unbends.createInput(faces_coll, True)
+            except Exception:
+                # createInput pode aceitar so faces em algumas versoes.
+                inp = unbends.createInput(faces_coll)
+            unbends.add(inp)
+            return {{
+                "message": "Unbend aplicado ({{}} face(s) root).".format(faces_coll.count),
+                "is_sheet_metal": True,
+            }}
+
+
+        def _rebend(args):
+            # Fase 6 T6.5: re-aplica bends previamente unbended. Restaura
+            # geometria 3D apos um flat pattern. API:
+            # rebendFeatures.createInput(faces).
+            design = _design()
+            body_ref = args.get("body_ref") or args.get("body") or args.get("body_name")
+            body = _find_body(design, body_ref)
+            face_ids = args.get("face_ids") or args.get("faces")
+            faces_coll = adsk.core.ObjectCollection.create()
+            if face_ids:
+                face_count = body.faces.count
+                for raw in face_ids:
+                    try:
+                        i = int(raw)
+                    except Exception:
+                        raise ToolError(
+                            "fusion.invalid_arg",
+                            "face_id '{{}}' nao eh inteiro.".format(raw),
+                        )
+                    if 0 <= i < face_count:
+                        faces_coll.add(body.faces.item(i))
+            else:
+                # Sem face_ids, usa primeira face plana achatada.
+                for fi in range(body.faces.count):
+                    f = body.faces.item(fi)
+                    try:
+                        if f.geometry.surfaceType == adsk.core.SurfaceTypes.PlaneSurfaceType:
+                            faces_coll.add(f)
+                            break
+                    except Exception:
+                        continue
+            if faces_coll.count == 0:
+                raise ToolError(
+                    "fusion.no_face",
+                    "Nenhuma face plana para rebend.",
+                )
+            rebends = _root(design).features.rebendFeatures
+            inp = rebends.createInput(faces_coll)
+            rebends.add(inp)
+            return {{
+                "message": "Rebend aplicado ({{}} face(s)).".format(faces_coll.count),
+                "is_sheet_metal": True,
             }}
 
 
@@ -2984,6 +3293,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 bodies_out.append({{
                     "body_index": bi,
                     "name": body.name,
+                    # T4.2: stable_id sobrevive a rename do usuario; o LLM
+                    # deve preferi-lo a body_name em refs subsequentes.
+                    "stable_id": _stable_id_of(body),
                     "dimensions_mm": [
                         round((bbox.maxPoint.x - bbox.minPoint.x) * 10.0, 2),
                         round((bbox.maxPoint.y - bbox.minPoint.y) * 10.0, 2),
@@ -3511,6 +3823,16 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _offset_surface(args)
             if tool_name == "fusion.unstitch_surface":
                 return _unstitch_surface(args)
+            if tool_name == "fusion.convert_to_sheet_metal":
+                return _convert_to_sheet_metal(args)
+            if tool_name == "fusion.flange_edge":
+                return _flange_edge(args)
+            if tool_name == "fusion.bend_edge":
+                return _bend_edge(args)
+            if tool_name == "fusion.unbend":
+                return _unbend(args)
+            if tool_name == "fusion.rebend":
+                return _rebend(args)
             if tool_name == "fusion.add_construction_plane":
                 return _add_construction_plane(args)
             if tool_name == "fusion.add_spline":

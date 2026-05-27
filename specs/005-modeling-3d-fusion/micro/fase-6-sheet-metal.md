@@ -22,10 +22,12 @@ Cobrir o workspace **Sheet Metal** do Fusion: regras de chapa (espessura, raio d
 
 ## Tarefas atômicas
 
-- **T6.1** — Modelar a **regra de chapa** no plano + tool de configuração.
-- **T6.2** — Tools de face base, flange, bend, unfold/refold.
-- **T6.3** — Flat pattern + export DXF como artifact.
-- **T6.4** — Verificação dimensional (espessura/ângulo) + testes (mock).
+- **T6.1** ✅ — `fusion.convert_to_sheet_metal` (`ConvertToSheetMetalFeatures.createInput(bodies)`) com `thickness_mm` opcional (usa SheetMetalRule default se omitido). Marca `is_sheet_metal: true` no output.
+- **T6.2** ✅ — `fusion.flange_edge` (`FlangeFeatures.createInput(edges)` + `inp.height`/`inp.angle`). Aceita `edge_ids` (de query_geometry) OU `edge_selector` semântico. Height/angle paramétricos (G1.1).
+- **T6.3** ✅ — `fusion.bend_edge` (`BendFeatures.createInput(edges, angle, radius)`) — aplica bend em aresta interior; complementa flange (que cria material novo).
+- **T6.4** ✅ — `fusion.unbend` (`UnbendFeatures.createInput(faces, isRoot=true)`) — achata para flat pattern. Sem `face_ids` o handler escolhe a primeira face planar do body.
+- **T6.5** ✅ — `fusion.rebend` (`RebendFeatures.createInput(faces)`) — restaura geometria 3D após unbend.
+- **T6.6** (pendente) — Flat pattern + export DXF como artifact (RF-026). Não bloqueia o gate base; entra como follow-up se o gate exigir.
 
 ## Contratos / invariantes
 
@@ -42,6 +44,6 @@ Cobrir o workspace **Sheet Metal** do Fusion: regras de chapa (espessura, raio d
 
 ## Definição de pronto (Fase 6)
 
-- [ ] Regra de chapa + flanges/dobras + flat pattern.
-- [ ] Export DXF como artifact.
-- [ ] Verificação dimensional; testes verdes; gate do dono (Nível 3) aprovado.
+- [x] **T6.1–T6.5** — 5 tools de sheet metal (convert_to_sheet_metal, flange_edge, bend_edge, unbend, rebend) registradas, schemas, dispatch, e teste `test_sheet_metal_tools_registered_and_compile` verde.
+- [ ] **T6.6** — Flat pattern + export DXF (follow-up demanda-dirigido).
+- [~] **Gate do dono (Fusion real)** — chapa dobrada Nível 3 (pendente — código+testes mock prontos).

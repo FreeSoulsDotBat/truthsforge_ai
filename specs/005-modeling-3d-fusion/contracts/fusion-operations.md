@@ -129,6 +129,11 @@ obrigatória**). Ver AGENTS.md / ADR.
 | `thicken_surface` | mutative | `ThickenFeatures.createInput(surfaces, thickness, isSymmetric, op, isChainSelection)` | ✅ T5.2d |
 | `stitch_surfaces` | mutative | `StitchFeatures.createInput(surfaces, tolerance, op)` | ✅ T5.2e |
 | `unstitch_surface` | mutative | `UnstitchFeatures.createInput(faces, isChainSelection)` | ✅ T5.2f |
+| `convert_to_sheet_metal` | mutative | `ConvertToSheetMetalFeatures.createInput(bodies)` (+ thickness opcional) | ✅ T6.1 |
+| `flange_edge` | mutative | `FlangeFeatures.createInput(edges)` + `.height`/`.angle` | ✅ T6.2 |
+| `bend_edge` | mutative | `BendFeatures.createInput(edges, angle, radius)` | ✅ T6.3 |
+| `unbend` | mutative | `UnbendFeatures.createInput(faces, isRoot)` | ✅ T6.4 |
+| `rebend` | mutative | `RebendFeatures.createInput(faces)` | ✅ T6.5 |
 
 ## 3. Operações em detalhe
 

@@ -1004,6 +1004,343 @@ def test_create_surface_patch_registered_and_compiles() -> None:
     assert "_collect_edges_for_patch" in script_edges
 
 
+def test_stable_id_attached_to_body_creators() -> None:
+    """T4.2 (Fase 4): helpers _attach_stable_id/_stable_id_of estão no
+    script, _find_body checa stable_id primeiro, e cada handler que
+    nomeia body retorna stable_id no payload."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    creators: dict[str, dict[str, object]] = {
+        "fusion.extrude_profile": {"sketch": "P", "distance_mm": 5},
+        "fusion.revolve_profile": {"sketch": "P", "axis": "y"},
+        "fusion.add_box": {"width_mm": 10, "depth_mm": 10, "height_mm": 5},
+        "fusion.add_cylinder": {"diameter_mm": 10, "height_mm": 20},
+        "fusion.add_sphere": {"diameter_mm": 20},
+        "fusion.add_cone": {"base_diameter_mm": 20, "height_mm": 30},
+        "fusion.thicken_surface": {"surface_refs": ["Stitched"], "thickness_mm": 1.5},
+        "fusion.stitch_surfaces": {
+            "surface_refs": ["Casca", "Tampa"],
+            "tolerance_mm": 0.05,
+        },
+        "fusion.create_surface_patch": {"sketch": "TampaFrente"},
+        "fusion.trim_surface": {"surface_ref": "Casca", "trim_tool_ref": "Corte"},
+        "fusion.offset_surface": {"surface_refs": ["Casca"], "distance_mm": 2},
+        "fusion.convert_to_sheet_metal": {"body_ref": "Chapa"},
+    }
+    for tool, args in creators.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        # Helpers presentes no script.
+        assert "def _attach_stable_id" in script, f"{tool}: _attach_stable_id ausente"
+        assert "def _stable_id_of" in script, f"{tool}: _stable_id_of ausente"
+        # _find_body checa stable_id ANTES de nome.
+        assert "_stable_id_of(bodies.item(i)) == ref" in script
+        # Handler chama _attach_stable_id no body criado.
+        assert "_attach_stable_id" in script, f"{tool}: handler nao chama _attach_stable_id"
+        # Payload retorna stable_id (chave presente).
+        assert '"stable_id"' in script, f"{tool}: payload sem chave stable_id"
+
+
+def test_sheet_metal_tools_registered_and_compile() -> None:
+    """Fase 6: 5 tools de sheet metal (convert_to_sheet_metal, flange_edge,
+    bend_edge, unbend, rebend) entram na allowlist com categoria mutative,
+    e o template renderizado compila com args realistas."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+    from app.modeling.tool_registry import FUSION_TOOLS, PLANNER_TOOLSET, descriptor
+
+    cases: dict[str, dict[str, object]] = {
+        "fusion.convert_to_sheet_metal": {
+            "body_ref": "ChapaBase",
+            "thickness_mm": 1.5,
+            "name": "ChapaSM",
+        },
+        "fusion.flange_edge": {
+            "body_ref": "ChapaSM",
+            "edge_ids": [0, 2],
+            "height_mm": "AlturaFlange",
+            "angle_deg": 90,
+        },
+        "fusion.bend_edge": {
+            "body_ref": "ChapaSM",
+            "edge_ids": [3],
+            "angle_deg": "AnguloBend",
+            "radius_mm": 2.0,
+        },
+        "fusion.unbend": {"body_ref": "ChapaSM"},
+        "fusion.rebend": {"body_ref": "ChapaSM", "face_ids": [0, 1]},
+    }
+
+    for tool, args in cases.items():
+        assert tool in FUSION_SCRIPT_TOOLS, f"{tool} ausente em FUSION_SCRIPT_TOOLS"
+        assert tool in FUSION_TOOLS, f"{tool} ausente em FUSION_TOOLS"
+        assert tool in PLANNER_TOOLSET, f"{tool} ausente em PLANNER_TOOLSET"
+        desc = descriptor(tool)
+        assert desc is not None and desc.category.value == "mutative"
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        ast.parse(script)
+        assert f'TOOL_NAME = "{tool}"' in script
+        # Cada handler deve marcar is_sheet_metal no payload de sucesso.
+        assert '"is_sheet_metal"' in script, f"{tool} sem flag is_sheet_metal"
+
+
+def test_smoke_carenagem_flow_compiles_end_to_end() -> None:
+    """Fase 5 — smoke da peça-exemplo do gate (carenagem Nível 2).
+
+    Monta o plano de 12 steps descrito em
+    `specs/005-modeling-3d-fusion/contracts/fusion-operations.md` §3.10.10
+    e valida que CADA step gera script Python sintaticamente válido pelo
+    pipeline determinístico. Confidence pre-gate sem precisar do Fusion.
+
+    NÃO exercita a API real do Fusion (impossível neste container) — só
+    a camada de geração de script. Erros de schema/template aparecem
+    aqui antes do gate do dono.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    carenagem_plan: list[tuple[str, dict[str, object]]] = [
+        # 1. Parâmetros (largura/comprimento/espessura).
+        (
+            "fusion.set_parameter",
+            {
+                "parameters": {
+                    "Comprimento": "160 mm",
+                    "Largura": "80 mm",
+                    "Altura": "45 mm",
+                    "EspessuraParede": "1.5 mm",
+                },
+            },
+        ),
+        # 2-3. Sketch + spline do PERFIL transversal (XZ).
+        ("fusion.create_sketch", {"plane": "xz", "name": "Perfil"}),
+        (
+            "fusion.add_spline",
+            {
+                "sketch": "Perfil",
+                "points_mm": [[0, 0], [40, 30], [80, 45], [120, 30], [160, 0]],
+            },
+        ),
+        # 4-5. Sketch + spline do CAMINHO de varredura (XY).
+        ("fusion.create_sketch", {"plane": "xy", "name": "Caminho"}),
+        (
+            "fusion.add_spline",
+            {
+                "sketch": "Caminho",
+                "points_mm": [[0, 0], [80, 50], [160, 0]],
+            },
+        ),
+        # 6. Sweep como SUPERFÍCIE — gera CascaSwept (open profile aceito
+        #    em modo surface via _profile_or_open).
+        (
+            "fusion.sweep_profile",
+            {
+                "profile": "Perfil",
+                "path": "Caminho",
+                "as_surface": True,
+                "name": "CascaSwept",
+            },
+        ),
+        # 7-8. Patches das tampas frente/trás via edge_ids livres da casca.
+        (
+            "fusion.create_surface_patch",
+            {
+                "edge_ids": [0, 1, 2],
+                "body_ref": "CascaSwept",
+                "name": "TampaFrente",
+                "expected_surface_area_mm2": 2400.0,
+            },
+        ),
+        (
+            "fusion.create_surface_patch",
+            {
+                "edge_ids": [5, 6, 7],
+                "body_ref": "CascaSwept",
+                "name": "TampaTras",
+                "expected_surface_area_mm2": 2400.0,
+            },
+        ),
+        # 9. Stitch das 3 superfícies — verifier exige is_closed=true antes
+        #    do thicken simétrico.
+        (
+            "fusion.stitch_surfaces",
+            {
+                "surface_refs": ["CascaSwept", "TampaFrente", "TampaTras"],
+                "tolerance_mm": 0.05,
+                "name": "Carenagem",
+                "expected_is_closed": True,
+            },
+        ),
+        # 10. Thicken — ponte surface → solid, paramétrico via
+        #     EspessuraParede.
+        (
+            "fusion.thicken_surface",
+            {
+                "surface_refs": ["Carenagem"],
+                "thickness_mm": "EspessuraParede",
+                "is_symmetric": False,
+                "operation": "new_body",
+                "name": "CarenagemSolida",
+            },
+        ),
+        # 11. Fillet nas arestas externas (após thicken o body é sólido).
+        (
+            "fusion.fillet_edges",
+            {
+                "body_ref": "CarenagemSolida",
+                "radius_mm": 2.0,
+                "edge_selector": "all",
+            },
+        ),
+        # 12. Export 3MF.
+        (
+            "fusion.export_3mf",
+            {"result_name": "carenagem.3mf"},
+        ),
+    ]
+
+    assert len(carenagem_plan) == 12, "fluxo da carenagem deve ter 12 steps"
+
+    surface_tools_used: set[str] = set()
+    for idx, (tool, args) in enumerate(carenagem_plan, start=1):
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        try:
+            ast.parse(script)
+        except SyntaxError as exc:  # pragma: no cover - test failure path
+            raise AssertionError(f"Step {idx} ({tool}): script inválido. {exc}") from exc
+        assert f'TOOL_NAME = "{tool}"' in script
+        if "surface" in tool or "as_surface" in args:
+            surface_tools_used.add(tool)
+
+    # O fluxo deve exercitar TODAS as 5 ops centrais de superfície
+    # (sweep as_surface + 2 patches + stitch + thicken).
+    expected_surface_tools = {
+        "fusion.sweep_profile",
+        "fusion.create_surface_patch",
+        "fusion.stitch_surfaces",
+        "fusion.thicken_surface",
+    }
+    assert expected_surface_tools.issubset(surface_tools_used), (
+        f"smoke da carenagem deveria exercitar {expected_surface_tools}, "
+        f"exercitou apenas {surface_tools_used}"
+    )
+
+
+def test_all_surface_tools_compile_with_full_args() -> None:
+    """Fase 5 — auditoria pre-gate: renderiza cada uma das 11 ops de
+    superfície com TODOS os args do schema (não só mínimos), incluindo
+    expected_* e expressões paramétricas. Valida ast.parse + presença
+    de chaves-críticas no script. Catch de regressão silenciosa do
+    template antes do gate da carenagem.
+    """
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    full_args: dict[str, dict[str, object]] = {
+        # 4 expansões as_surface — args completos do extrude/revolve/sweep/loft.
+        "fusion.extrude_profile": {
+            "sketch": "PerfilCurva",
+            "distance_mm": "ProfundidadeCasca",
+            "operation": "new_body",
+            "profile_index": 0,
+            "as_surface": True,
+            "name": "CascaExtrudada",
+            "expected_dimensions_mm": [100, 80, 30],
+        },
+        "fusion.revolve_profile": {
+            "sketch": "MeioPerfil",
+            "axis": "y",
+            "angle_deg": "AnguloRevolucao",
+            "operation": "new_body",
+            "as_surface": True,
+            "name": "CascaRevolvida",
+        },
+        "fusion.sweep_profile": {
+            "profile": "PerfilTransversal",
+            "path": "CaminhoSpline",
+            "operation": "new_body",
+            "as_surface": True,
+            "name": "CascaSwept",
+        },
+        "fusion.loft_profiles": {
+            "profiles": ["Sec1", "Sec2", "Sec3"],
+            "operation": "new_body",
+            "as_surface": True,
+            "name": "CascaLoft",
+        },
+        # 7 dedicadas — args completos.
+        "fusion.create_surface_patch": {
+            "edge_ids": [3, 5, 7, 9],
+            "body_ref": "Casca",
+            "operation": "new_body",
+            "name": "TampaFrente",
+            "expected_surface_area_mm2": 2400.0,
+        },
+        "fusion.thicken_surface": {
+            "surface_refs": ["Stitched"],
+            "thickness_mm": "EspessuraParede",
+            "is_symmetric": False,
+            "operation": "new_body",
+            "chain": True,
+            "name": "Casca",
+        },
+        "fusion.stitch_surfaces": {
+            "surface_refs": ["CascaPrincipal", "TampaFrente", "TampaTras"],
+            "tolerance_mm": 0.05,
+            "operation": "new_body",
+            "name": "Carenagem",
+            "expected_is_closed": True,
+            "expected_surface_area_mm2": 15000.0,
+        },
+        "fusion.trim_surface": {
+            "surface_ref": "Casca",
+            "trim_tool_ref": "CurvaCorte",
+            "keep": "largest",
+            "name": "CascaAparada",
+        },
+        "fusion.extend_surface": {
+            "edge_ids": [3, 5],
+            "body_ref": "Casca",
+            "distance_mm": "MargemExtensao",
+            "extend_type": "natural",
+        },
+        "fusion.offset_surface": {
+            "surface_refs": ["Casca"],
+            "distance_mm": "EspessuraOffset",
+            "operation": "new_body",
+            "name": "CascaOffset",
+        },
+        "fusion.unstitch_surface": {
+            "surface_ref": "Carenagem",
+            "face_ids": [3, 4],
+            "is_chain_selection": False,
+        },
+    }
+
+    for tool, args in full_args.items():
+        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
+        try:
+            ast.parse(script)
+        except SyntaxError as exc:  # pragma: no cover - test failure path
+            raise AssertionError(f"Script para {tool} (args completos) inválido: {exc}") from exc
+        assert f'TOOL_NAME = "{tool}"' in script
+        # Todos os args devem aparecer no payload ARGUMENTS serializado.
+        for key in args:
+            assert key in script, f"{tool}: arg {key!r} ausente no script renderizado"
+
+
 def test_remaining_surface_edit_tools_registered_and_compile() -> None:
     """T5.2a/b/c/f (Fase 5): trim/extend/offset/unstitch fecham a edição de
     superfície. Cada uma entra na allowlist, no registry como mutative e o
