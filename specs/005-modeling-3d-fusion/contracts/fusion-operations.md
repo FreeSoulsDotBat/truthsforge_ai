@@ -118,6 +118,17 @@ obrigatória**). Ver AGENTS.md / ADR.
 | `validate_dimensions` | read_only | `boundingBox` + `physicalProperties` | ✅ |
 | `validate_printability` | read_only | checks B-Rep | ✅ |
 | `run_script` | high_risk | — | 🚫 **nunca exposto** (ADR-019) |
+| `extrude_profile` `as_surface=true` | mutative | `ExtrudeFeatures.createInput` + `input.isSolid=False` | 🚧 Fase 5 |
+| `revolve_profile` `as_surface=true` | mutative | `RevolveFeatures.createInput` + `input.isSolid=False` | 🚧 Fase 5 |
+| `sweep_profile` `as_surface=true` | mutative | `SweepFeatures.createInput` + `input.isSolid=False` | 🚧 Fase 5 |
+| `loft_profiles` `as_surface=true` | mutative | `LoftFeatures.createInput` + `input.isSolid=False` (aceita open profiles) | 🚧 Fase 5 |
+| `create_surface_patch` | mutative | `PatchFeatures.createInput(boundary, op)` | 🚧 Fase 5 |
+| `trim_surface` | mutative | `TrimFeatures.createInput(surface, trim_tool)` + cell-to-remove | 🚧 Fase 5 |
+| `extend_surface` | mutative | `ExtendFeatures.createInput(edges, distance, extendType)` | 🚧 Fase 5 |
+| `offset_surface` | mutative | `OffsetFeatures.createInput(face\|surface, distance, op)` | 🚧 Fase 5 |
+| `thicken_surface` | mutative | `ThickenFeatures.createInput(surfaces, thickness, isSymmetric, op)` | 🚧 Fase 5 |
+| `stitch_surfaces` | mutative | `StitchFeatures.createInput(surfaces, tolerance, op)` | 🚧 Fase 5 |
+| `unstitch_surface` | mutative | `UnstitchFeatures.createInput(faces)` | 🚧 Fase 5 |
 
 ## 3. Operações em detalhe
 
@@ -280,6 +291,181 @@ Formato por op: **API Fusion** · **args** (canônicos; aliases entre parêntese
 - **`fusion.export_3mf`** — `createC3MFExportOptions(_root(design), str(path))`.
   Args: `result_name`/`output_name`. **Guarda:** exige ≥1 body sólido (senão
   `InternalValidationError` — Fix #5).
+
+### 3.10 Superfícies (NURBS) — pré-implementação (Fase 5)
+
+> **Status:** mapeamento pré-implementação (T5.0). Cada item é um contrato-alvo;
+> a implementação real entra com testes mock (T5.1–T5.4) e fecha no gate da
+> carenagem (Nível 2). Hoje **0/11 itens** existem em `fusion_mcp_scripts.py`.
+
+#### 3.10.1 Criação de superfície (expansão das tools existentes)
+
+A API Fusion já permite que `extrude`/`revolve`/`sweep`/`loft` produzam
+**SurfaceBody** em vez de Body sólido por meio de `input.isSolid = False`
+(disponível em `FeatureInput` desde versões antigas). Decisão de design:
+**não criar tools novas duplicadas** — adicionar o argumento `as_surface: bool`
+(default `false`, backward-compat) nas 4 tools existentes:
+
+- **`fusion.extrude_profile`** com `as_surface=true` —
+  `ExtrudeFeatures.createInput(profile, op)` + `input.isSolid = False` antes do
+  `setDistanceExtent`. Resultado em `feature.bodies` é `SurfaceBody`. Limitação:
+  o perfil pode ser aberto (`openProfiles`) — exige caminho alternativo
+  `ExtrudeFeatures.createInput(openProfile, op)` quando `profile.isClosed=False`.
+- **`fusion.revolve_profile`** com `as_surface=true` — `input.isSolid = False`.
+  Aceita meio-perfil aberto (não precisa cruzar o eixo como no sólido).
+- **`fusion.sweep_profile`** com `as_surface=true` — `input.isSolid = False`.
+  Combinado com perfil aberto produz uma "lasca" de superfície.
+- **`fusion.loft_profiles`** com `as_surface=true` — `input.isSolid = False`.
+  Aceita perfis abertos (loft entre curvas); aceita `centerLineOrRails` (eixo
+  ou rails) — fora de escopo da T5.1; só perfis empilhados.
+
+Conversão de unidades inalterada (cm/rad internos).
+
+#### 3.10.2 `fusion.create_surface_patch`
+
+**API:** `rootComp.features.patchFeatures.createInput(boundaryEntity, FeatureOperation.NewBodyFeatureOperation)`
+→ `patchFeatures.add(input)`.
+
+**Args:**
+- `boundary` (obrigatório): aceita `sketch=<nome>` (usa primeiro profile fechado
+  do sketch como boundary) **ou** `edge_ids=[...]` (lista de índices de
+  `query_geometry`; o adapter monta `ObjectCollection<BRepEdge>`).
+- `operation` (`new_body|join`; default `new_body`).
+- `name` (`result_name` / `body_name`).
+
+**Semântica:** preenche um boundary fechado com uma superfície NURBS plana ou
+não-plana (Fusion decide o melhor fit). Falha se o boundary não for fechado ou
+auto-interceptar.
+
+**Erros previstos:** `fusion.invalid_boundary`, `fusion.boundary_not_closed`.
+
+#### 3.10.3 `fusion.trim_surface`
+
+**API:** `rootComp.features.trimFeatures.createInput(surface, trimmingTool)` +
+`input.cellsToRemove = ObjectCollection<TrimCell>` → `trimFeatures.add(input)`.
+
+**Args:**
+- `surface_ref` (obrigatório): nome de SurfaceBody **ou** `surface_index` da
+  saída de `query_geometry`.
+- `trim_tool_ref` (obrigatório): sketch curve, face de outra superfície ou body.
+- `cells_to_remove` (default: todas exceto a maior): lista de índices de células
+  resultantes do trim — gerada pelo Fusion. Estratégia v1: aceitar
+  `keep="largest"` (default) e o adapter calcula a célula a manter por área.
+
+**Erros previstos:** `fusion.trim_no_intersection`, `fusion.invalid_trim_tool`.
+
+#### 3.10.4 `fusion.extend_surface`
+
+**API:** `rootComp.features.extendFeatures.createInput(edges, ValueInput distance, SurfaceExtendType)`
+→ `extendFeatures.add(input)`.
+
+**Args:**
+- `edge_ids` (obrigatório): lista de índices de arestas livres de SurfaceBody.
+- `distance_mm` (obrigatório): extensão em mm.
+- `extend_type` (`natural|perpendicular|tangent`; default `natural`).
+
+**Semântica:** estende uma superfície ao longo de suas arestas livres.
+
+**Erros previstos:** `fusion.extend_edges_not_free` (aresta interior ao body).
+
+#### 3.10.5 `fusion.offset_surface`
+
+**API:** `rootComp.features.offsetFeatures.createInput(faces, ValueInput distance, FeatureOperation)`
+→ `offsetFeatures.add(input)`.
+
+**Args:**
+- `face_refs` (obrigatório): `face_ids` ou `surface_refs` (offset de SurfaceBody
+  inteiro).
+- `distance_mm` (obrigatório).
+- `operation` (`new_body|join`; default `new_body`).
+
+**Semântica:** cria nova SurfaceBody paralela à(s) face(s) original(is).
+
+#### 3.10.6 `fusion.thicken_surface`
+
+**API:** `rootComp.features.thickenFeatures.createInput(inputSurfaces, ValueInput thickness, isSymmetric, FeatureOperation, isChainSelection)`
+→ `thickenFeatures.add(input)`.
+
+**Args:**
+- `surface_refs` (obrigatório): nomes ou índices de SurfaceBody.
+- `thickness_mm` (obrigatório).
+- `is_symmetric` (default `false`; quando `true`, espessa simétrico nos dois
+  lados).
+- `operation` (`new_body|join|cut|intersect`; default `new_body`).
+- `chain` (default `true`): seleciona faces conectadas tangencialmente.
+
+**Semântica:** **ponte surface → solid**. O resultado é um BRepBody sólido. É o
+passo que entrega a carenagem fechada da peça-exemplo do gate.
+
+**Erros previstos:** `fusion.thicken_self_intersection`,
+`fusion.thicken_open_surface` (precisa ser fechada para espessar simétrico).
+
+#### 3.10.7 `fusion.stitch_surfaces`
+
+**API:** `rootComp.features.stitchFeatures.createInput(surfaces, ValueInput tolerance, FeatureOperation)`
+→ `stitchFeatures.add(input)`.
+
+**Args:**
+- `surface_refs` (obrigatório): lista ≥ 2 de SurfaceBody.
+- `tolerance_mm` (default `0.01`): tolerância de costura entre arestas livres.
+- `operation` (`new_body|join`; default `new_body`).
+
+**Semântica:** costura múltiplas superfícies por arestas livres adjacentes.
+**Resultado pode ser sólido** se a costura fechar um volume (Fusion detecta
+automaticamente).
+
+**Erros previstos:** `fusion.stitch_gap_too_large` (tolerância insuficiente).
+
+#### 3.10.8 `fusion.unstitch_surface`
+
+**API:** `rootComp.features.unstitchFeatures.createInput(faces)` →
+`unstitchFeatures.add(input)`.
+
+**Args:**
+- `face_ids` ou `surface_ref` (obrigatório).
+- `is_chain_selection` (default `false`).
+
+**Semântica:** quebra um SurfaceBody (ou body sólido) em superfícies individuais
+por face — inverso do stitch. Útil para reparar/refazer trecho específico.
+
+#### 3.10.9 Selectors e read-back para superfície
+
+A T5.3 estende dois pontos sem quebrar o atual:
+
+- **`fusion.query_geometry`**: hoje itera `rootComp.bRepBodies`; passa a iterar
+  também `rootComp.bRepBodies.itemByName(...).isSolid` para distinguir
+  sólido × superfície, **e** a lista paralela de SurfaceBody quando exposta pela
+  API. Output ganha `is_solid: bool`, `surface_area_mm2`, `is_closed: bool`
+  (`bRepBody.isSolid` é `False` para SurfaceBody).
+- **`_select_faces`/`_select_edges`**: já operam em `BRepFace`/`BRepEdge`
+  genéricos — SurfaceBody também os expõe. Selector novo: `free_edges` (apenas
+  arestas livres da superfície, necessárias para extend/stitch).
+- **Verifier do loop**: além de `dimensions_mm`, output passa a expor
+  `surface_area_mm2` e `is_closed` quando relevante (criação/edição de
+  superfície). `build_dimension_verifier` ganha modo `surface` (comparar área
+  esperada × medida e exigir `is_closed=True` antes do thicken).
+
+#### 3.10.10 Fluxo da peça-exemplo do gate (carenagem)
+
+Esboço do plano que o LLM deve produzir para a carenagem Nível 2 (CS-002):
+
+```
+1.  set_parameter (largura, comprimento, espessura, raio_topo)
+2.  create_sketch plane=xz name=Perfil
+3.  add_spline points_mm=[[0,0],[40,30],[80,45],[120,30],[160,0]]
+4.  create_sketch plane=xy name=Caminho
+5.  add_spline points_mm=[[0,0],[80,50],[160,0]]
+6.  sweep_profile profile=Perfil path=Caminho as_surface=true name=Casca
+7.  create_surface_patch boundary=edge_ids=[...]  # tampa frente
+8.  create_surface_patch boundary=edge_ids=[...]  # tampa trás
+9.  stitch_surfaces surface_refs=[Casca,Patch1,Patch2] tolerance_mm=0.05
+10. thicken_surface surface_refs=[Stitched] thickness_mm=1.5 is_symmetric=false
+11. fillet_edges body=Body1 radius_mm=2 edge_selector=free_edges
+12. export_3mf
+```
+
+Vai exigir: open profile no sweep, patch via `edge_ids` de `query_geometry`,
+costura tolerante e thicken simétrico/assimétrico configurável.
 
 ## 4. Divergências intencionais vs. API canônica (consolidado)
 
