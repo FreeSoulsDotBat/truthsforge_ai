@@ -198,6 +198,84 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
             ),
         },
     ),
+    "fusion.thicken_surface": ToolSchema(
+        summary="Espessa SurfaceBody(ies) gerando Body sólido — ponte surface→solid (Fase 5).",
+        args={
+            "surface_refs": ArgSpec(
+                "Lista de nomes (ou índices) de SurfaceBodies a espessar. "
+                "Aliases: surfaces, body_refs, bodies. Para uma só superfície "
+                "pode passar string direta.",
+                type="array",
+                unit=None,
+                example=["Stitched"],
+            ),
+            "thickness_mm": ArgSpec(
+                "Espessura da parede em milímetros. Aceita nome de userParameter "
+                "para vínculo paramétrico (G1.1).",
+                example=1.5,
+            ),
+            "is_symmetric": ArgSpec(
+                "Quando true, espessa nos dois lados da superfície (default false).",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=False,
+            ),
+            "operation": ArgSpec(
+                "new_body | join | cut | intersect (default new_body).",
+                type="string",
+                unit=None,
+                required=False,
+                example="new_body",
+            ),
+            "chain": ArgSpec(
+                "Selecionar faces conectadas tangencialmente em cadeia (default true).",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=True,
+            ),
+            "name": ArgSpec(
+                "Nome do Body sólido resultante.",
+                type="string",
+                unit=None,
+                required=False,
+                example="Casca",
+            ),
+        },
+    ),
+    "fusion.stitch_surfaces": ToolSchema(
+        summary="Costura 2+ SurfaceBodies por arestas livres adjacentes (Fase 5).",
+        args={
+            "surface_refs": ArgSpec(
+                "Lista de nomes (ou índices) de SurfaceBodies a costurar (>= 2). "
+                "Aliases: surfaces, body_refs, bodies.",
+                type="array",
+                unit=None,
+                example=["Casca", "TampaFrente", "TampaTras"],
+            ),
+            "tolerance_mm": ArgSpec(
+                "Tolerância da costura entre arestas livres (default 0.01 mm).",
+                required=False,
+                example=0.05,
+            ),
+            "operation": ArgSpec(
+                "new_body | join (default new_body).",
+                type="string",
+                unit=None,
+                required=False,
+                example="new_body",
+            ),
+            "name": ArgSpec(
+                "Nome do body resultante (pode ser SurfaceBody ou sólido, "
+                "depende se a costura fechou volume — checar is_surface no output).",
+                type="string",
+                unit=None,
+                required=False,
+                example="Carenagem",
+            ),
+        },
+    ),
     "fusion.create_surface_patch": ToolSchema(
         summary="Cria SurfaceBody preenchendo um boundary fechado — Fase 5.",
         args={

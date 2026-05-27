@@ -126,8 +126,8 @@ obrigatória**). Ver AGENTS.md / ADR.
 | `trim_surface` | mutative | `TrimFeatures.createInput(surface, trim_tool)` + cell-to-remove | 🚧 Fase 5 |
 | `extend_surface` | mutative | `ExtendFeatures.createInput(edges, distance, extendType)` | 🚧 Fase 5 |
 | `offset_surface` | mutative | `OffsetFeatures.createInput(face\|surface, distance, op)` | 🚧 Fase 5 |
-| `thicken_surface` | mutative | `ThickenFeatures.createInput(surfaces, thickness, isSymmetric, op)` | 🚧 Fase 5 |
-| `stitch_surfaces` | mutative | `StitchFeatures.createInput(surfaces, tolerance, op)` | 🚧 Fase 5 |
+| `thicken_surface` | mutative | `ThickenFeatures.createInput(surfaces, thickness, isSymmetric, op, isChainSelection)` | ✅ T5.2d |
+| `stitch_surfaces` | mutative | `StitchFeatures.createInput(surfaces, tolerance, op)` | ✅ T5.2e |
 | `unstitch_surface` | mutative | `UnstitchFeatures.createInput(faces)` | 🚧 Fase 5 |
 
 ## 3. Operações em detalhe

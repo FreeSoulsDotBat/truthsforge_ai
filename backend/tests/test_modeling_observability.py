@@ -1004,6 +1004,56 @@ def test_create_surface_patch_registered_and_compiles() -> None:
     assert "_collect_edges_for_patch" in script_edges
 
 
+def test_thicken_and_stitch_registered_and_compile() -> None:
+    """T5.2d/T5.2e (Fase 5): thicken_surface (ponte surface→solid) e
+    stitch_surfaces (costura de SurfaceBodies, pode fechar volume e virar
+    sólido). Caminho crítico do gate da carenagem."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+    from app.modeling.tool_registry import FUSION_TOOLS, PLANNER_TOOLSET, descriptor
+
+    for tool in ("fusion.thicken_surface", "fusion.stitch_surfaces"):
+        assert tool in FUSION_SCRIPT_TOOLS
+        assert tool in FUSION_TOOLS
+        assert tool in PLANNER_TOOLSET
+        desc = descriptor(tool)
+        assert desc is not None and desc.category.value == "mutative"
+
+    # thicken: thickness obrigatorio + ValueInput parametrico via _param_value_input.
+    script_t = build_autodesk_fusion_script(
+        tool_name="fusion.thicken_surface",
+        arguments={
+            "surface_refs": ["Stitched"],
+            "thickness_mm": 1.5,
+            "name": "Casca",
+        },
+    )
+    ast.parse(script_t)
+    assert "thickenFeatures" in script_t
+    assert "_collect_surface_bodies" in script_t
+    assert "_param_value_input" in script_t
+    assert '"is_surface": False' in script_t  # resultado eh solido
+
+    # stitch: tolerance opcional (default 0.01 mm), >= 2 surfaces obrigatorias.
+    script_s = build_autodesk_fusion_script(
+        tool_name="fusion.stitch_surfaces",
+        arguments={
+            "surface_refs": ["Casca", "TampaFrente", "TampaTras"],
+            "tolerance_mm": 0.05,
+            "name": "Carenagem",
+        },
+    )
+    ast.parse(script_s)
+    assert "stitchFeatures" in script_s
+    # is_surface_result reflete o que saiu (Fusion decide se costura fechou):
+    assert "is_surface_result" in script_s
+
+
 def test_open_profile_fallback_in_surface_handlers() -> None:
     """T5.1b: extrude/revolve/sweep/loft em modo as_surface=true aceitam
     openProfile quando o sketch nao tem profile FECHADO — viabiliza

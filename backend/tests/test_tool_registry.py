@@ -182,6 +182,8 @@ def test_planner_toolset_matches_allowlist() -> None:
         "fusion.split_body",
         # Fase 5 (Superfícies — NURBS)
         "fusion.create_surface_patch",
+        "fusion.thicken_surface",
+        "fusion.stitch_surfaces",
     }
     assert set(PLANNER_TOOLSET) == expected
 

@@ -29,12 +29,12 @@ Cobrir o workspace **Surface** do Fusion: criação e edição de superfícies N
 - **T5.1** — Implementar criação de superfície:
   - **T5.1a** ✅ — flag `as_surface` em `extrude_profile`/`revolve_profile`/`sweep_profile`/`loft_profiles` (`input.isSolid = False`); output ganha `is_surface: bool`; backward-compat (sem flag = sólido). Cobertura por `test_create_surface_variants_via_as_surface_flag` + schemas em `tool_schemas.py`.
   - **T5.1b** ✅ — `create_surface_patch` (`PatchFeatures.createInput` com boundary via sketch OU `edge_ids` + `body_ref`); helper `_profile_or_open` aplicado nos 4 handlers da T5.1a → openProfile aceito quando `as_surface=true` e sketch tem só curvas abertas; helper `_collect_edges_for_patch` valida intervalo `[0, body.edges.count)`. Output do patch traz `surface_area_mm2` + `is_surface: true` + `body_name`. Cobertura: `test_create_surface_patch_registered_and_compiles`, `test_open_profile_fallback_in_surface_handlers`, `test_planner_toolset_matches_allowlist` atualizado.
-- **T5.2** — Implementar edição de superfície:
+- **T5.2** — Implementar edição de superfície (**caminho crítico do gate executado primeiro**: thicken + stitch fecham a carenagem; trim/extend/offset/unstitch ficam para rodada subsequente):
+  - **T5.2d** ✅ — `thicken_surface` (`ThickenFeatures.createInput(coll, thickness, isSymmetric, op, isChainSelection)`) — ponte surface → solid. Aceita aliases `surfaces`/`body_refs`; thickness via `_param_value_input` (paramétrico G1.1); `is_symmetric` e `chain` opt-in; output traz `body_name`/`dimensions_mm`/`is_surface=false`.
+  - **T5.2e** ✅ — `stitch_surfaces` (`StitchFeatures.createInput(coll, tolerance, op)`) — costura ≥ 2 superfícies; resultado pode ser SurfaceBody ou Body sólido (Fusion detecta se fechou volume); `is_surface` no output reflete o que saiu.
   - **T5.2a** — `trim_surface` (`TrimFeatures`) com seleção de célula a manter por área (`keep="largest"` default).
   - **T5.2b** — `extend_surface` (`ExtendFeatures`).
   - **T5.2c** — `offset_surface` (`OffsetFeatures`).
-  - **T5.2d** — `thicken_surface` (`ThickenFeatures`) — ponte surface → solid.
-  - **T5.2e** — `stitch_surfaces` (`StitchFeatures`) com tolerância default 0.01 mm.
   - **T5.2f** — `unstitch_surface` (`UnstitchFeatures`).
 - **T5.3** — Selectors e verificação adaptada:
   - **T5.3a** — `query_geometry` lista SurfaceBody + `is_solid`/`surface_area_mm2`/`is_closed`; novo selector `free_edges` em `_select_edges`.
@@ -68,7 +68,7 @@ Cobrir o workspace **Surface** do Fusion: criação e edição de superfícies N
 
 - [x] **T5.0** — Mapeamento API Fusion → tools de superfície no contracts (§3.10).
 - [x] **T5.1** — Criação de superfície (T5.1a `as_surface` ✅; T5.1b `create_surface_patch` + openProfiles ✅).
-- [ ] **T5.2** — Edição de superfície (trim/extend/offset/thicken/stitch/unstitch).
+- [~] **T5.2** — Edição de superfície (T5.2d `thicken_surface` ✅; T5.2e `stitch_surfaces` ✅; trim/extend/offset/unstitch pendentes).
 - [ ] **T5.3** — `query_geometry`/selectors/verifier adaptados a superfície.
 - [ ] **T5.4** — Testes verdes; `adapter-gaps-roadmap.md` atualizado; documentação dupla (Docusaurus + SDD).
 - [ ] **Gate do dono** — carenagem Nível 2 aprovada no Fusion real.

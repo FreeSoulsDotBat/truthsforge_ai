@@ -31,6 +31,8 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.loft_profiles",
     "fusion.sweep_profile",
     "fusion.create_surface_patch",
+    "fusion.thicken_surface",
+    "fusion.stitch_surfaces",
     "fusion.add_construction_plane",
     "fusion.add_spline",
     "fusion.move_body",
@@ -1939,6 +1941,186 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
+        def _collect_surface_bodies(design, refs):
+            # T5.2 (Fase 5): resolve uma lista de refs (nomes/indices) em um
+            # ObjectCollection<BRepBody>. Aceita SurfaceBody E Body solido
+            # (stitch/thicken podem operar em ambos em algumas variantes da API).
+            # Aliases de entrada: ref unica vira lista de 1; itens podem ser
+            # string (nome ou indice serializado) ou int (indice direto).
+            if isinstance(refs, (str, int)):
+                refs = [refs]
+            if not isinstance(refs, list) or len(refs) == 0:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "surface_refs precisa ser lista nao-vazia (nomes ou indices).",
+                )
+            bodies = _root(design).bRepBodies
+            if bodies.count == 0:
+                raise ToolError("fusion.no_body", "Nenhum corpo na cena (precisa de SurfaceBody).")
+            coll = adsk.core.ObjectCollection.create()
+            available = [bodies.item(i).name for i in range(bodies.count)]
+            for raw in refs:
+                target = None
+                ref_str = str(raw)
+                for i in range(bodies.count):
+                    if bodies.item(i).name == ref_str:
+                        target = bodies.item(i)
+                        break
+                if target is None:
+                    try:
+                        idx = int(ref_str)
+                        if 0 <= idx < bodies.count:
+                            target = bodies.item(idx)
+                    except (TypeError, ValueError):
+                        pass
+                if target is None:
+                    raise ToolError(
+                        "fusion.body_not_found",
+                        "Surface/body nao encontrado: {{}}. Disponiveis: {{}}".format(
+                            ref_str, available
+                        ),
+                    )
+                coll.add(target)
+            return coll
+
+
+        def _thicken_surface(args):
+            # T5.2d (Fase 5): espessa SurfaceBody(ies) gerando BRepBody solido.
+            # Eh a PONTE surface->solid da peca-exemplo do gate (carenagem).
+            # API: ThickenFeatures.createInput(coll, thickness, isSymmetric,
+            # operation, isChainSelection). thickness em cm via ValueInput;
+            # parametrico (createByString) quando o arg referencia userParameter.
+            design = _design()
+            refs = (
+                args.get("surface_refs")
+                or args.get("surfaces")
+                or args.get("surface_ref")
+                or args.get("body_refs")
+                or args.get("bodies")
+            )
+            surfaces = _collect_surface_bodies(design, refs)
+            thickness_mm = _eval_param(args.get("thickness_mm"), design, 0.0) or 0.0
+            if thickness_mm <= 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "thickness_mm precisa ser positivo.",
+                )
+            operation = str(args.get("operation") or "new_body").lower()
+            op_map = {{
+                "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+                "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
+                "cut": adsk.fusion.FeatureOperations.CutFeatureOperation,
+                "intersect": adsk.fusion.FeatureOperations.IntersectFeatureOperation,
+            }}
+            op = op_map.get(operation, op_map["new_body"])
+            is_symmetric = bool(args.get("is_symmetric") or args.get("symmetric"))
+            chain_raw = args.get("chain")
+            is_chain = True if chain_raw is None else bool(chain_raw)
+            thicken = _root(design).features.thickenFeatures
+            thickness_vi = _param_value_input(args.get("thickness_mm"), design)
+            inp = thicken.createInput(surfaces, thickness_vi, is_symmetric, op, is_chain)
+            feat = thicken.add(inp)
+            body_name = None
+            if feat.bodies.count > 0:
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or "Thickened"))
+                feat.bodies.item(0).name = body_name
+            dims = (
+                _body_dims_mm(feat.bodies.item(0))
+                if feat.bodies.count > 0
+                else [0.0, 0.0, 0.0]
+            )
+            return {{
+                "message": "Superficie espessada em {{}} mm ({{}} face(s)){{}}.".format(
+                    thickness_mm,
+                    surfaces.count,
+                    " [simetrico]" if is_symmetric else "",
+                ),
+                "body_name": body_name,
+                "dimensions_mm": dims,
+                "is_surface": False,
+            }}
+
+
+        def _stitch_surfaces(args):
+            # T5.2e (Fase 5): costura 2+ SurfaceBody por arestas livres
+            # adjacentes. Resultado pode ser SurfaceBody (se costura nao fecha)
+            # OU BRepBody solido (se fecha volume) — Fusion decide. is_surface
+            # no output reflete o que saiu, util pro verifier saber se pode
+            # ja passar pro fillet/export ou se precisa de thicken antes.
+            design = _design()
+            refs = (
+                args.get("surface_refs")
+                or args.get("surfaces")
+                or args.get("body_refs")
+                or args.get("bodies")
+            )
+            surfaces = _collect_surface_bodies(design, refs)
+            if surfaces.count < 2:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "stitch_surfaces precisa de >= 2 superficies (recebido: {{}}).".format(
+                        surfaces.count
+                    ),
+                )
+            tolerance_mm = _eval_param(args.get("tolerance_mm"), design, 0.01)
+            if tolerance_mm is None or tolerance_mm <= 0:
+                tolerance_mm = 0.01
+            operation = str(args.get("operation") or "new_body").lower()
+            op_map = {{
+                "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+                "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
+            }}
+            op = op_map.get(operation, op_map["new_body"])
+            stitches = _root(design).features.stitchFeatures
+            tolerance_vi = adsk.core.ValueInput.createByReal(float(tolerance_mm) / 10.0)
+            inp = stitches.createInput(surfaces, tolerance_vi, op)
+            feat = stitches.add(inp)
+            body_name = None
+            is_surface_result = True
+            if feat.bodies.count > 0:
+                first = feat.bodies.item(0)
+                try:
+                    is_surface_result = not bool(first.isSolid)
+                except Exception:
+                    is_surface_result = True
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or "Stitched"))
+                first.name = body_name
+            dims = (
+                _body_dims_mm(feat.bodies.item(0))
+                if feat.bodies.count > 0
+                else [0.0, 0.0, 0.0]
+            )
+            area_mm2 = 0.0
+            if feat.bodies.count > 0:
+                try:
+                    area_mm2 = round(feat.bodies.item(0).physicalProperties.area * 100.0, 2)
+                except Exception:
+                    area_mm2 = 0.0
+            return {{
+                "message": "Stitch de {{}} superficies (tol={{}}mm){{}}.".format(
+                    surfaces.count,
+                    tolerance_mm,
+                    " - resultado solido" if not is_surface_result else "",
+                ),
+                "body_name": body_name,
+                "dimensions_mm": dims,
+                "surface_area_mm2": area_mm2,
+                "is_surface": is_surface_result,
+            }}
+
+
         def _hole(args):
             # Onda C: furo via circulo + cut-extrude na face superior do body.
             # MVP pragmatico (nao usa holeFeatures, que exige point/face refs
@@ -3030,6 +3212,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _sweep_profile(args)
             if tool_name == "fusion.create_surface_patch":
                 return _create_surface_patch(args)
+            if tool_name == "fusion.thicken_surface":
+                return _thicken_surface(args)
+            if tool_name == "fusion.stitch_surfaces":
+                return _stitch_surfaces(args)
             if tool_name == "fusion.add_construction_plane":
                 return _add_construction_plane(args)
             if tool_name == "fusion.add_spline":

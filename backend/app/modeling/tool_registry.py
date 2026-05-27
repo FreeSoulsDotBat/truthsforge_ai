@@ -389,6 +389,18 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Cria SurfaceBody preenchendo um boundary fechado (sketch ou edge_ids) — Fase 5 T5.1b.",
     ),
     _t(
+        "fusion.thicken_surface",
+        _FUSION,
+        _MUT,
+        "Espessa SurfaceBody(ies) gerando Body sólido (ponte surface→solid) — Fase 5 T5.2d.",
+    ),
+    _t(
+        "fusion.stitch_surfaces",
+        _FUSION,
+        _MUT,
+        "Costura 2+ SurfaceBodies; pode fechar volume e virar sólido — Fase 5 T5.2e.",
+    ),
+    _t(
         "fusion.move_body",
         _FUSION,
         _MUT,
