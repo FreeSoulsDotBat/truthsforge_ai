@@ -101,15 +101,27 @@ Cada fase = um ou mais PRs com testes CI verdes + docs atualizadas, encerrada po
   4. **7** — Sculpt / T-Spline. _Gate:_ Nível 4.
   5. **8** — Assemblies/componentes/juntas/materiais _(ADR-018; muda data model do plano, selectors/refs, UI do card, printability/export por componente)_. _Gate:_ Nível 5.
 
+- **Fase 9 — Determinismo da interpretação do LLM** _(defesa em camadas; nasceu da Fase 4)_
+  Reduzir a variabilidade do planner contra o adapter por **camadas determinísticas**, na ordem de robustez × custo. Nudges são prompt engineering (fracos); aqui o objetivo é travar o comportamento sem depender da boa vontade do modelo. Frentes:
+  1. **Structured Outputs / function calling estritos** — declarar JSON Schema das tools allowlistadas pra que o provedor force a saída a casar com o contrato. Elimina campos-fantasma (`target_face`, `face:`, `bounding_box`, `axis_line`) na origem.
+  2. **Sanitizer determinístico pós-LLM** — camada entre planner e executor que: faz strip de campos não-allowlistados com log de warning (telemetria); normaliza aliases (`axis_line` → `axis`); detecta padrões simétricos (N instâncias da mesma feature com posições) e força mirror das coordenadas; infere unidade de expressão (generaliza o Fix C).
+  3. **Retry agêntico com guidance específica** — em vez de só mostrar o erro ao humano quando o execute falha, realimentar o LLM com o erro + campo problemático + correção esperada (reuso do `agent_loop.py`/`build_correction_context` já absorvidos, plugados no fluxo de pós-execução).
+  4. **Verifier LLM opcional** (planos críticos / >N steps) — segundo prompt valida o plano contra checklist (simetria, parametrização, campos válidos) antes de executar. Caro; ligar via flag.
+  5. **Templates / few-shots por padrão frequente** — quando dados de uso indicarem padrões recorrentes (ex.: "placa com N furos retangulares"), oferecer macro template parametrizado. LLM preenche slots, não inventa estrutura.
+
+  Telemetria: medir taxa de campos-fantasma e retries por step antes/depois de cada camada. _Gate:_ rodar os cenários A/B/C da Fase 4 em sequência **sem ajuste manual de prompt** e validar redução mensurável da variabilidade no Fusion real.
+
 - **Fase final — QA, docs e handoff** consolidados (cada fase já entrega docs incrementais; aqui se fecham diagramas, `delivery-checklist` e handoff). Inclui a **reconciliação documental v2/v3→v4** catalogada na Fase 0 (remover `safe_auto` e endpoints removidos de `docs/api.md`/`docs/3d-mcp-modeling.md`, marcar 27182/stdio como legado, superar ADR-012/013 com 017/018) e a criação de uma **categoria/landing 3D no Docusaurus** cobrindo os 5 níveis e o servidor MCP (RNF-007).
 
-> **Ordem aprovada pelo dono:** MCP standalone (Fase 1) antes do núcleo agêntico (Fase 2); Fase 0 reabre assemblies. As fases 4–8 são ondas de cobertura e podem ser reordenadas conforme a demanda real do dono.
+> **Ordem aprovada pelo dono:** MCP standalone (Fase 1) antes do núcleo agêntico (Fase 2); Fase 0 reabre assemblies. As fases 4–8 são ondas de cobertura e podem ser reordenadas conforme a demanda real do dono. **Fase 9 fica por último entre as ondas** (depois de 8 e antes da F) — só faz sentido depois que a cobertura está estável, pra mensurar redução real de variabilidade.
 
 ## Sequenciamento
 
 - 0 → 1 → 2 → 3 são sequenciais (cada uma depende da anterior e do gate).
 - 4–8 dependem de 0–3 prontas; entre si são ondas paralelizáveis em planejamento, mas entregues uma a uma com gate (ordenação default por valor/risco; ajustável).
+- 9 vem depois de 8 (cobertura estável é pré-requisito pra medir variabilidade); F (QA/docs final) fecha a frente.
 - ADR-017 precede Fase 1; ADR-018 precede Fase 8 (rascunhados na Fase 0).
+- Fase 9 exigirá um ADR próprio (ADR-020 — Structured Outputs + sanitizer + retry agêntico) rascunhado no micro-plano da fase.
 
 ## Validação
 

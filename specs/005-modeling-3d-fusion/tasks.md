@@ -30,6 +30,7 @@ Além do gate do dono, nenhuma fase fecha sem cumprir as **Regras transversais**
 | 6 | Sheet metal | [`micro/fase-6-sheet-metal.md`](./micro/fase-6-sheet-metal.md) | `[ ]` | Nível 3 |
 | 7 | Sculpt / T-Spline | [`micro/fase-7-sculpt.md`](./micro/fase-7-sculpt.md) | `[ ]` | Nível 4 |
 | 8 | Assemblies / componentes / juntas / materiais (ADR-018) | [`micro/fase-8-assemblies.md`](./micro/fase-8-assemblies.md) | `[ ]` | Nível 5 |
+| 9 | Determinismo do LLM (Structured Outputs + sanitizer + retry agêntico) | [`micro/fase-9-llm-determinism.md`](./micro/fase-9-llm-determinism.md) | `[ ]` | Cenários A/B/C reexecutados sem ajuste manual de prompt; redução mensurável de variabilidade |
 | F | QA, docs e handoff finais | [`micro/fase-final-qa-docs.md`](./micro/fase-final-qa-docs.md) | `[ ]` | Checklist de entrega completo |
 
 ## Fase 0 — itens (detalhe em `micro/fase-0-specs-auditoria.md`)
