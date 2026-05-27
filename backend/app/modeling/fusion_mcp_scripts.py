@@ -30,6 +30,7 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.combine_bodies",
     "fusion.loft_profiles",
     "fusion.sweep_profile",
+    "fusion.create_surface_patch",
     "fusion.add_construction_plane",
     "fusion.add_spline",
     "fusion.move_body",
@@ -855,7 +856,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
                 operation = fallback_op
             sketch = _find_sketch(design, args.get("sketch"))
-            if sketch.profiles.count == 0:
+            # T5.1a/T5.1b (Fase 5): as_surface=true permite (1) produzir
+            # SurfaceBody (isSolid=False) e (2) usar openProfile quando o
+            # sketch nao tem profile fechado. Sem o flag, mantem checagem
+            # legada que exige profile fechado.
+            as_surface = bool(args.get("as_surface"))
+            if not as_surface and sketch.profiles.count == 0:
                 raise ToolError(
                     "fusion.no_profile",
                     "Sketch não tem profile fechado para extrudar.",
@@ -864,7 +870,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Seletor explicito quando informado; aviso visivel no trace quando
             # um cut ambiguo (varios profiles, sem seletor) cai no profiles[0] —
             # foi exatamente isso que consumiu a placa no gate.
-            profile = _resolve_profile_selection(sketch, args, design)
+            profile = _profile_or_open(sketch, args, design, as_surface)
             _has_selector = (
                 args.get("profile_index") is not None
                 or args.get("profile_diameter_mm") is not None
@@ -878,10 +884,6 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
             extrudes = _root(design).features.extrudeFeatures
             input_obj = extrudes.createInput(profile, operation_map[operation])
-            # T5.1a (Fase 5): as_surface=true forca SurfaceBody em vez de Body
-            # solido (input.isSolid=False). Backward-compat: sem o flag, comportamento
-            # antigo. Open profiles continuam dependendo de T5.1b.
-            as_surface = bool(args.get("as_surface"))
             if as_surface:
                 input_obj.isSolid = False
             input_obj.setDistanceExtent(
@@ -1150,7 +1152,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Destrava esferas (semicirculo revolvido), cones, vasos.
             design = _design()
             sketch = _find_sketch(design, args.get("sketch"))
-            if sketch.profiles.count == 0:
+            # T5.1b: as_surface=true aceita meio-perfil aberto (openProfile);
+            # sem o flag, mantem a exigencia legada de profile fechado.
+            _as_surface_early = bool(args.get("as_surface"))
+            if not _as_surface_early and sketch.profiles.count == 0:
                 raise ToolError(
                     "fusion.no_profile",
                     "Sketch nao tem profile fechado para revolver.",
@@ -1209,13 +1214,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
             axis = axis_map.get(axis_name, root.yConstructionAxis)
             revolves = root.features.revolveFeatures
+            # T5.1a/T5.1b: as_surface=true forca SurfaceBody (isSolid=False)
+            # antes do setAngleExtent e aceita meio-perfil aberto (no modo
+            # solido o perfil precisa cruzar o eixo; em surface nao).
+            as_surface = _as_surface_early
             input_obj = revolves.createInput(
-                _resolve_profile_selection(sketch, args, design), axis, op
+                _profile_or_open(sketch, args, design, as_surface), axis, op
             )
-            # T5.1a (Fase 5): as_surface=true forca SurfaceBody (isSolid=False)
-            # antes do setAngleExtent. Aceita meio-perfil aberto sem cruzar o
-            # eixo (no modo solido o perfil precisa cruzar; em surface nao).
-            as_surface = bool(args.get("as_surface"))
             if as_surface:
                 input_obj.isSolid = False
             # G1.1: liga o angulo a um parametro quando ``angle_deg`` referencia
@@ -1801,6 +1806,139 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return sketch.profiles.item(0)
 
 
+        def _profile_or_open(sketch, args, design, as_surface):
+            # T5.1b (Fase 5): em modo superficie aceita openProfile (curva
+            # aberta) como alternativa ao profile fechado — permite extrudar/
+            # varrer/loftar uma linha ou spline para gerar uma "lasca" NURBS.
+            # Prefere SEMPRE profile fechado quando disponivel; so cai em
+            # openProfile se o sketch nao tem nenhum profile fechado E o
+            # chamador esta em modo surface (extrude/revolve/sweep/loft com
+            # as_surface=true). Sem o flag, mantem comportamento legado.
+            if sketch.profiles.count > 0:
+                return _resolve_profile_selection(sketch, args, design)
+            if as_surface and sketch.openProfiles.count > 0:
+                idx_raw = args.get("open_profile_index")
+                try:
+                    i = int(idx_raw) if idx_raw is not None else 0
+                except Exception:
+                    i = 0
+                if not (0 <= i < sketch.openProfiles.count):
+                    i = 0
+                return sketch.openProfiles.item(i)
+            raise ToolError(
+                "fusion.no_profile",
+                "Sketch '{{}}' sem profile fechado{{}}.".format(
+                    sketch.name,
+                    " nem openProfile (precisa de geometria)" if as_surface else "",
+                ),
+            )
+
+
+        def _collect_edges_for_patch(design, edge_ids, body_ref):
+            # T5.1b (Fase 5): monta um ObjectCollection<BRepEdge> para o
+            # boundary de patch/extend/trim. edge_ids referem-se ao corpo
+            # body_ref (ou primeiro body se omitido), no mesmo esquema do
+            # query_geometry (indice estavel dentro do body).
+            if not isinstance(edge_ids, list) or len(edge_ids) == 0:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "edge_ids precisa ser lista nao-vazia de inteiros.",
+                )
+            body = _find_body(design, body_ref)
+            edge_count = body.edges.count
+            coll = adsk.core.ObjectCollection.create()
+            for raw in edge_ids:
+                try:
+                    i = int(raw)
+                except Exception:
+                    raise ToolError(
+                        "fusion.invalid_arg",
+                        "edge_id '{{}}' nao eh inteiro.".format(raw),
+                    )
+                if not (0 <= i < edge_count):
+                    raise ToolError(
+                        "fusion.invalid_arg",
+                        "edge_id {{}} fora do intervalo [0,{{}}) do body '{{}}'.".format(
+                            i, edge_count, body.name
+                        ),
+                    )
+                coll.add(body.edges.item(i))
+            return coll
+
+
+        def _create_surface_patch(args):
+            # T5.1b (Fase 5): cria uma SurfaceBody preenchendo um boundary
+            # fechado. Aceita boundary via sketch (primeiro profile fechado do
+            # sketch) OU via edge_ids (arestas livres de um body resolvido,
+            # tipico apos sweep/extrude as_surface=true que deixa aberturas).
+            # Bridge para a peca-exemplo do gate da Fase 5: as 2 tampas da
+            # carenagem entram via patch sobre as arestas livres da casca.
+            design = _design()
+            sketch_ref = args.get("sketch") or args.get("boundary_sketch")
+            edge_ids = args.get("edge_ids") or args.get("boundary_edge_ids")
+            operation = str(args.get("operation") or "new_body").lower()
+            op_map = {{
+                "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+                "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
+            }}
+            op = op_map.get(operation, op_map["new_body"])
+
+            if sketch_ref:
+                sketch = _find_sketch(design, sketch_ref)
+                if sketch.profiles.count == 0:
+                    raise ToolError(
+                        "fusion.no_profile",
+                        "Sketch '{{}}' sem profile fechado para patch.".format(sketch.name),
+                    )
+                boundary = sketch.profiles.item(0)
+                source_label = "sketch '{{}}'".format(sketch_ref)
+            elif edge_ids:
+                body_ref = (
+                    args.get("body_ref")
+                    or args.get("body")
+                    or args.get("body_name")
+                )
+                boundary = _collect_edges_for_patch(design, edge_ids, body_ref)
+                source_label = "{{}} aresta(s)".format(len(edge_ids))
+            else:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "create_surface_patch precisa de 'sketch' OU 'edge_ids' (+ body_ref).",
+                )
+
+            patches = _root(design).features.patchFeatures
+            inp = patches.createInput(boundary, op)
+            feat = patches.add(inp)
+            body_name = None
+            if feat.bodies.count > 0:
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or "Patch"))
+                feat.bodies.item(0).name = body_name
+            dims = (
+                _body_dims_mm(feat.bodies.item(0))
+                if feat.bodies.count > 0
+                else [0.0, 0.0, 0.0]
+            )
+            area_mm2 = 0.0
+            if feat.bodies.count > 0:
+                try:
+                    area_mm2 = round(feat.bodies.item(0).physicalProperties.area * 100.0, 2)
+                except Exception:
+                    area_mm2 = 0.0
+            return {{
+                "message": "Patch de superficie criado ({{}}).".format(source_label),
+                "body_name": body_name,
+                "dimensions_mm": dims,
+                "surface_area_mm2": area_mm2,
+                "is_surface": True,
+            }}
+
+
         def _hole(args):
             # Onda C: furo via circulo + cut-extrude na face superior do body.
             # MVP pragmatico (nao usa holeFeatures, que exige point/face refs
@@ -2074,18 +2212,26 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             op = op_map.get(operation, op_map["new_body"])
             lofts = _root(design).features.loftFeatures
             inp = lofts.createInput(op)
-            # T5.1a (Fase 5): as_surface=true antes do lofts.add.
+            # T5.1a/T5.1b: as_surface=true → isSolid=False E permite que cada
+            # section seja openProfile (curva aberta) alem de profile fechado.
             as_surface = bool(args.get("as_surface"))
             if as_surface:
                 inp.isSolid = False
             for ref in refs:
                 sk = _find_sketch(design, ref)
-                if sk.profiles.count == 0:
+                if sk.profiles.count > 0:
+                    section = sk.profiles.item(0)
+                elif as_surface and sk.openProfiles.count > 0:
+                    section = sk.openProfiles.item(0)
+                else:
                     raise ToolError(
                         "fusion.no_profile",
-                        "Sketch '{{}}' nao tem profile fechado.".format(ref),
+                        "Sketch '{{}}' sem profile fechado{{}}.".format(
+                            ref,
+                            " nem openProfile" if as_surface else "",
+                        ),
                     )
-                inp.loftSections.add(sk.profiles.item(0))
+                inp.loftSections.add(section)
             feat = lofts.add(inp)
             dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
             kind_label = "Loft de superficie" if as_surface else "Loft"
@@ -2098,9 +2244,11 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
         def _sweep_profile(args):
             # Onda E: varre um profile ao longo de um caminho (sketch path).
+            # T5.1b: as_surface=true aceita perfil aberto (gera lasca NURBS).
             design = _design()
             profile_sketch = _find_sketch(design, args.get("profile") or args.get("profile_sketch"))
-            if profile_sketch.profiles.count == 0:
+            _as_surface_sweep = bool(args.get("as_surface"))
+            if not _as_surface_sweep and profile_sketch.profiles.count == 0:
                 raise ToolError("fusion.no_profile", "Profile sem perfil fechado.")
             path_sketch = _find_sketch(design, args.get("path") or args.get("path_sketch"))
             if path_sketch.sketchCurves.count == 0:
@@ -2115,11 +2263,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             root = _root(design)
             path = root.features.createPath(path_sketch.sketchCurves.item(0))
             sweeps = root.features.sweepFeatures
+            as_surface = _as_surface_sweep
             inp = sweeps.createInput(
-                _resolve_profile_selection(profile_sketch, args, design), path, op
+                _profile_or_open(profile_sketch, args, design, as_surface), path, op
             )
-            # T5.1a (Fase 5): as_surface=true antes do sweeps.add.
-            as_surface = bool(args.get("as_surface"))
             if as_surface:
                 inp.isSolid = False
             feat = sweeps.add(inp)
@@ -2881,6 +3028,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _loft_profiles(args)
             if tool_name == "fusion.sweep_profile":
                 return _sweep_profile(args)
+            if tool_name == "fusion.create_surface_patch":
+                return _create_surface_patch(args)
             if tool_name == "fusion.add_construction_plane":
                 return _add_construction_plane(args)
             if tool_name == "fusion.add_spline":

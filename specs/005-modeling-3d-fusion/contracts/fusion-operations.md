@@ -118,11 +118,11 @@ obrigatória**). Ver AGENTS.md / ADR.
 | `validate_dimensions` | read_only | `boundingBox` + `physicalProperties` | ✅ |
 | `validate_printability` | read_only | checks B-Rep | ✅ |
 | `run_script` | high_risk | — | 🚫 **nunca exposto** (ADR-019) |
-| `extrude_profile` `as_surface=true` | mutative | `ExtrudeFeatures.createInput` + `input.isSolid=False` | 🚧 Fase 5 |
-| `revolve_profile` `as_surface=true` | mutative | `RevolveFeatures.createInput` + `input.isSolid=False` | 🚧 Fase 5 |
-| `sweep_profile` `as_surface=true` | mutative | `SweepFeatures.createInput` + `input.isSolid=False` | 🚧 Fase 5 |
-| `loft_profiles` `as_surface=true` | mutative | `LoftFeatures.createInput` + `input.isSolid=False` (aceita open profiles) | 🚧 Fase 5 |
-| `create_surface_patch` | mutative | `PatchFeatures.createInput(boundary, op)` | 🚧 Fase 5 |
+| `extrude_profile` `as_surface=true` | mutative | `ExtrudeFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b |
+| `revolve_profile` `as_surface=true` | mutative | `RevolveFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b |
+| `sweep_profile` `as_surface=true` | mutative | `SweepFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b |
+| `loft_profiles` `as_surface=true` | mutative | `LoftFeatures.createInput` + `input.isSolid=False` (aceita open profiles) | ✅ T5.1a/b |
+| `create_surface_patch` | mutative | `PatchFeatures.createInput(boundary, op)` | ✅ T5.1b |
 | `trim_surface` | mutative | `TrimFeatures.createInput(surface, trim_tool)` + cell-to-remove | 🚧 Fase 5 |
 | `extend_surface` | mutative | `ExtendFeatures.createInput(edges, distance, extendType)` | 🚧 Fase 5 |
 | `offset_surface` | mutative | `OffsetFeatures.createInput(face\|surface, distance, op)` | 🚧 Fase 5 |

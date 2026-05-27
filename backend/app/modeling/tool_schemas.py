@@ -198,6 +198,49 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
             ),
         },
     ),
+    "fusion.create_surface_patch": ToolSchema(
+        summary="Cria SurfaceBody preenchendo um boundary fechado — Fase 5.",
+        args={
+            "sketch": ArgSpec(
+                "Sketch cujo primeiro profile fechado vira o boundary. "
+                "Alternativa exclusiva a edge_ids.",
+                type="string",
+                unit=None,
+                required=False,
+                example="TampaFrente",
+            ),
+            "edge_ids": ArgSpec(
+                "Lista de índices de arestas (de query_geometry) que formam um "
+                "boundary fechado em um body existente. Use com body_ref. "
+                "Alternativa exclusiva a sketch.",
+                type="array",
+                unit=None,
+                required=False,
+                example=[3, 5, 7, 9],
+            ),
+            "body_ref": ArgSpec(
+                "Nome do body cujas arestas serão usadas (requerido com edge_ids).",
+                type="string",
+                unit=None,
+                required=False,
+                example="Casca",
+            ),
+            "operation": ArgSpec(
+                "new_body | join (default new_body).",
+                type="string",
+                unit=None,
+                required=False,
+                example="new_body",
+            ),
+            "name": ArgSpec(
+                "Nome do SurfaceBody resultante.",
+                type="string",
+                unit=None,
+                required=False,
+                example="TampaPatch",
+            ),
+        },
+    ),
     "fusion.loft_profiles": ToolSchema(
         summary="Loft entre 2+ perfis de sketch ordenados.",
         args={

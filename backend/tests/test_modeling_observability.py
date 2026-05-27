@@ -966,6 +966,65 @@ def test_revolve_profile_derives_axis_from_axis_line() -> None:
     assert "mag = max(abs(dx), abs(dy), abs(dz))" in script
 
 
+def test_create_surface_patch_registered_and_compiles() -> None:
+    """T5.1b (Fase 5): fusion.create_surface_patch entra na allowlist do adapter
+    e no registry com categoria mutative. Aceita boundary via sketch OU via
+    edge_ids (+ body_ref) e produz um SurfaceBody (is_surface=true)."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import (
+        FUSION_SCRIPT_TOOLS,
+        build_autodesk_fusion_script,
+    )
+    from app.modeling.tool_registry import FUSION_TOOLS, PLANNER_TOOLSET, descriptor
+
+    assert "fusion.create_surface_patch" in FUSION_SCRIPT_TOOLS
+    assert "fusion.create_surface_patch" in FUSION_TOOLS
+    assert "fusion.create_surface_patch" in PLANNER_TOOLSET
+    desc = descriptor("fusion.create_surface_patch")
+    assert desc is not None and desc.category.value == "mutative"
+
+    # Variante por sketch.
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.create_surface_patch",
+        arguments={"sketch": "TampaFrente", "name": "TampaPatch"},
+    )
+    ast.parse(script)
+    assert "patchFeatures" in script
+    assert "createInput" in script
+    assert '"is_surface": True' in script
+
+    # Variante por edge_ids + body_ref.
+    script_edges = build_autodesk_fusion_script(
+        tool_name="fusion.create_surface_patch",
+        arguments={"edge_ids": [3, 5, 7, 9], "body_ref": "Casca"},
+    )
+    ast.parse(script_edges)
+    assert "_collect_edges_for_patch" in script_edges
+
+
+def test_open_profile_fallback_in_surface_handlers() -> None:
+    """T5.1b: extrude/revolve/sweep/loft em modo as_surface=true aceitam
+    openProfile quando o sketch nao tem profile FECHADO — viabiliza
+    extrudar/varrer uma linha ou spline pra gerar lasca NURBS."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    # O helper _profile_or_open precisa estar definido no script renderizado.
+    script = build_autodesk_fusion_script(
+        tool_name="fusion.extrude_profile",
+        arguments={"sketch": "Curva", "distance_mm": 10, "as_surface": True},
+    )
+    ast.parse(script)
+    assert "def _profile_or_open" in script
+    assert "sketch.openProfiles" in script
+    # E o handler precisa usar o helper em vez de _resolve_profile_selection.
+    assert "_profile_or_open(sketch, args, design, as_surface)" in script
+
+
 def test_create_surface_variants_via_as_surface_flag() -> None:
     """T5.1a (Fase 5): extrude/revolve/sweep/loft aceitam as_surface=true e
     setam isSolid=False antes do add. Backward-compat: sem o flag, comportamento

@@ -383,6 +383,12 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Varre um profile ao longo de um caminho (Onda E).",
     ),
     _t(
+        "fusion.create_surface_patch",
+        _FUSION,
+        _MUT,
+        "Cria SurfaceBody preenchendo um boundary fechado (sketch ou edge_ids) — Fase 5 T5.1b.",
+    ),
+    _t(
         "fusion.move_body",
         _FUSION,
         _MUT,
