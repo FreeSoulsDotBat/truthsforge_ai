@@ -1874,6 +1874,32 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return sketch.profiles.item(0)
 
 
+        def _open_profile_from_sketch(design, sketch, args):
+            # T5.1b fix (gate m3d_plan_cd836aec): o objeto Sketch da API do
+            # Fusion NAO expoe `.openProfiles` (AttributeError no Fusion real).
+            # O caminho correto para um perfil ABERTO e
+            # Component.createOpenProfile(sketchEntity, chainCurves=True), que
+            # segue a cadeia de curvas conectadas a partir de uma curva-semente.
+            # Retorna um Profile aberto valido para extrude/revolve/sweep em
+            # modo superficie (isSolid=False).
+            curves = sketch.sketchCurves
+            if curves.count == 0:
+                return None
+            idx_raw = args.get("open_profile_index")
+            try:
+                i = int(idx_raw) if idx_raw is not None else 0
+            except Exception:
+                i = 0
+            if not (0 <= i < curves.count):
+                i = 0
+            seed = curves.item(i)
+            try:
+                return _root(design).createOpenProfile(seed, True)
+            except Exception:
+                # Algumas versoes aceitam so 1 arg (chainCurves default True).
+                return _root(design).createOpenProfile(seed)
+
+
         def _profile_or_open(sketch, args, design, as_surface):
             # T5.1b (Fase 5): em modo superficie aceita openProfile (curva
             # aberta) como alternativa ao profile fechado — permite extrudar/
@@ -1884,20 +1910,17 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # as_surface=true). Sem o flag, mantem comportamento legado.
             if sketch.profiles.count > 0:
                 return _resolve_profile_selection(sketch, args, design)
-            if as_surface and sketch.openProfiles.count > 0:
-                idx_raw = args.get("open_profile_index")
-                try:
-                    i = int(idx_raw) if idx_raw is not None else 0
-                except Exception:
-                    i = 0
-                if not (0 <= i < sketch.openProfiles.count):
-                    i = 0
-                return sketch.openProfiles.item(i)
+            if as_surface:
+                open_prof = _open_profile_from_sketch(design, sketch, args)
+                if open_prof is not None:
+                    return open_prof
             raise ToolError(
                 "fusion.no_profile",
                 "Sketch '{{}}' sem profile fechado{{}}.".format(
                     sketch.name,
-                    " nem openProfile (precisa de geometria)" if as_surface else "",
+                    " nem curvas p/ openProfile (precisa de geometria)"
+                    if as_surface
+                    else "",
                 ),
             )
 
@@ -2972,15 +2995,19 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 sk = _find_sketch(design, ref)
                 if sk.profiles.count > 0:
                     section = sk.profiles.item(0)
-                elif as_surface and sk.openProfiles.count > 0:
-                    section = sk.openProfiles.item(0)
+                elif as_surface:
+                    # T5.1b fix: Sketch nao tem .openProfiles; usar
+                    # createOpenProfile (ver _open_profile_from_sketch).
+                    section = _open_profile_from_sketch(design, sk, {{}})
+                    if section is None:
+                        raise ToolError(
+                            "fusion.no_profile",
+                            "Sketch '{{}}' sem profile fechado nem curvas.".format(ref),
+                        )
                 else:
                     raise ToolError(
                         "fusion.no_profile",
-                        "Sketch '{{}}' sem profile fechado{{}}.".format(
-                            ref,
-                            " nem openProfile" if as_surface else "",
-                        ),
+                        "Sketch '{{}}' sem profile fechado.".format(ref),
                     )
                 inp.loftSections.add(section)
             feat = lofts.add(inp)

@@ -1500,7 +1500,10 @@ def test_open_profile_fallback_in_surface_handlers() -> None:
     )
     ast.parse(script)
     assert "def _profile_or_open" in script
-    assert "sketch.openProfiles" in script
+    # T5.1b fix (gate m3d_plan_cd836aec): Sketch nao tem .openProfiles — o
+    # perfil aberto vem de Component.createOpenProfile (chainCurves).
+    assert "sketch.openProfiles" not in script
+    assert "createOpenProfile" in script
     # E o handler precisa usar o helper em vez de _resolve_profile_selection.
     assert "_profile_or_open(sketch, args, design, as_surface)" in script
 
