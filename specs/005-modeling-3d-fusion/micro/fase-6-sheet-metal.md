@@ -76,6 +76,13 @@ bloqueada por teto da plataforma.
 
 Recomendação: (1) + documentar; reescopo (2) só se o dono tiver caso real.
 
+**DECISÃO DO DONO (2026-05-29): opção (1) — REMOVER as tools.** As 5 tools
+(convert_to_sheet_metal/flange_edge/bend_edge/unbend/rebend) foram removidas de
+`fusion_mcp_scripts.py` (handlers + allowlist + dispatch), `tool_registry.py`,
+`tool_schemas.py`. Teste de regressão `test_sheet_metal_tools_are_removed`
+impede reintrodução acidental. Fase 6 fica **bloqueada por plataforma** até a
+Autodesk expor a API de sheet metal no Python. Roadmap segue para Fase 7/8.
+
 ## Definição de pronto (Fase 6)
 
 - [x] **T6.1–T6.5** — 5 tools de sheet metal (convert_to_sheet_metal, flange_edge, bend_edge, unbend, rebend) registradas, schemas, dispatch, e teste `test_sheet_metal_tools_registered_and_compile` verde.

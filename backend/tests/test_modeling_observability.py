@@ -1028,7 +1028,6 @@ def test_stable_id_attached_to_body_creators() -> None:
         "fusion.create_surface_patch": {"sketch": "TampaFrente"},
         "fusion.trim_surface": {"surface_ref": "Casca", "trim_tool_ref": "Corte"},
         "fusion.offset_surface": {"surface_refs": ["Casca"], "distance_mm": 2},
-        "fusion.convert_to_sheet_metal": {"body_ref": "Chapa"},
     }
     for tool, args in creators.items():
         script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
@@ -1044,52 +1043,26 @@ def test_stable_id_attached_to_body_creators() -> None:
         assert '"stable_id"' in script, f"{tool}: payload sem chave stable_id"
 
 
-def test_sheet_metal_tools_registered_and_compile() -> None:
-    """Fase 6: 5 tools de sheet metal (convert_to_sheet_metal, flange_edge,
-    bend_edge, unbend, rebend) entram na allowlist com categoria mutative,
-    e o template renderizado compila com args realistas."""
+def test_sheet_metal_tools_are_removed() -> None:
+    """Fase 6 (DT-011): a API Python do Fusion NÃO expõe o workflow de sheet
+    metal (só flangeFeatures read-only; sem convert/bend/unbend/rebend). As 5
+    tools foram REMOVIDAS da allowlist após o gate 2026-05-29. Este teste é
+    regressão: impede reintrodução acidental sem a API existir."""
 
-    import ast
+    from app.modeling.fusion_mcp_scripts import FUSION_SCRIPT_TOOLS
+    from app.modeling.tool_registry import FUSION_TOOLS, PLANNER_TOOLSET
 
-    from app.modeling.fusion_mcp_scripts import (
-        FUSION_SCRIPT_TOOLS,
-        build_autodesk_fusion_script,
-    )
-    from app.modeling.tool_registry import FUSION_TOOLS, PLANNER_TOOLSET, descriptor
-
-    cases: dict[str, dict[str, object]] = {
-        "fusion.convert_to_sheet_metal": {
-            "body_ref": "ChapaBase",
-            "thickness_mm": 1.5,
-            "name": "ChapaSM",
-        },
-        "fusion.flange_edge": {
-            "body_ref": "ChapaSM",
-            "edge_ids": [0, 2],
-            "height_mm": "AlturaFlange",
-            "angle_deg": 90,
-        },
-        "fusion.bend_edge": {
-            "body_ref": "ChapaSM",
-            "edge_ids": [3],
-            "angle_deg": "AnguloBend",
-            "radius_mm": 2.0,
-        },
-        "fusion.unbend": {"body_ref": "ChapaSM"},
-        "fusion.rebend": {"body_ref": "ChapaSM", "face_ids": [0, 1]},
+    removidas = {
+        "fusion.convert_to_sheet_metal",
+        "fusion.flange_edge",
+        "fusion.bend_edge",
+        "fusion.unbend",
+        "fusion.rebend",
     }
-
-    for tool, args in cases.items():
-        assert tool in FUSION_SCRIPT_TOOLS, f"{tool} ausente em FUSION_SCRIPT_TOOLS"
-        assert tool in FUSION_TOOLS, f"{tool} ausente em FUSION_TOOLS"
-        assert tool in PLANNER_TOOLSET, f"{tool} ausente em PLANNER_TOOLSET"
-        desc = descriptor(tool)
-        assert desc is not None and desc.category.value == "mutative"
-        script = build_autodesk_fusion_script(tool_name=tool, arguments=args)
-        ast.parse(script)
-        assert f'TOOL_NAME = "{tool}"' in script
-        # Cada handler deve marcar is_sheet_metal no payload de sucesso.
-        assert '"is_sheet_metal"' in script, f"{tool} sem flag is_sheet_metal"
+    for tool in removidas:
+        assert tool not in FUSION_SCRIPT_TOOLS, f"{tool} voltou ao adapter"
+        assert tool not in FUSION_TOOLS, f"{tool} voltou ao registry"
+        assert tool not in PLANNER_TOOLSET, f"{tool} voltou ao toolset do planner"
 
 
 def test_smoke_carenagem_flow_compiles_end_to_end() -> None:

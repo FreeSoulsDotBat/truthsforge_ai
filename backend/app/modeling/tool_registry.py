@@ -404,13 +404,13 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "fusion.trim_surface",
         _FUSION,
         _MUT,
-        "Apara SurfaceBody com ferramenta (sketch/face/surface); keep=largest default — Fase 5 T5.2a.",
+        "Apara SurfaceBody com ferramenta (sketch/face); keep=largest — Fase 5 T5.2a.",
     ),
     _t(
         "fusion.extend_surface",
         _FUSION,
         _MUT,
-        "Estende SurfaceBody ao longo de arestas livres (natural/perpendicular/tangent) — Fase 5 T5.2b.",
+        "Estende SurfaceBody ao longo de arestas livres — Fase 5 T5.2b.",
     ),
     _t(
         "fusion.offset_surface",
@@ -424,36 +424,10 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         _MUT,
         "Quebra body em superfícies individuais por face — inverso do stitch — Fase 5 T5.2f.",
     ),
-    _t(
-        "fusion.convert_to_sheet_metal",
-        _FUSION,
-        _MUT,
-        "Converte BRepBody sólido fino em SheetMetal Component — Fase 6 T6.1.",
-    ),
-    _t(
-        "fusion.flange_edge",
-        _FUSION,
-        _MUT,
-        "Cria flange em aresta(s) de sheet metal (altura + ângulo) — Fase 6 T6.2.",
-    ),
-    _t(
-        "fusion.bend_edge",
-        _FUSION,
-        _MUT,
-        "Aplica bend em aresta interior de chapa (ângulo + raio) — Fase 6 T6.3.",
-    ),
-    _t(
-        "fusion.unbend",
-        _FUSION,
-        _MUT,
-        "Achata bends de sheet metal (flat pattern) — Fase 6 T6.4.",
-    ),
-    _t(
-        "fusion.rebend",
-        _FUSION,
-        _MUT,
-        "Re-aplica bends previamente unbended — Fase 6 T6.5.",
-    ),
+    # Fase 6 (sheet metal) REMOVIDA — a API Python do Fusion não expõe o
+    # workflow (só flangeFeatures read-only; sem convert/bend/unbend/rebend).
+    # Ver DT-011 e micro/fase-6-sheet-metal.md. Reintroduzir só se a Autodesk
+    # expor a API.
     _t(
         "fusion.move_body",
         _FUSION,

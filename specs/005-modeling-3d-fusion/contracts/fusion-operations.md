@@ -129,11 +129,7 @@ obrigatória**). Ver AGENTS.md / ADR.
 | `thicken_surface` | mutative | `ThickenFeatures.createInput(surfaces, thickness, isSymmetric, op, isChainSelection)` | ✅ T5.2d — **validado Fusion real** |
 | `stitch_surfaces` | mutative | `StitchFeatures.createInput(surfaces, tolerance, op)` | ✅ T5.2e — **validado Fusion real** (fecha volume → sólido) |
 | `unstitch_surface` | mutative | `UnstitchFeatures.add(faces, isChainSelection, isSplit)` (sem createInput) | ✅ T5.2f — **validado Fusion real** |
-| `convert_to_sheet_metal` | mutative | `ConvertToSheetMetalFeatures.createInput(bodies)` (+ thickness opcional) | ✅ T6.1 |
-| `flange_edge` | mutative | `FlangeFeatures.createInput(edges)` + `.height`/`.angle` | ✅ T6.2 |
-| `bend_edge` | mutative | `BendFeatures.createInput(edges, angle, radius)` | ✅ T6.3 |
-| `unbend` | mutative | `UnbendFeatures.createInput(faces, isRoot)` | ✅ T6.4 |
-| `rebend` | mutative | `RebendFeatures.createInput(faces)` | ✅ T6.5 |
+| ~~sheet metal (5 tools)~~ | — | ❌ **REMOVIDAS (DT-011)** — API Python do Fusion não expõe sheet metal (só `flangeFeatures` read-only; sem convert/bend/unbend/rebend). Gate 2026-05-29. | — |
 
 ## 3. Operações em detalhe
 
