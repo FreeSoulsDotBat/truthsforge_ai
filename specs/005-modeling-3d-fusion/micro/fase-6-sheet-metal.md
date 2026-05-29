@@ -42,6 +42,40 @@ Cobrir o workspace **Sheet Metal** do Fusion: regras de chapa (espessura, raio d
 
 - **Regras de chapa específicas** (material/processo) → parametrização extensa. Mitigação: começar com regra default + override; expandir conforme demanda do dono.
 
+## ⛔ ACHADO DE GATE (2026-05-29): API do Fusion NÃO suporta sheet metal
+
+Validação autônoma no Fusion real (introspecção via probe direto no adapter)
+revelou que a **API Python do Fusion 360 (versão do dono) não expõe o workflow
+de sheet metal**:
+
+- `rootComponent.features` → **só `flangeFeatures`** (sheet metal). E
+  `FlangeFeatures` é uma **coleção read-only**: métodos `cast/count/isValid/
+  item/itemByName/objectType` — **sem `add` nem `createInput`**. Não dá pra
+  *criar* flange via API.
+- **Não existem** `convertToSheetMetalFeatures`, `bendFeatures`,
+  `unbendFeatures`, `rebendFeatures`.
+- `design` expõe só `designSheetMetalRules`/`librarySheetMetalRules`;
+  `rootComponent` só `activeSheetMetalRule`. Nada de criar base/flat-pattern.
+- `features` de criação disponíveis: `baseFeatures`, `meshConvertFeatures` —
+  nenhuma serve para sheet metal.
+
+**Conclusão:** as 5 tools T6.1–T6.5 (convert/flange/bend/unbend/rebend) foram
+implementadas contra métodos **inexistentes** na API. Sheet metal é
+majoritariamente **UI-only** no Fusion; não há workaround dentro da allowlist
+(ADR-019) porque a plataforma não oferece os métodos. **DT-011** (nova): Fase 6
+bloqueada por teto da plataforma.
+
+**Decisão do dono pendente** (opções):
+1. **Remover** as 5 tools da allowlist (`tool_registry`/`tool_schemas`/dispatch)
+   — não expor ao planner o que sempre falha (evita planos mortos). Marcar Fase 6
+   como bloqueada no roadmap.
+2. **Reescopar** Fase 6 para "chapa dobrada aproximada via sólido" (extrude +
+   chanfros/dobras manuais como sólido comum) — não é sheet metal verdadeiro
+   (sem flat-pattern/DXF), mas cobre impressão 3D de peças tipo chapa.
+3. **Adiar** Fase 6 indefinidamente e seguir para Fase 7/8.
+
+Recomendação: (1) + documentar; reescopo (2) só se o dono tiver caso real.
+
 ## Definição de pronto (Fase 6)
 
 - [x] **T6.1–T6.5** — 5 tools de sheet metal (convert_to_sheet_metal, flange_edge, bend_edge, unbend, rebend) registradas, schemas, dispatch, e teste `test_sheet_metal_tools_registered_and_compile` verde.
