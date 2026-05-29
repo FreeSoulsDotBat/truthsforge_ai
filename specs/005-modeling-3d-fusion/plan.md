@@ -94,34 +94,35 @@ Cada fase = um ou mais PRs com testes CI verdes + docs atualizadas, encerrada po
 - **Fase 3 — Edição manual (read-back/reconciliação sob demanda)**
   Antes de planejar edição, ler timeline+geometria atuais e reconciliar. _Gate:_ dono altera à mão e o motor continua corretamente.
 
-- **Fases 4+ — Cobertura "todo o Design" em ondas** (cada uma com micro-plano + gate):
-  1. **4** — Parametrização real completa + selectors finos + features de sólido restantes (consolida G1.2/G2/G3). _Gate:_ Nível 1 aprofundado.
-  2. **5** — Superfícies (NURBS). _Gate:_ Nível 2.
-  3. **6** — Sheet metal. _Gate:_ Nível 3.
-  4. **7** — Sculpt / T-Spline. _Gate:_ Nível 4.
-  5. **8** — Assemblies/componentes/juntas/materiais _(ADR-018; muda data model do plano, selectors/refs, UI do card, printability/export por componente)_. _Gate:_ Nível 5.
+- **Fase 4 — Parametrização real + selectors + features de sólido** ✅ validado (DT-002 fechado no Fusion real; G1/G2/G3 + stable_id de body).
+- **Fase 5 — Superfícies (NURBS)** ✅ validado autônomo no Fusion real (revolve/patch/stitch/thicken/offset/extend/unstitch; `trim` known-issue).
 
-- **Fase 9 — Determinismo da interpretação do LLM** _(defesa em camadas; nasceu da Fase 4)_
-  Reduzir a variabilidade do planner contra o adapter por **camadas determinísticas**, na ordem de robustez × custo. Nudges são prompt engineering (fracos); aqui o objetivo é travar o comportamento sem depender da boa vontade do modelo. Frentes:
-  1. **Structured Outputs / function calling estritos** — declarar JSON Schema das tools allowlistadas pra que o provedor force a saída a casar com o contrato. Elimina campos-fantasma (`target_face`, `face:`, `bounding_box`, `axis_line`) na origem.
-  2. **Sanitizer determinístico pós-LLM** — camada entre planner e executor que: faz strip de campos não-allowlistados com log de warning (telemetria); normaliza aliases (`axis_line` → `axis`); detecta padrões simétricos (N instâncias da mesma feature com posições) e força mirror das coordenadas; infere unidade de expressão (generaliza o Fix C).
-  3. **Retry agêntico com guidance específica** — em vez de só mostrar o erro ao humano quando o execute falha, realimentar o LLM com o erro + campo problemático + correção esperada (reuso do `agent_loop.py`/`build_correction_context` já absorvidos, plugados no fluxo de pós-execução).
-  4. **Verifier LLM opcional** (planos críticos / >N steps) — segundo prompt valida o plano contra checklist (simetria, parametrização, campos válidos) antes de executar. Caro; ligar via flag.
-  5. **Templates / few-shots por padrão frequente** — quando dados de uso indicarem padrões recorrentes (ex.: "placa com N furos retangulares"), oferecer macro template parametrizado. LLM preenche slots, não inventa estrutura.
+> **REPLAN (2026-05-29) — de "cobertura de workspaces" para "capacidades".** Os gates mostraram que (a) o núcleo de criação de sólidos + superfícies está robusto, e (b) **sheet metal e sculpt são bloqueados pela API do Fusion** (UI-only; ver DT-011/DT-012). O dono reorientou o objetivo: **gerar sólidos mecânicos complexos por chat** (peças com mecanismos), medido por 4 capacidades, não por cobertura de workspaces. As fases de cobertura 6/7/8 são substituídas por **frentes de capacidade F1–F6**. Detalhe vivo nos micro-planos.
 
-  Telemetria: medir taxa de campos-fantasma e retries por step antes/depois de cada camada. _Gate:_ rodar os cenários A/B/C da Fase 4 em sequência **sem ajuste manual de prompt** e validar redução mensurável da variabilidade no Fusion real.
+- **Fase 6 — Sheet metal** ⛔ **CONGELADA** — bloqueada pela API Python do Fusion (DT-011; só `flangeFeatures` read-only). Tools removidas. Reabrir só se a Autodesk expor a API.
+- **Fase 7 — Sculpt / T-Spline** ⛔ **CONGELADA** — Form/Sculpt exige direct-mode (sem timeline) e a API não expõe criação de T-Spline parametricamente (DT-012). Fora do foco do dono (peças são sólidos). Alternativa de forma orgânica = superfícies NURBS (Fase 5, já temos).
 
-- **Fase final — QA, docs e handoff** consolidados (cada fase já entrega docs incrementais; aqui se fecham diagramas, `delivery-checklist` e handoff). Inclui a **reconciliação documental v2/v3→v4** catalogada na Fase 0 (remover `safe_auto` e endpoints removidos de `docs/api.md`/`docs/3d-mcp-modeling.md`, marcar 27182/stdio como legado, superar ADR-012/013 com 017/018) e a criação de uma **categoria/landing 3D no Docusaurus** cobrindo os 5 níveis e o servidor MCP (RNF-007).
+### Frentes de capacidade (substituem a cobertura 6/7/8)
 
-> **Ordem aprovada pelo dono:** MCP standalone (Fase 1) antes do núcleo agêntico (Fase 2); Fase 0 reabre assemblies. As fases 4–8 são ondas de cobertura e podem ser reordenadas conforme a demanda real do dono. **Fase 9 fica por último entre as ondas** (depois de 8 e antes da F) — só faz sentido depois que a cobertura está estável, pra mensurar redução real de variabilidade.
+Cada frente = micro-plano just-in-time + gate no Fusion real. Capacidades-alvo: **P1** peças mecânicas funcionais (dobradiça/knuckle, parafuso, suporte articulado), **P2** planejamento minucioso + estado rico entre etapas, **P3** image-to-model, **P4** edição robusta com contexto.
+
+- **F1 — Estado rico do modelo** _(fundação; começa aqui)_: `entityToken` de face/edge no `query_geometry` + topologia (adjacências, raio/eixo), selectors por token estável, e um `ModelState` estruturado capturado pós-execução e injetado no contexto do planner entre etapas. Destrava P1/P2/P4. _Gate:_ body→fillet→re-query: token de face não-tocada sobrevive; fillet por `face_tokens` acerta a face.
+- **F2 — Planejamento agêntico/hierárquico** _(com F1)_: decompor o pedido em sub-objetivos e rodar loop planejar→executar→observar(ModelState)→replanejar, em vez de one-shot flat. Reusa o `ModelingAgentLoop`. Atrás de flag `modeling_hierarchical_planning_enabled`. _Gate:_ parafuso que ENCAIXA (furo da fêmea planejado com diâmetro real medido do macho).
+- **F3 — Mecanismos funcionais** _(P1)_: tools `thread` (`ThreadFeatures` Modeled), `joint` (revolute/rigid/slider), componentes/ocorrências; **biblioteca de macros paramétricas** (`knuckle_hinge`, `metric_screw`, `snap_fit`) como tools de alto nível determinísticas. _Gates:_ caixa+tampa knuckle que abre, parafuso, suporte de monitor.
+- **F4 — Image-to-model** _(P3)_: estender o gateway LLM para multimodal, implementar `attachment_analyzer._call_vision` real, pipeline imagem→entendimento→plano (reusa F2). _Gate:_ foto → peça fiel.
+- **F5 — Edição robusta com contexto** _(P4)_: evolui a Fase 3 sobre o `ModelState` (F1) + reconciliação estruturada. _Gate:_ editar peça pronta via contexto.
+- **F6 — Determinismo do LLM** _(ex-Fase 9; suporte transversal)_: Structured Outputs + sanitizer determinístico + retry agêntico com guidance + verifier opcional + templates. Permeia F2/F3. Pode entrar cedo. _Gate:_ cenários reproduzíveis sem ajuste manual de prompt. (ADR-020.)
+
+- **Fase final — QA, docs e handoff** consolidados: regressão das capacidades validadas, reconciliação documental v2/v3→v4 (remover `safe_auto`/endpoints mortos, superar ADR-012/013 com 017/018), landing 3D no Docusaurus (RNF-007).
+
+> **Ordem aprovada pelo dono (2026-05-29):** **F1+F2 primeiro** (fundação), validada com 1 mecanismo real; os 3 exemplos (caixa+tampa knuckle, parafuso, suporte) viram **gates oficiais**. Depois F3 (mecanismos) → F4 (vision) / F5 (edição) → F6 permeando. **Sem rede neural** (LLM multimodal + orquestração + macros + verificação geométrica).
 
 ## Sequenciamento
 
-- 0 → 1 → 2 → 3 são sequenciais (cada uma depende da anterior e do gate).
-- 4–8 dependem de 0–3 prontas; entre si são ondas paralelizáveis em planejamento, mas entregues uma a uma com gate (ordenação default por valor/risco; ajustável).
-- 9 vem depois de 8 (cobertura estável é pré-requisito pra medir variabilidade); F (QA/docs final) fecha a frente.
-- ADR-017 precede Fase 1; ADR-018 precede Fase 8 (rascunhados na Fase 0).
-- Fase 9 exigirá um ADR próprio (ADR-020 — Structured Outputs + sanitizer + retry agêntico) rascunhado no micro-plano da fase.
+- 0 → 1 → 2 → 3 sequenciais (feitas; Fase 1 gate adiado). 4, 5 ✅ validadas.
+- 6, 7 ⛔ congeladas (API). 8 (assemblies) absorvida pela F3 (mecanismos/joints/componentes sob demanda dos gates).
+- **F1 → F2** (fundação) primeiro; F3/F4/F5 dependem de F1+F2; F6 permeia.
+- ADRs: ADR-017 (Fase 1, feito), ADR-019 (script boundary, feito); **ADR-021** (estado rico + planejamento hierárquico, F1/F2) e **ADR-020** (determinismo, F6) a rascunhar nos micro-planos.
 
 ## Validação
 

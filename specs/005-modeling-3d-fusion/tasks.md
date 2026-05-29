@@ -27,12 +27,23 @@ Além do gate do dono, nenhuma fase fecha sem cumprir as **Regras transversais**
 | 1 | Servidor MCP standalone (ADR-017) | [`micro/fase-1-mcp-standalone.md`](./micro/fase-1-mcp-standalone.md) | `[~]` | Código + CI ✅; **aguardando gate do dono**: cliente externo conecta + smoke de tools no Fusion real |
 | 2 | Núcleo agêntico (loop + verificação + persistência + observabilidade) | [`micro/fase-2-nucleo-agentico.md`](./micro/fase-2-nucleo-agentico.md) | `[~]` | Estrutural ✅; **loop agêntico VALIDADO end-to-end no Fusion real (2026-05-29)**: cubo+fillet 16mm impossível → corretor LLM reduziu p/ 8mm+vertical → completed (Gate 4). Falta: snapshot nativo (DT-005, `rollback_skipped`) + read-back geométrico fiado no loop em peça real |
 | 3 | Edição manual (read-back/reconciliação) | [`micro/fase-3-edicao-manual.md`](./micro/fase-3-edicao-manual.md) | `[x]` | ✅ **Gate do dono APROVADO (2026-05-26)**: edição à mão + reconciliação + "Desfazer última edição" reverteu no Fusion real. Código T3.1–T3.6 + testes verdes. Achados do gate corrigidos (envelope HTTP, `kind` no metadata do chat, `query_timeline` fora do planner, rollback em edição falha, `deleteMe` robusto). |
-| 4 | Parametrização real + selectors + features de sólido | [`micro/fase-4-param-selectors-solido.md`](./micro/fase-4-param-selectors-solido.md) | `[ ]` | Nível 1 aprofundado |
+| 4 | Parametrização real + selectors + features de sólido | [`micro/fase-4-param-selectors-solido.md`](./micro/fase-4-param-selectors-solido.md) | `[x]` | ✅ **DT-002 validado no Fusion real (2026-05-29)**: placa paramétrica recomputou 120→160; stable_id de body. Resíduo: posição de furo paramétrica (G1.2 estendido) |
 | 5 | Superfícies (NURBS) | [`micro/fase-5-superficies.md`](./micro/fase-5-superficies.md) | `[~]` | **Validado autônomo no Fusion real (2026-05-29)**: revolve_surface/patch/stitch→sólido/thicken/offset/extend/unstitch/query+stable_id ✅ (3 bugs corrigidos no caminho); `trim` known-issue (cells). Falta aprovação visual do dono na UI |
-| 6 | Sheet metal | [`micro/fase-6-sheet-metal.md`](./micro/fase-6-sheet-metal.md) | `[!]` | ⛔ **BLOQUEADA por API** (gate 2026-05-29): API Python do Fusion não suporta sheet metal (só `flangeFeatures` read-only; sem convert/bend/unbend). DT-011. Decisão de escopo do dono pendente |
-| 7 | Sculpt / T-Spline | [`micro/fase-7-sculpt.md`](./micro/fase-7-sculpt.md) | `[ ]` | Nível 4 |
-| 8 | Assemblies / componentes / juntas / materiais (ADR-018) | [`micro/fase-8-assemblies.md`](./micro/fase-8-assemblies.md) | `[ ]` | Nível 5 |
-| 9 | Determinismo do LLM (Structured Outputs + sanitizer + retry agêntico) | [`micro/fase-9-llm-determinism.md`](./micro/fase-9-llm-determinism.md) | `[ ]` | Cenários A/B/C reexecutados sem ajuste manual de prompt; redução mensurável de variabilidade |
+| 6 | Sheet metal | [`micro/fase-6-sheet-metal.md`](./micro/fase-6-sheet-metal.md) | `[!]` | ⛔ **CONGELADA — bloqueada por API** (DT-011): Fusion Python só expõe `flangeFeatures` read-only. Tools removidas. Reabrir só se a Autodesk expor a API |
+| 7 | Sculpt / T-Spline | [`micro/fase-7-sculpt.md`](./micro/fase-7-sculpt.md) | `[!]` | ⛔ **CONGELADA — bloqueada por API** (DT-012): Form/Sculpt exige direct-mode (sem timeline) e a API não cria T-Spline parametricamente. Fora do foco (sólidos). Forma orgânica = NURBS (Fase 5) |
+
+## Frentes de capacidade (REPLAN 2026-05-29 — substituem cobertura 8/9)
+
+> Reorientação de "cobertura de workspaces" para **capacidades de sólidos mecânicos** (ver [`plan.md`](./plan.md) › Frentes de capacidade). Objetivo: P1 peças mecânicas funcionais, P2 planejamento minucioso + estado rico entre etapas, P3 image-to-model, P4 edição robusta. Gates oficiais = caixa+tampa knuckle, parafuso, suporte de monitor.
+
+| Frente | Tema | Micro-plano | Status | Gate (dono valida no Fusion real) |
+|---|---|---|---|---|
+| F1 | Estado rico do modelo (entityToken face/edge + ModelState entre etapas) | [`micro/fase-F1-estado-rico.md`](./micro/fase-F1-estado-rico.md) | `[~]` | body→fillet→re-query: token de face não-tocada sobrevive; fillet por `face_tokens` acerta |
+| F2 | Planejamento agêntico/hierárquico (decompõe→executa→observa→replaneja) | [`micro/fase-F2-planejamento-agentico.md`](./micro/fase-F2-planejamento-agentico.md) | `[ ]` | parafuso que encaixa (furo da fêmea com diâmetro real medido do macho) |
+| F3 | Mecanismos funcionais (thread/joint/componentes + macros knuckle/screw/snap_fit) | _just-in-time_ | `[ ]` | caixa+tampa knuckle que abre · parafuso · suporte de monitor |
+| F4 | Image-to-model (gateway multimodal + vision real) | _just-in-time_ | `[ ]` | foto → peça fiel |
+| F5 | Edição robusta com contexto (evolui Fase 3 sobre ModelState) | _just-in-time_ | `[ ]` | editar peça pronta via contexto prévio |
+| F6 | Determinismo do LLM (ex-Fase 9; Structured Outputs + sanitizer + retry) | [`micro/fase-9-llm-determinism.md`](./micro/fase-9-llm-determinism.md) | `[ ]` | cenários reproduzíveis sem ajuste manual de prompt (ADR-020) |
 | F | QA, docs e handoff finais | [`micro/fase-final-qa-docs.md`](./micro/fase-final-qa-docs.md) | `[ ]` | Checklist de entrega completo |
 
 ## Fase 0 — itens (detalhe em `micro/fase-0-specs-auditoria.md`)

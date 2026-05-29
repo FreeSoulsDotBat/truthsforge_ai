@@ -160,3 +160,25 @@ As APIs de junta do Fusion são complexas e **version-sensitive** (risco G5). Po
 Isso respeita **RF-023** (sem script livre/shell/destrutivo no caminho feliz) na letra e no espírito.
 
 **Consequências.** O gerador `fusion_mcp_scripts.py` permanece uma **fronteira controlada** (veredito `evoluir`: refatorar a forma — f-string de ~2,5k linhas — sem afrouxar a fronteira). Qualquer mudança que permita conteúdo **não-backend** chegar ao `featureType:"script"` é violação de nível constitucional (P6/P8). O **gap de auth do loopback** (DT-009) é defeito a corrigir na Fase 1 junto com ADR-017.
+
+## ADR-021 - Estado rico do modelo + planejamento agêntico/hierárquico (replan v4)
+
+**Status: Aceito (2026-05-29).** Referências: P3, P8; spec 005 (capacidades P1–P4). Origem: replan de "cobertura de workspaces" para "capacidades de sólidos mecânicos".
+
+**Contexto.** Os gates de 2026-05-28/29 validaram o núcleo (criação de sólidos+superfícies, loop agêntico, edição, parametrização) mas expuseram que **gerar peças mecânicas complexas** (dobradiça/knuckle, parafuso que encaixa, suporte articulado) esbarra numa **fundação rasa**, não em features faltando: (a) `query_geometry` só dá índices posicionais frágeis de face/edge; (b) o contexto entre etapas do plano é **textual** (nomes de timeline/params), não geométrico; (c) o planejamento é **one-shot e flat**. O planner não sabe *onde* colar a dobradiça nem mede o estado real entre passos.
+
+**Decisão.**
+1. **Identidade estável** de face/edge via `BRepFace.entityToken`/`BRepEdge.entityToken` (sobrevivem a recompute), expostos no `query_geometry` e aceitos pelos selectors (precedência token > índice posicional > selector semântico). (Rejeitado anexar attribute por face — não sobrevive a operações que recriam BRep.)
+2. **`ModelState` estruturado** persistido em `ModelingPlan.model_state` (JSONB), capturado pós-execução via probe `query_geometry` e injetado no contexto do planner entre etapas e em edições.
+3. **Planejamento hierárquico** (atrás de flag `modeling_hierarchical_planning_enabled`): o LLM decompõe o pedido em sub-objetivos e planeja cada bloco fino **observando o `ModelState` real** do bloco anterior (loop decompor→executar→observar→replanejar), reusando o `ModelingAgentLoop` para correção de step.
+
+**Consequências.** Backward-compat total (flags OFF = comportamento atual; campos aditivos). Custo: 1 probe `query_geometry` por plano + chamadas LLM extras no modo hierárquico. **Sem rede neural** — a robustez vem de estado rico + orquestração agêntica + verificação geométrica + (F3) biblioteca de macros paramétricas. Implementação nas frentes **F1** (`micro/fase-F1-estado-rico.md`) e **F2** (`micro/fase-F2-planejamento-agentico.md`).
+
+## DT-011 / DT-012 - Bloqueios de plataforma (sheet metal e sculpt)
+
+**Status: Confirmado no Fusion real (2026-05-29).**
+
+- **DT-011 — Sheet metal.** A API Python do Fusion expõe só `flangeFeatures` (coleção **read-only**, sem `add`/`createInput`); `convertToSheetMetalFeatures`/`bend`/`unbend`/`rebend` **não existem**. Sheet metal é UI-only na API → **Fase 6 congelada**; as 5 tools implementadas foram **removidas** (commit `877ac23`) para não deixar o planner escolher tools mortas.
+- **DT-012 — Sculpt/T-Spline.** O workspace Form/Sculpt exige **direct mode** (timeline desabilitado), conflitando com o pipeline parametric/timeline-based; a API não expõe criação de T-Spline como feature (só "base features, sketches, combine" são custom-computáveis) → **Fase 7 congelada**. Forma orgânica é coberta por superfícies NURBS (Fase 5).
+
+Ambos reabrem **apenas** se a Autodesk expor as APIs correspondentes ao Python parametricamente. Não são defeitos do produto — são tetos da plataforma, documentados para não serem reimplementados às cegas.

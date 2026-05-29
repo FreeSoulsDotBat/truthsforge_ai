@@ -2,6 +2,9 @@
 
 **Fase**: 7 | **Spec**: [`../spec.md`](../spec.md) (RF-016 sculpt) | **Macro**: [`../plan.md`](../plan.md) | **Índice**: [`../tasks.md`](../tasks.md)
 
+> ⛔ **CONGELADA (2026-05-29) — bloqueada pela plataforma (DT-012).** Investigação de viabilidade da API durante o replan: o workspace **Form/Sculpt exige direct modeling mode** (timeline desabilitado, "Do Not Capture Design History") — conflita com o nosso pipeline parametric/timeline-based — **e a API Python do Fusion não expõe criação de T-Spline como feature** (só "base features, sketches, combine" são custom-computáveis). Mesmo teto de plataforma do sheet metal (DT-011). Além disso, o dono reorientou o foco para **sólidos mecânicos** (ver replan no `plan.md` › Frentes de capacidade) — sculpt está fora do escopo. **Forma orgânica**, quando necessária, é coberta por **superfícies NURBS (Fase 5, já validada)**. Não implementar; reabrir só se a Autodesk expor a API de Form parametricamente.
+
+> _(Histórico abaixo: escopo planejado quando a Fase 7 era onda de cobertura.)_
 > **Depende de**: Fase 6. Onda de cobertura. É a de **verificação mais difícil** (forma orgânica).
 
 ## Objetivo
