@@ -42,9 +42,24 @@ Dar ao planner **olhos e memória** sobre o modelo: identidade estável de face/
 - **Mock**: `test_model_state.py` (parser tolerante + render com tokens/cilíndricas); `capture_model_state` popula `plan.model_state` via `_ScriptedExecutor`; suíte verde.
 - **Gate (Fusion real, autônomo via probe)**: criar body → fillet → re-`query_geometry`: face não-tocada permanece resolvível pelo MESMO token; selecionar fillet por `face_tokens` acerta a face certa; aresta consumida → erro claro `fusion.edge_token_stale`.
 
+## Resultado do gate (2026-05-29 — Fusion real, autônomo via probe)
+
+✅ **F1 VALIDADO.** `query_geometry` expõe `face_token`/`edge_token`; **fillet por
+`edge_token`** (capturar no query → usar no passo seguinte) funcionou; **token de
+corpo intocado sobrevive** a operação em outro corpo; **token inválido → erro
+claro** `fusion.edge_token_stale` (não cai mudo). 426 testes mock verdes.
+
+**Aprendizado (documentar p/ F2):** `entityToken` é estável para entidades **não
+tocadas**, mas uma face/aresta **recriada por uma feature ganha novo token** (ex.:
+fillet de canto recria as faces laterais). Implicação: o planner deve **re-query
+após operações que recriam geometria** — não confiar em tokens antigos cegamente.
+É exatamente o que a F2 faz (observa o `ModelState` ATUAL entre blocos via
+`capture_model_state`). Por isso a captura roda pós-execução, não só uma vez.
+
 ## Definição de pronto (F1)
 
-- [ ] `query_geometry` expõe tokens + topologia (T1.1/T1.2).
-- [ ] Selectors por token com precedência correta (T1.3).
-- [ ] `ModelState` capturado e injetado entre etapas (T1.4–T1.7).
-- [ ] Testes verdes; gate de estabilidade de token aprovado no Fusion real.
+- [x] `query_geometry` expõe tokens + topologia (T1.1/T1.2).
+- [x] Selectors por token com precedência correta (T1.3) — fillet/chamfer/shell (sólido).
+- [x] `ModelState` capturado e injetado entre etapas (T1.4–T1.7).
+- [x] Testes verdes (426); **gate de estabilidade de token aprovado no Fusion real**.
+- [ ] _Follow-up_: selectors por token em patch/extend/offset/unstitch (superfície) — sob demanda da F3.
