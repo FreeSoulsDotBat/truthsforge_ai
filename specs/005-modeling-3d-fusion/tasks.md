@@ -39,7 +39,7 @@ Além do gate do dono, nenhuma fase fecha sem cumprir as **Regras transversais**
 | Frente | Tema | Micro-plano | Status | Gate (dono valida no Fusion real) |
 |---|---|---|---|---|
 | F1 | Estado rico do modelo (entityToken face/edge + ModelState entre etapas) | [`micro/fase-F1-estado-rico.md`](./micro/fase-F1-estado-rico.md) | `[x]` | ✅ **Gate Fusion real APROVADO (2026-05-29)**: fillet por edge_token (query→uso), token de corpo intocado sobrevive, stale→erro claro. 426 testes. Aprendizado: re-query após features que recriam geometria |
-| F2 | Planejamento agêntico/hierárquico (decompõe→executa→observa→replaneja) | [`micro/fase-F2-planejamento-agentico.md`](./micro/fase-F2-planejamento-agentico.md) | `[ ]` | parafuso que encaixa (furo da fêmea com diâmetro real medido do macho) |
+| F2 | Planejamento agêntico/hierárquico (decompõe→executa→observa→replaneja) | [`micro/fase-F2-planejamento-agentico.md`](./micro/fase-F2-planejamento-agentico.md) | `[x]` | ✅ **Gate Fusion+LLM APROVADO (2026-05-29)**: decompôs em 4 sub-objetivos; furo Ø10 e pino Ø10 com MESMO raio (encaixe via ModelState entre blocos). 429 testes |
 | F3 | Mecanismos funcionais (thread/joint/componentes + macros knuckle/screw/snap_fit) | _just-in-time_ | `[ ]` | caixa+tampa knuckle que abre · parafuso · suporte de monitor |
 | F4 | Image-to-model (gateway multimodal + vision real) | _just-in-time_ | `[ ]` | foto → peça fiel |
 | F5 | Edição robusta com contexto (evolui Fase 3 sobre ModelState) | _just-in-time_ | `[ ]` | editar peça pronta via contexto prévio |

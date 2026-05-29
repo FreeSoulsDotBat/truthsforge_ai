@@ -51,9 +51,21 @@ agrega ModelingExecutionResult
 - **Mock**: `test_hierarchical_planning.py` com `_ScriptedExecutor`+`_FakeGateway`; verificar que `ModelingAgentLoop` roda por bloco; flag OFF intacto.
 - **Gate (Fusion real)**: **parafuso que ENCAIXA** — knuckle/pino macho medido via `ModelState` → furo da fêmea planejado com diâmetro real (trace mostra `planner.decomposed` + `orchestrator.block_replanned`).
 
+## Resultado do gate (2026-05-29 — Fusion real + LLM, autônomo)
+
+✅ **F2 VALIDADO — o encaixe funcionou.** Smoke com flags ON (`_gate_f2.py`):
+pedido "bloco 40×40×20 com furo Ø10 + pino que encaixa" → o LLM **decompôs em 4
+sub-objetivos** (bloco → furo Ø10 → pino Ø10×30 → verificação de encaixe), todos
+`completed` como blocos `kind=edit` separados. **ModelState final:** corpo do
+bloco com `raio circular 5.0mm` (furo Ø10) + `Pin_Cylinder` com `raio circular
+5.0mm` (pino Ø10) — **MESMO diâmetro**. O bloco do pino foi planejado vendo o
+ModelState do furo e casou a medida. É P1 (peça mecânica que encaixa) + P2
+(estado real fluindo entre etapas) provados juntos. 429 testes mock verdes.
+
 ## Definição de pronto (F2)
 
-- [ ] Decomposição em sub-objetivos + planejamento lazy por bloco.
-- [ ] Loop observa `ModelState` (F1) entre blocos e replaneja.
-- [ ] Flag OFF preserva o caminho atual (regressão verde).
-- [ ] Gate do parafuso-que-encaixa aprovado no Fusion real.
+- [x] Decomposição em sub-objetivos + planejamento lazy por bloco.
+- [x] Loop observa `ModelState` (F1) entre blocos e planeja o próximo casando a medida real.
+- [x] Flag OFF preserva o caminho atual (regressão verde — `test_run_execution_dispatches...`).
+- [x] **Gate do parafuso/pino-que-encaixa aprovado no Fusion real** (furo Ø10 ↔ pino Ø10).
+- [ ] _Follow-up_: `replan_next_block` explícito (re-planejar um bloco que falhou, hoje aborta) + verifier de aceite via LLM (hoje usa status do bloco). Sob demanda.
