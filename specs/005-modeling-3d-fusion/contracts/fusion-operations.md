@@ -118,17 +118,17 @@ obrigatória**). Ver AGENTS.md / ADR.
 | `validate_dimensions` | read_only | `boundingBox` + `physicalProperties` | ✅ |
 | `validate_printability` | read_only | checks B-Rep | ✅ |
 | `run_script` | high_risk | — | 🚫 **nunca exposto** (ADR-019) |
-| `extrude_profile` `as_surface=true` | mutative | `ExtrudeFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b |
-| `revolve_profile` `as_surface=true` | mutative | `RevolveFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b |
-| `sweep_profile` `as_surface=true` | mutative | `SweepFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b |
+| `extrude_profile` `as_surface=true` | mutative | `ExtrudeFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b — **validado Fusion real** |
+| `revolve_profile` `as_surface=true` | mutative | `RevolveFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b — **validado Fusion real** |
+| `sweep_profile` `as_surface=true` | mutative | `SweepFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b (open profile via `createOpenProfile`) |
 | `loft_profiles` `as_surface=true` | mutative | `LoftFeatures.createInput` + `input.isSolid=False` (aceita open profiles) | ✅ T5.1a/b |
-| `create_surface_patch` | mutative | `PatchFeatures.createInput(boundary, op)` | ✅ T5.1b |
-| `trim_surface` | mutative | `TrimFeatures.createInput(trimming_tool, surface)` + `keep=largest` | ✅ T5.2a |
-| `extend_surface` | mutative | `ExtendFeatures.createInput(edges, distance, extendType)` | ✅ T5.2b |
-| `offset_surface` | mutative | `OffsetFeatures.createInput(face\|surface, distance, op)` | ✅ T5.2c |
-| `thicken_surface` | mutative | `ThickenFeatures.createInput(surfaces, thickness, isSymmetric, op, isChainSelection)` | ✅ T5.2d |
-| `stitch_surfaces` | mutative | `StitchFeatures.createInput(surfaces, tolerance, op)` | ✅ T5.2e |
-| `unstitch_surface` | mutative | `UnstitchFeatures.createInput(faces, isChainSelection)` | ✅ T5.2f |
+| `create_surface_patch` | mutative | `PatchFeatures.createInput(boundary, op)` | ✅ T5.1b — **validado Fusion real** |
+| `trim_surface` | mutative | `TrimFeatures.createInput(trimTool)` (1 arg) + cells por `isRemoved` | ⚠️ T5.2a — createInput corrigido; **seleção de cells a refinar** (`No cells selected` no gate) |
+| `extend_surface` | mutative | `ExtendFeatures.createInput(edges, distance, extendType)` | ✅ T5.2b — **validado Fusion real** (borda aberta) |
+| `offset_surface` | mutative | `OffsetFeatures.createInput(face\|surface, distance, op)` | ✅ T5.2c — **validado Fusion real** |
+| `thicken_surface` | mutative | `ThickenFeatures.createInput(surfaces, thickness, isSymmetric, op, isChainSelection)` | ✅ T5.2d — **validado Fusion real** |
+| `stitch_surfaces` | mutative | `StitchFeatures.createInput(surfaces, tolerance, op)` | ✅ T5.2e — **validado Fusion real** (fecha volume → sólido) |
+| `unstitch_surface` | mutative | `UnstitchFeatures.add(faces, isChainSelection, isSplit)` (sem createInput) | ✅ T5.2f — **validado Fusion real** |
 | `convert_to_sheet_metal` | mutative | `ConvertToSheetMetalFeatures.createInput(bodies)` (+ thickness opcional) | ✅ T6.1 |
 | `flange_edge` | mutative | `FlangeFeatures.createInput(edges)` + `.height`/`.angle` | ✅ T6.2 |
 | `bend_edge` | mutative | `BendFeatures.createInput(edges, angle, radius)` | ✅ T6.3 |
@@ -471,6 +471,29 @@ Esboço do plano que o LLM deve produzir para a carenagem Nível 2 (CS-002):
 
 Vai exigir: open profile no sweep, patch via `edge_ids` de `query_geometry`,
 costura tolerante e thicken simétrico/assimétrico configurável.
+
+### 3.10.11 Status de validação no Fusion real (gate 2026-05-28)
+
+Validado **autonomamente** (probe direto no adapter contra o Fusion do dono,
+sem UI/LLM — `_gate_probe.py`):
+
+- ✅ `revolve_profile as_surface` — exigiu fix: `Sketch` não tem `.openProfiles`;
+  perfil aberto vem de `Component.createOpenProfile(curve, chainCurves)`.
+- ✅ `create_surface_patch` (PatchFeatures) — tampou bordas circulares (π·r²).
+- ✅ `stitch_surfaces` (StitchFeatures) — fechou volume → `is_solid=true`.
+- ✅ `thicken_surface` (ThickenFeatures) — surface→solid.
+- ✅ `offset_surface` (OffsetFeatures).
+- ✅ `extend_surface` (ExtendFeatures) — **só em borda aberta**; borda em loop
+  fechado (círculo) dá `Some input argument is invalid` (esperado).
+- ✅ `unstitch_surface` — exigiu fix: `UnstitchFeatures` não tem `createInput`;
+  usar `.add(faces, isChain, isSplit)` direto.
+- ✅ `query_geometry` estendido (`is_solid`/`is_closed`/`surface_area_mm2`/
+  `free_edge_count`) + `stable_id` (T4.2). Fix: `is_closed = is_solid or
+  free_edge_count==0` (sólido com seam contava 1 free-edge → falso-negativo).
+- ⚠️ `trim_surface` — `createInput` corrigido (1 arg), mas a seleção de cells
+  (`bRepCells`/`isRemoved`) ainda dá `No cells selected`. **Known-issue**:
+  refinar a API de cells + caso geométrico (ferramenta deve atravessar a
+  superfície). Não bloqueia o gate da carenagem (não usa trim).
 
 ## 4. Divergências intencionais vs. API canônica (consolidado)
 

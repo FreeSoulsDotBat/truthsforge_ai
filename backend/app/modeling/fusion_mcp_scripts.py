@@ -2248,6 +2248,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     "trim_surface precisa de surface_ref + trim_tool_ref.",
                 )
             surface_body = _find_body(design, surface_ref)
+            keep = str(args.get("keep") or "largest").lower()
             # tool pode ser body ou sketch — tentamos sketch primeiro pra
             # pegar a curva (mais comum em trim de superficie).
             tool_entity = None
@@ -2258,13 +2259,37 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if tool_entity is None:
                 tool_entity = _find_body(design, tool_ref)
             trims = _root(design).features.trimFeatures
-            inp = trims.createInput(tool_entity, surface_body)
+            # Fix gate (probe extend_trim): TrimFeatures.createInput aceita
+            # APENAS a trimTool (1 arg); a surface a aparar e as celulas vem
+            # do TrimFeatureInput. Selecionamos as celulas a remover por area
+            # (keep=largest mantem a maior, remove as outras) via isRemoved.
+            inp = trims.createInput(tool_entity)
+            removed = 0
+            try:
+                cells = inp.bRepCells
+                if cells is not None and cells.count > 1:
+                    best_i, best_a = 0, -1.0
+                    areas = []
+                    for ci in range(cells.count):
+                        try:
+                            a = cells.item(ci).cellSurface.area
+                        except Exception:
+                            a = 0.0
+                        areas.append(a)
+                        if a > best_a:
+                            best_a, best_i = a, ci
+                    for ci in range(cells.count):
+                        try:
+                            cells.item(ci).isRemoved = ci != best_i
+                            if ci != best_i:
+                                removed += 1
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             feat = trims.add(inp)
-            keep = str(args.get("keep") or "largest").lower()
             body_name = None
             if feat.bodies.count > 0:
-                # T5.2a v1: aceita "largest" via comparacao de area; outras
-                # estrategias (keep=index, keep=face_ids) podem vir depois.
                 target = feat.bodies.item(0)
                 if keep == "largest" and feat.bodies.count > 1:
                     best_area = -1.0
@@ -2428,7 +2453,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # T5.2f (Fase 5): quebra body/SurfaceBody em superficies individuais
             # por face — inverso do stitch. Util para reparar trecho especifico
             # (unstitch -> patch novo -> stitch). API:
-            # unstitchFeatures.createInput(faces, isChainSelection).
+            # unstitchFeatures.add(faces, isChainSelection, isSplitConnected).
             design = _design()
             face_ids = args.get("face_ids") or args.get("faces")
             surface_ref = (
@@ -2463,8 +2488,17 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
             is_chain = bool(args.get("is_chain_selection") or args.get("chain"))
             unstitches = _root(design).features.unstitchFeatures
-            inp = unstitches.createInput(faces_coll, is_chain)
-            feat = unstitches.add(inp)
+            # Fix gate (probe edicao): UnstitchFeatures NAO tem createInput — o
+            # .add() recebe os argumentos direto: add(faces, isChainSelection,
+            # isSplitConnectedSurfaces). Tenta a forma completa e cai p/ formas
+            # mais curtas em versoes diferentes do Fusion.
+            try:
+                feat = unstitches.add(faces_coll, is_chain, False)
+            except Exception:
+                try:
+                    feat = unstitches.add(faces_coll, is_chain)
+                except Exception:
+                    feat = unstitches.add(faces_coll)
             return {{
                 "message": "Unstitch aplicado ({{}} face(s), chain={{}}).".format(
                     faces_coll.count, is_chain
@@ -3314,9 +3348,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                             free_edge_count += 1
                     except Exception:
                         pass
-                # is_closed = True quando todas as arestas tem >= 2 faces (sem
-                # bordas livres) — caracterizacao geometrica de body fechado.
-                is_closed = free_edge_count == 0
+                # is_closed = body solido (fechado por definicao) OU superficie
+                # sem arestas livres. Fix gate: um stitch que fecha volume vira
+                # is_solid=true, mas a seam do revolve 360 pode contar 1 free
+                # edge — sem o "is_solid or", o verifier teria falso-negativo de
+                # is_closed e o loop "corrigiria" uma costura que ja funcionou.
+                is_closed = bool(is_solid) or free_edge_count == 0
                 bodies_out.append({{
                     "body_index": bi,
                     "name": body.name,
