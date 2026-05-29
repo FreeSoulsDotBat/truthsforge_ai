@@ -48,8 +48,10 @@ from app.core.contracts import (
     ModelingPlanCreate,
     ModelingPlanKind,
     ModelingPlannerSource,
+    ModelingSubGoal,
     ModelingTraceLevel,
     ModelingTraceSource,
+    ModelState,
     ProviderName,
 )
 from app.llm_gateway.exceptions import (
@@ -70,6 +72,7 @@ from app.modeling.planner import (
     create_heuristic_plan,
     create_llm_plan,
     create_llm_plan_async,
+    decompose_request,
 )
 from app.modeling.policy import apply_modeling_policy
 
@@ -142,6 +145,77 @@ class ModelingPlannerService:
             update={"planner_source": source, "fallback_reason": fallback_reason}
         )
         return self._persist_plan(plan, source, fallback_reason)
+
+    # ------------------------------------------------------------------
+    # F2: decomposição hierárquica + planejamento por bloco
+    # ------------------------------------------------------------------
+
+    def decompose(self, payload: ModelingPlanCreate) -> list[ModelingSubGoal]:
+        """F2 (T2.2): decompõe o pedido em sub-objetivos via LLM. Fallback
+        gracioso: se o modelo não está disponível ou a chamada falha, retorna
+        um único sub-objetivo = o pedido inteiro (degrada para o fluxo de
+        bloco único, equivalente ao plano one-shot)."""
+
+        model = self._resolve_planner_model()
+        if model is None:
+            return [ModelingSubGoal(seq=1, title="Modelo completo", description=payload.prompt)]
+        try:
+            with self._tracer.record_span(
+                "planner.decompose",
+                source=ModelingTraceSource.backend,
+                payload={"model_id": model.id, "prompt_length": len(payload.prompt or "")},
+            ) as span:
+                sub_goals = decompose_request(payload, gateway=self.gateway, model=model)
+                span.attach({"sub_goal_count": len(sub_goals)})
+            self._tracer.record(
+                "planner.decomposed",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.info,
+                message=f"Decomposto em {len(sub_goals)} sub-objetivo(s).",
+                payload={"titles": [sg.title for sg in sub_goals]},
+            )
+            return sub_goals
+        except Exception as exc:  # noqa: BLE001 - fallback intencional
+            self._classify_and_record_llm_error(exc, model)
+            return [ModelingSubGoal(seq=1, title="Modelo completo", description=payload.prompt)]
+
+    def plan_block_for_subgoal(
+        self,
+        sub_goal: ModelingSubGoal,
+        *,
+        base_payload: ModelingPlanCreate,
+        parent_plan_id: str,
+        model_state: ModelState | None,
+        done_titles: list[str] | None = None,
+    ) -> ModelingPlan:
+        """F2 (T2.4): planeja o bloco de UM sub-objetivo como um plano kind=edit
+        com ``parent_plan_id`` = primary, injetando o ``ModelState`` real
+        (read-back do bloco anterior) + a descrição/critério do sub-objetivo no
+        contexto. Reusa ``create_plan`` (build+persist+fallback heurístico)."""
+
+        from app.modeling.model_state import render_model_state_block
+
+        parts = [f"{sub_goal.title}: {sub_goal.description}".strip()]
+        if sub_goal.acceptance:
+            parts.append(f"Critério de aceitação: {sub_goal.acceptance}")
+        block_prompt = "\n".join(parts)
+
+        context_parts: list[str] = []
+        state_block = render_model_state_block(model_state)
+        if state_block:
+            context_parts.append(state_block)
+        if done_titles:
+            context_parts.append("Sub-objetivos já concluídos: " + ", ".join(done_titles))
+        live_block = "\n\n".join(context_parts) or None
+
+        block_payload = base_payload.model_copy(
+            update={
+                "prompt": block_prompt,
+                "kind": ModelingPlanKind.edit,
+                "parent_plan_id": parent_plan_id,
+            }
+        )
+        return self.create_plan(block_payload, live_state_block=live_block)
 
     async def assess_request_async(
         self,

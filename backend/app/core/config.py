@@ -121,6 +121,17 @@ class Settings(BaseModel):
             in {"1", "true", "yes", "on"}
         )
     )
+    # Planejamento hierárquico/agêntico (Frente F2, replan v4). Quando ``true``,
+    # o orchestrator decompõe o pedido em sub-objetivos e planeja cada bloco
+    # observando o ModelState real (F1) do bloco anterior (decompõe→executa→
+    # observa→replaneja), em vez do plano one-shot. Reusa o ModelingAgentLoop
+    # por baixo. Default OFF (depende do Fusion real + custo extra de LLM).
+    modeling_hierarchical_planning_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_HIERARCHICAL_PLANNING_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",

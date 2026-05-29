@@ -37,6 +37,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.config import settings
 from app.core.contracts import (
     AuditEvent,
     ChatModelingStage,
@@ -52,6 +53,7 @@ from app.core.contracts import (
     ModelingRiskLevel,
     ModelingSoftware,
     ModelingStepStatus,
+    ModelingSubGoalStatus,
     ModelingTraceLevel,
     ModelingTraceSource,
     now_utc,
@@ -87,9 +89,7 @@ def _is_parameter_only_edit(plan: ModelingPlan) -> bool:
     """True se TODOS os steps do plan sao parameter-changes ou read-only."""
     if not plan.steps:
         return False
-    return all(
-        step.tool_name in _NON_TIMELINE_MODIFYING_TOOLS for step in plan.steps
-    )
+    return all(step.tool_name in _NON_TIMELINE_MODIFYING_TOOLS for step in plan.steps)
 
 
 @dataclass
@@ -132,12 +132,117 @@ class ModelingChatOrchestrator:
     def _run_execution(self, plan: ModelingPlan) -> ModelingExecutionResult:
         """Executa um plano aprovado (loop agêntico × executor linear).
 
-        Delegado a ``run_plan_with_optional_loop`` — fonte única compartilhada
-        com ``ModelingService.execute_plan`` (card), para o loop não depender do
-        caminho de execução.
+        F2: quando o planejamento hierárquico está ligado E o plano é primary
+        COM sub-objetivos, despacha para ``_run_execution_hierarchical`` (planeja
+        e executa bloco a bloco observando o ModelState real entre eles). Caso
+        contrário — e para os próprios blocos (kind=edit) — delega a
+        ``run_plan_with_optional_loop`` (fonte única, sem recursão).
         """
 
+        if (
+            settings.modeling_hierarchical_planning_enabled
+            and plan.kind == ModelingPlanKind.primary
+            and plan.sub_goals
+        ):
+            return self._run_execution_hierarchical(plan)
         return run_plan_with_optional_loop(self.executor, self.planner, plan)
+
+    def _run_execution_hierarchical(self, primary: ModelingPlan) -> ModelingExecutionResult:
+        """F2 (T2.5): executa um plano primary decomposto, bloco a bloco.
+
+        Para cada sub-objetivo: planeja o bloco vendo o ModelState corrente
+        (read-back do bloco anterior), executa via ``run_plan_with_optional_loop``
+        (que corrige step a step e captura o ModelState), avalia o aceite
+        (status do bloco) e segue. Se um bloco falha, aborta de forma
+        consistente (não tenta os dependentes). Agrega o resultado no primary.
+        """
+
+        base_payload = ModelingPlanCreate(
+            prompt=primary.prompt,
+            conversation_id=primary.conversation_id,
+            project_id=primary.project_id,
+            software_override=primary.software_choice,
+            knowledge_base_ids=primary.knowledge_base_ids,
+        )
+        current_state = primary.model_state
+        executed: list[str] = []
+        blocked: list[str] = []
+        events: list[str] = []
+        tool_calls: list[str] = []
+        done_titles: list[str] = []
+        sub_goals = [sg.model_copy() for sg in primary.sub_goals]
+        final_status = ModelingPlanStatus.completed
+
+        for sg in sub_goals:
+            self._tracer.record(
+                "orchestrator.block_started",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.info,
+                message=f"Sub-objetivo {sg.seq}: {sg.title}",
+                payload={"sub_goal_id": sg.id, "seq": sg.seq, "title": sg.title},
+                plan_id=primary.id,
+            )
+            block = self.planner.plan_block_for_subgoal(
+                sg,
+                base_payload=base_payload,
+                parent_plan_id=primary.id,
+                model_state=current_state,
+                done_titles=done_titles,
+            )
+            result = run_plan_with_optional_loop(self.executor, self.planner, block)
+            executed.extend(result.executed_step_ids)
+            blocked.extend(result.blocked_step_ids)
+            events.extend(result.events)
+            tool_calls.extend(result.tool_call_ids)
+            current_state = result.plan.model_state or current_state
+            block_ok = result.plan.status == ModelingPlanStatus.completed
+            sg.status = (
+                ModelingSubGoalStatus.completed if block_ok else ModelingSubGoalStatus.failed
+            )
+            sg.block_plan_id = result.plan.id
+            self._tracer.record(
+                "orchestrator.block_observed",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.info if block_ok else ModelingTraceLevel.error,
+                message=f"Sub-objetivo {sg.seq} {'OK' if block_ok else 'FALHOU'}: {sg.title}",
+                payload={
+                    "sub_goal_id": sg.id,
+                    "block_plan_id": result.plan.id,
+                    "status": result.plan.status.value,
+                    "step_count": len(result.plan.steps),
+                },
+                plan_id=primary.id,
+            )
+            if block_ok:
+                done_titles.append(sg.title)
+            else:
+                final_status = ModelingPlanStatus.failed
+                self._tracer.record(
+                    "orchestrator.hierarchical_aborted",
+                    source=ModelingTraceSource.backend,
+                    level=ModelingTraceLevel.error,
+                    message=f"Sub-objetivo '{sg.title}' falhou; abortando os seguintes.",
+                    payload={"sub_goal_id": sg.id, "remaining": len(sub_goals) - sg.seq},
+                    plan_id=primary.id,
+                )
+                break
+
+        updated = primary.model_copy(
+            update={
+                "sub_goals": sub_goals,
+                "status": final_status,
+                "model_state": current_state,
+                "updated_at": now_utc(),
+            }
+        )
+        self.store.upsert_modeling_plan(updated)
+        return ModelingExecutionResult(
+            plan=updated,
+            executed_step_ids=executed,
+            blocked_step_ids=blocked,
+            events=events,
+            tool_call_ids=tool_calls,
+        )
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -228,6 +333,15 @@ class ModelingChatOrchestrator:
             }
         )
         plan = self.planner.create_plan(primary_payload)
+        # F2 (T2.6): no modo hierárquico, anexa a decomposição em sub-objetivos
+        # ao primary (o card a mostra como preview; a execução é bloco a bloco,
+        # ver _run_execution_hierarchical). Os steps one-shot gerados acima
+        # permanecem como fallback (executados só se não houver sub_goals).
+        if settings.modeling_hierarchical_planning_enabled:
+            sub_goals = self.planner.decompose(primary_payload)
+            if sub_goals:
+                plan = plan.model_copy(update={"sub_goals": sub_goals})
+                self.store.upsert_modeling_plan(plan)
         next_stage = transition(chat.modeling_stage, ChatModelingEvent.PLAN_PROPOSED)
         updated = chat.model_copy(
             update={

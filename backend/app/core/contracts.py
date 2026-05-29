@@ -905,6 +905,31 @@ class ModelState(BaseModel):
     parameters: dict[str, str] = Field(default_factory=dict)
 
 
+class ModelingSubGoalStatus(StrEnum):
+    pending = "pending"
+    completed = "completed"
+    failed = "failed"
+
+
+class ModelingSubGoal(BaseModel):
+    """F2: unidade replanejável da decomposição hierárquica de um pedido.
+
+    O planejamento hierárquico decompõe a peça em sub-objetivos verificáveis
+    (ex.: "corpo da caixa ocado", "tampa que encaixa", "knuckle macho", "furo
+    do pino") ANTES de gerar os steps finos. Cada sub-objetivo é planejado e
+    executado como um bloco observando o ``ModelState`` real do anterior; o
+    ``acceptance`` é o critério legível de "deu certo"."""
+
+    id: str = Field(default_factory=lambda: new_id("m3d_subgoal"))
+    seq: int = Field(ge=1)
+    title: str
+    description: str = ""
+    acceptance: str = ""
+    status: ModelingSubGoalStatus = ModelingSubGoalStatus.pending
+    block_plan_id: str | None = None
+    """Id do ``ModelingPlan`` (kind=edit) que executou este sub-objetivo."""
+
+
 class ModelingPlan(BaseModel):
     id: str = Field(default_factory=lambda: new_id("m3d_plan"))
     project_id: str | None = None
@@ -937,6 +962,11 @@ class ModelingPlan(BaseModel):
     planner em edições/blocos seguintes (faces/edges com tokens estáveis +
     medidas), substituindo o contexto textual pobre. ``None`` quando a captura
     falhou, não há body, ou o software não suporta (JSONB, migration-free)."""
+    sub_goals: list[ModelingSubGoal] = Field(default_factory=list)
+    """F2: decomposição hierárquica (só no plano ``primary`` quando o
+    planejamento hierárquico está ligado). Cada sub-objetivo é executado como
+    um bloco ``kind=edit`` com ``parent_plan_id`` = este plano. Vazio no fluxo
+    one-shot legado."""
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
 

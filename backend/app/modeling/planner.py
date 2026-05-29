@@ -18,6 +18,7 @@ from app.core.contracts import (
     ModelingRiskLevel,
     ModelingSoftware,
     ModelingStepStatus,
+    ModelingSubGoal,
 )
 from app.llm_gateway.gateway import LLMGateway
 from app.modeling import tool_schemas
@@ -440,6 +441,112 @@ async def create_llm_plan_async(
         schema=EXECUTION_PLAN_SCHEMA,
     )
     return _plan_from_llm_payload(payload, parsed)
+
+
+# F2: decomposição hierárquica — a LLM devolve a lista de sub-objetivos
+# verificáveis ANTES dos steps finos (que são planejados bloco a bloco,
+# observando o ModelState real entre eles).
+DECOMPOSITION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["sub_goals"],
+    "properties": {
+        "sub_goals": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["seq", "title", "description", "acceptance"],
+                "properties": {
+                    "seq": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "acceptance": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
+def build_decomposition_messages(payload: ModelingPlanCreate) -> list[dict[str, str]]:
+    """F2: prompt de DECOMPOSIÇÃO — quebra o pedido em sub-objetivos verificáveis,
+    SEM gerar steps/tools (o planejamento fino de cada bloco vem depois, vendo o
+    estado real do modelo)."""
+
+    system_prompt = (
+        "Você é o orquestrador de modelagem 3D da Truth's Forge, no modo de "
+        "PLANEJAMENTO HIERÁRQUICO.\n"
+        "Sua tarefa AQUI é decompor o pedido do usuário em SUB-OBJETIVOS "
+        "sequenciais e verificáveis — NÃO gere ferramentas nem passos ainda.\n\n"
+        "Regras:\n"
+        "- Cada sub-objetivo é uma UNIDADE GEOMÉTRICA construível e verificável "
+        "(ex.: 'corpo da caixa ocado', 'tampa que encaixa', 'nós macho da "
+        "dobradiça', 'nós fêmea', 'furo passante do pino').\n"
+        "- Ordene por DEPENDÊNCIA: um sub-objetivo pode depender de medidas reais "
+        "do anterior. Quando depender, DIGA na description (ex.: 'o furo deve "
+        "casar o diâmetro real do pino criado antes').\n"
+        "- `acceptance`: critério legível e MEDÍVEL de 'deu certo' (ex.: 'existe "
+        "um corpo oco com parede ~2mm', 'a tampa cobre a boca com folga 0.2mm', "
+        "'há um furo cilíndrico Ø igual ao pino').\n"
+        "- Entre 2 e 8 sub-objetivos. Granular o suficiente para verificar cada "
+        "etapa, sem microgerenciar cada sketch.\n"
+        "- Para peças mecânicas (dobradiças/knuckles, parafusos, encaixes, "
+        "suportes articulados), separe a parte fixa, a parte móvel e a "
+        "interface de encaixe/junta em sub-objetivos distintos.\n"
+        "Responda apenas em JSON conforme o schema modeling_decomposition."
+    )
+    user_prompt = payload.prompt.strip()
+    if payload.software_override:
+        user_prompt += f"\n\n(software pedido: {payload.software_override.value})"
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _subgoals_from_payload(parsed: dict[str, Any]) -> list[ModelingSubGoal]:
+    raw = parsed.get("sub_goals") or []
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("Decomposição do LLM precisa conter ao menos um sub-objetivo.")
+    sub_goals: list[ModelingSubGoal] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"Sub-objetivo {index} não é um objeto JSON.")
+        seq = int(item.get("seq") or index)
+        title = str(item.get("title") or f"Sub-objetivo {seq}").strip() or f"Sub-objetivo {seq}"
+        sub_goals.append(
+            ModelingSubGoal(
+                seq=seq,
+                title=title,
+                description=str(item.get("description") or "").strip(),
+                acceptance=str(item.get("acceptance") or "").strip(),
+            )
+        )
+    sub_goals.sort(key=lambda sg: sg.seq)
+    return sub_goals
+
+
+def decompose_request(
+    payload: ModelingPlanCreate,
+    *,
+    gateway: LLMGateway,
+    model: ModelConfig,
+) -> list[ModelingSubGoal]:
+    """F2: chama o LLM para decompor o pedido em sub-objetivos. Levanta exceção
+    do provedor (o chamador decide o fallback — ex.: tratar como bloco único)."""
+
+    messages = build_decomposition_messages(payload)
+    parsed = asyncio.run(
+        gateway.generate_structured(
+            model=model,
+            messages=messages,
+            schema_name="modeling_decomposition",
+            schema=DECOMPOSITION_SCHEMA,
+        )
+    )
+    return _subgoals_from_payload(parsed)
 
 
 # Schema do corretor de passo (Fase 2): a LLM devolve SÓ o passo corrigido.
