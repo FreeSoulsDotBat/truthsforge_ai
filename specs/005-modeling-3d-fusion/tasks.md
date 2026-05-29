@@ -1,8 +1,10 @@
 # Tasks (índice vivo): Modelagem 3D chat-first autônoma (v4)
 
-**Spec**: [`spec.md`](./spec.md) | **Macro**: [`plan.md`](./plan.md) | **Micro**: [`micro/`](./micro/)
+**Spec**: [`spec.md`](./spec.md) | **Macro**: [`plan.md`](./plan.md) | **Micro**: [`micro/`](./micro/) | **Homologação**: [`gate-homologacao.md`](./gate-homologacao.md)
 
 > Este arquivo é o **índice de progresso** do v4. O detalhe de cada fase vive no micro-plano correspondente, escrito just-in-time. Cada fase só é dada como concluída após o **gate de validação do dono no Fusion real**. Marque o status conforme avança.
+>
+> 🧪 **Roteiro de homologação dos gates pendentes** (prompts prontos + pré-voo + reporte): [`gate-homologacao.md`](./gate-homologacao.md).
 
 ## Legenda de status
 
