@@ -376,7 +376,12 @@ def test_propose_edit_plan_captures_rollback_marker_for_fusion() -> None:
 
     # T3.6: a captura roda fusion.query_timeline ANTES da edição (fora de
     # plan.steps, para o loop nunca a ver) e grava a contagem no plano.
-    assert [s.tool_name for s in executor.single_step_calls] == ["fusion.query_timeline"]
+    # F1 (T1.6): após a edição auto-executar, run_plan_with_optional_loop
+    # captura o ModelState via um probe fusion.query_geometry (read-back).
+    assert [s.tool_name for s in executor.single_step_calls] == [
+        "fusion.query_timeline",
+        "fusion.query_geometry",
+    ]
     assert outcome.plan.rollback_marker == 5
     assert store.plans[outcome.plan.id].rollback_marker == 5
     assert outcome.requires_approval is False
@@ -405,8 +410,11 @@ def test_propose_edit_plan_skips_rollback_marker_for_parameter_only_edit() -> No
 
     # A sondagem da timeline rodou (best-effort, ainda útil para reconciliation),
     # mas o marker NÃO é gravado porque o rollback não tem como reverter
-    # mudanças de parâmetro.
-    assert [s.tool_name for s in executor.single_step_calls] == ["fusion.query_timeline"]
+    # mudanças de parâmetro. F1: o probe query_geometry pós-execução também roda.
+    assert [s.tool_name for s in executor.single_step_calls] == [
+        "fusion.query_timeline",
+        "fusion.query_geometry",
+    ]
     assert outcome.plan.rollback_marker is None
     assert store.plans[outcome.plan.id].rollback_marker is None
 

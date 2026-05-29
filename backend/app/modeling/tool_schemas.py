@@ -574,8 +574,31 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
         },
     ),
     "fusion.query_geometry": ToolSchema(
-        summary="Lê bbox/volume/contagens/dimensões do design (read-back).",
-        args={},
+        summary=(
+            "Lê o estado real do modelo (read-back): por body dimensions_mm/"
+            "is_solid/is_closed/surface_area_mm2/stable_id; por face "
+            "face_token (ESTÁVEL)/type/area_mm2/radius_mm/normal_axis/center_mm; "
+            "por edge edge_token (ESTÁVEL)/length_mm/is_circular/radius_mm/"
+            "adjacent_face_tokens. Use os *_token para mirar faces/arestas em "
+            "passos seguintes (sobrevivem a recompute, ao contrário do índice)."
+        ),
+        args={
+            "include_tokens": ArgSpec(
+                "Inclui entityToken de face/edge + adjacências (default true). "
+                "false reduz o payload quando só precisa de contagens/dims.",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=True,
+            ),
+            "limit": ArgSpec(
+                "Máximo de faces/edges por body no retorno (default 60).",
+                type="integer",
+                unit=None,
+                required=False,
+                example=60,
+            ),
+        },
     ),
 }
 

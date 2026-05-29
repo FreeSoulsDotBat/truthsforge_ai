@@ -571,21 +571,37 @@ def build_edit_context_block(parent_plan: ModelingPlan | None) -> str | None:
             args = ""
         history_lines.append(f"- {step.seq}. {step.title} [{step.tool_name}]{args}")
 
-    # Métricas de corpos: varre as saídas das etapas por chaves conhecidas.
+    # F1 (T1.7): se há ModelState capturado (read-back rico com tokens estáveis
+    # de face/edge, raios, adjacências), ele substitui as métricas pobres
+    # varridas das saídas. Lazy import evita ciclo planner↔model_state↔executor.
+    state_block = ""
+    if getattr(parent_plan, "model_state", None) is not None:
+        try:
+            from app.modeling.model_state import render_model_state_block
+
+            state_block = render_model_state_block(parent_plan.model_state)
+        except Exception:
+            state_block = ""
+
+    # Fallback: varre as saídas das etapas por chaves conhecidas (usado quando
+    # não há ModelState — planos antigos ou captura falhou).
     metrics_lines: list[str] = []
-    for step in parent_plan.steps:
-        output = step.output_json or {}
-        bodies = output.get("bodies")
-        if isinstance(bodies, list):
-            for body in bodies:
-                if isinstance(body, dict) and body.get("name"):
+    if not state_block:
+        for step in parent_plan.steps:
+            output = step.output_json or {}
+            bodies = output.get("bodies")
+            if isinstance(bodies, list):
+                for body in bodies:
+                    if isinstance(body, dict) and body.get("name"):
+                        metrics_lines.append(
+                            f"- corpo '{body.get('name')}': {json.dumps(body, ensure_ascii=False)}"
+                        )
+            metrics = output.get("metrics")
+            if isinstance(metrics, dict):
+                for name, data in metrics.items():
                     metrics_lines.append(
-                        f"- corpo '{body.get('name')}': {json.dumps(body, ensure_ascii=False)}"
+                        f"- corpo '{name}': {json.dumps(data, ensure_ascii=False)}"
                     )
-        metrics = output.get("metrics")
-        if isinstance(metrics, dict):
-            for name, data in metrics.items():
-                metrics_lines.append(f"- corpo '{name}': {json.dumps(data, ensure_ascii=False)}")
 
     block = [
         "<modelo-atual>",
@@ -597,7 +613,11 @@ def build_edit_context_block(parent_plan: ModelingPlan | None) -> str | None:
         "Histórico de construção (plano anterior):",
         *history_lines,
     ]
-    if metrics_lines:
+    if state_block:
+        block.extend(
+            ["", "Estado geométrico real (read-back, prefira mirar por token):", state_block]
+        )
+    elif metrics_lines:
         block.extend(["", "Métricas conhecidas dos corpos atuais:", *metrics_lines[:20]])
     block.append("</modelo-atual>")
     return "\n".join(block)
@@ -781,6 +801,14 @@ def _build_messages(
         "  criado em passos anteriores em edições, PREFIRA o `stable_id`\n"
         "  ao `body_name`. `_find_body` aceita ambos. Use `query_geometry`\n"
         "  para listar `stable_id`/`name` correntes dos bodies.\n"
+        "- FACES E ARESTAS POR TOKEN (F1): `query_geometry` devolve `face_token`\n"
+        "  e `edge_token` (entityToken ESTÁVEL, sobrevive a recompute) por\n"
+        "  face/aresta. Para fillet/chamfer/shell/patch/offset que miram faces\n"
+        "  ou arestas específicas, PREFIRA `face_tokens`/`edge_tokens` ao\n"
+        "  índice posicional (`face_ids`/`edge_ids`, que mudam com recompute).\n"
+        "  Use `adjacent_face_tokens` (na aresta) e `radius_mm`/`is_circular`\n"
+        "  para mirar a face/aresta certa — ex.: medir o `radius_mm` do pino\n"
+        "  para casar o furo, ou achar a face cilíndrica de um knuckle.\n"
         "- REFERÊNCIAS EM CAMPOS DE TOOL: SEMPRE referencie o corpo pelo\n"
         "  campo `body` com o NOME do corpo (string). NUNCA use chaves\n"
         '  inventadas como `face: "X.top_face"`, `target_face`, `surface`,\n'

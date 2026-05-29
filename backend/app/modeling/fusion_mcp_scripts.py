@@ -521,6 +521,45 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return coll
 
 
+        def _entities_by_tokens(design, tokens, kind):
+            # F1 (T1.3): resolve entityToken ESTAVEL (de query_geometry) em
+            # BRepEdge/BRepFace. Sobrevive a recompute, ao contrario do indice
+            # posicional. Token invalido (ex.: aresta/face consumida por uma
+            # feature) -> ToolError claro, NUNCA cai mudo em "all" (regressao
+            # do gate da placa: selector mudo arredondou arestas erradas).
+            coll = adsk.core.ObjectCollection.create()
+            missing = []
+            for tok in tokens:
+                found = None
+                try:
+                    ents = design.findEntityByToken(str(tok))
+                    for ent in (ents or []):
+                        if isinstance(ent, kind):
+                            found = ent
+                            break
+                except Exception:
+                    found = None
+                if found is None:
+                    missing.append(str(tok)[:20])
+                else:
+                    coll.add(found)
+            if missing:
+                raise ToolError(
+                    "fusion.edge_token_stale",
+                    "token(s) invalido(s)/consumido(s): {{}}. Rode query_geometry "
+                    "de novo para obter tokens atuais.".format(missing),
+                )
+            return coll
+
+
+        def _edges_by_tokens(design, tokens):
+            return _entities_by_tokens(design, tokens, adsk.fusion.BRepEdge)
+
+
+        def _faces_by_tokens(design, tokens):
+            return _entities_by_tokens(design, tokens, adsk.fusion.BRepFace)
+
+
         def _open_design(args):
             # P3 (edicao nao pode quebrar o modelo): por padrao REUSA o design
             # ativo em vez de criar um 'Untitled' novo a cada execucao — antes,
@@ -1653,8 +1692,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 raise ToolError("fusion.invalid_dimensions", "radius_mm precisa ser positivo.")
             body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
             edge_warn = ""
+            edge_tokens = args.get("edge_tokens")
             edge_ids = args.get("edge_ids") or args.get("edge_indices")
-            if edge_ids:
+            if edge_tokens:
+                # F1 (T1.3): tokens estaveis tem precedencia sobre indices.
+                selector = "edge_tokens"
+                edges = _edges_by_tokens(design, edge_tokens)
+            elif edge_ids:
                 selector = "edge_ids"
                 edges = _edges_by_ids(body, edge_ids)
             else:
@@ -1665,8 +1709,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     # previous_query com texto livre) e caiamos mudo em "all" —
                     # filetando ate o furo. Agora avisamos alto no trace.
                     _recognized = {{
-                        "radius_mm", "distance_mm", "edge_ids", "edge_indices",
-                        "edge_selector", "edges", "body_ref", "body", "body_name",
+                        "radius_mm", "distance_mm", "edge_tokens", "edge_ids",
+                        "edge_indices", "edge_selector", "edges", "body_ref",
+                        "body", "body_name",
                     }}
                     _unknown = [
                         k for k in args
@@ -1712,8 +1757,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 raise ToolError("fusion.invalid_dimensions", "distance_mm precisa ser positivo.")
             body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
             edge_warn = ""
+            edge_tokens = args.get("edge_tokens")
             edge_ids = args.get("edge_ids") or args.get("edge_indices")
-            if edge_ids:
+            if edge_tokens:
+                selector = "edge_tokens"
+                edges = _edges_by_tokens(design, edge_tokens)
+            elif edge_ids:
                 selector = "edge_ids"
                 edges = _edges_by_ids(body, edge_ids)
             else:
@@ -1724,8 +1773,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     # previous_query com texto livre) e caiamos mudo em "all" —
                     # chanfrando ate o furo. Agora avisamos alto no trace.
                     _recognized = {{
-                        "radius_mm", "distance_mm", "edge_ids", "edge_indices",
-                        "edge_selector", "edges", "body_ref", "body", "body_name",
+                        "radius_mm", "distance_mm", "edge_tokens", "edge_ids",
+                        "edge_indices", "edge_selector", "edges", "body_ref",
+                        "body", "body_name",
                     }}
                     _unknown = [
                         k for k in args
@@ -1781,8 +1831,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Schema drift (teste bola): o LLM manda `faces` em vez de
             # `open_faces`. "all"/"none" => casca fechada (sem face aberta;
             # abrir "todas" deletaria o corpo, entao tratamos como fechada).
+            face_tokens = args.get("face_tokens")
             face_ids = args.get("face_ids") or args.get("face_indices")
-            if face_ids:
+            if face_tokens:
+                open_sel = "face_tokens"
+                faces = _faces_by_tokens(design, face_tokens)
+            elif face_ids:
                 open_sel = "face_ids"
                 faces = _faces_by_ids(body, face_ids)
             else:
@@ -3037,9 +3091,48 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # G2.2 (read-only): lista bodies/faces/arestas com indice estavel
             # + metadata, para o LLM mirar por face_ids/edge_ids depois em vez
             # de adivinhar selectors. Limita contagem para nao estourar payload.
+            # F1 (T1.1): expoe entityToken de face/edge (identidade ESTAVEL que
+            # sobrevive a recompute, ao contrario do indice posicional) +
+            # topologia (raio de cilindricas, adjacencia edge->faces, arestas
+            # circulares). include_tokens=false desliga (payload menor).
             design = _design()
             root = _root(design)
             limit = int(_eval_param(args.get("limit"), design, 60.0) or 60)
+            _inc_tok = args.get("include_tokens")
+            include_tokens = True if _inc_tok is None else bool(_inc_tok)
+
+            def _safe_token(entity):
+                if not include_tokens:
+                    return None
+                try:
+                    return entity.entityToken
+                except Exception:
+                    return None
+
+            def _face_radius_mm(face):
+                # Raio (mm) de faces cilindricas/conicas/esfericas; None senao.
+                try:
+                    geom = face.geometry
+                    r = getattr(geom, "radius", None)
+                    if r is not None:
+                        return round(r * 10.0, 3)
+                except Exception:
+                    pass
+                return None
+
+            def _edge_circle_mm(edge):
+                # (is_circular, radius_mm) para arestas em arco/circulo — chave
+                # para furos/knuckle (o LLM mede o diametro do pino para casar
+                # o furo). None de raio quando nao circular.
+                try:
+                    geom = edge.geometry
+                    r = getattr(geom, "radius", None)
+                    if r is not None:
+                        return True, round(r * 10.0, 3)
+                except Exception:
+                    pass
+                return False, None
+
             bodies_out = []
             for bi in range(root.bRepBodies.count):
                 body = root.bRepBodies.item(bi)
@@ -3064,8 +3157,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         area_mm2 = 0.0
                     faces_out.append({{
                         "face_index": fi,
+                        "face_token": _safe_token(f),
                         "type": type_name,
                         "area_mm2": round(area_mm2, 2),
+                        "radius_mm": _face_radius_mm(f),
                         "normal_axis": _face_normal_axis(f),
                         "center_mm": [
                             round((fbb.minPoint.x + fbb.maxPoint.x) * 5.0, 2),
@@ -3080,9 +3175,26 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         length_mm = e.length * 10.0
                     except Exception:
                         length_mm = 0.0
+                    is_circular, edge_radius_mm = _edge_circle_mm(e)
+                    # Adjacencia edge->faces (tokens): "que faces esta aresta
+                    # separa" — o LLM usa para mirar a face certa a partir de
+                    # uma aresta conhecida.
+                    adj_face_tokens = []
+                    if include_tokens:
+                        try:
+                            for _fi in range(e.faces.count):
+                                _tok = _safe_token(e.faces.item(_fi))
+                                if _tok is not None:
+                                    adj_face_tokens.append(_tok)
+                        except Exception:
+                            adj_face_tokens = []
                     edges_out.append({{
                         "edge_index": ei,
+                        "edge_token": _safe_token(e),
                         "length_mm": round(length_mm, 2),
+                        "is_circular": is_circular,
+                        "radius_mm": edge_radius_mm,
+                        "adjacent_face_tokens": adj_face_tokens,
                     }})
                 # T5.3a (Fase 5): expor is_solid/is_closed/surface_area_mm2 e
                 # contagem de arestas livres para SurfaceBody. O LLM precisa

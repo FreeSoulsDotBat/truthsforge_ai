@@ -1407,6 +1407,42 @@ def test_select_edges_supports_free_edges_selector() -> None:
     assert "edge.faces.count" in script
 
 
+def test_query_geometry_and_selectors_expose_tokens() -> None:
+    """F1 (T1.1/T1.3): query_geometry expõe entityToken estável de face/edge +
+    topologia (adjacência, raio); fillet/chamfer/shell aceitam edge_tokens/
+    face_tokens com precedência sobre índices posicionais."""
+
+    import ast
+
+    from app.modeling.fusion_mcp_scripts import build_autodesk_fusion_script
+
+    qg = build_autodesk_fusion_script(
+        tool_name="fusion.query_geometry", arguments={"include_tokens": True}
+    )
+    ast.parse(qg)
+    for key in ('"face_token"', '"edge_token"', '"adjacent_face_tokens"', '"is_circular"'):
+        assert key in qg, f"query_geometry sem {key}"
+    assert "entityToken" in qg  # _safe_token expõe o entityToken estável
+
+    # Selectors por token + helper de resolução estável.
+    fillet = build_autodesk_fusion_script(
+        tool_name="fusion.fillet_edges",
+        arguments={"body_ref": "Cubo", "radius_mm": 2, "edge_tokens": ["TOK"]},
+    )
+    ast.parse(fillet)
+    assert "def _edges_by_tokens" in fillet
+    assert "findEntityByToken" in fillet
+    assert 'edge_tokens = args.get("edge_tokens")' in fillet
+    assert "fusion.edge_token_stale" in fillet  # token stale = erro claro, não mudo
+
+    shell = build_autodesk_fusion_script(
+        tool_name="fusion.shell_body",
+        arguments={"body_ref": "Cubo", "thickness_mm": 2, "face_tokens": ["TOK"]},
+    )
+    ast.parse(shell)
+    assert "def _faces_by_tokens" in shell
+
+
 def test_thicken_and_stitch_registered_and_compile() -> None:
     """T5.2d/T5.2e (Fase 5): thicken_surface (ponte surface→solid) e
     stitch_surfaces (costura de SurfaceBodies, pode fechar volume e virar

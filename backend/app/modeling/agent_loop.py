@@ -401,8 +401,31 @@ def run_plan_with_optional_loop(
                 build_surface_verifier(),
             ),
         )
-        return loop.run(plan)
-    return executor.execute_plan(plan)
+        result = loop.run(plan)
+    else:
+        result = executor.execute_plan(plan)
+    _maybe_capture_model_state(executor, getattr(result, "plan", None) or plan)
+    return result
+
+
+def _maybe_capture_model_state(executor: ModelingExecutorService, plan: ModelingPlan) -> None:
+    """F1 (T1.6): captura o ModelState pós-execução (read-back) e persiste em
+    ``plan.model_state``, para o planner ter o estado geométrico real no próximo
+    bloco/edição. Best-effort — nunca propaga (1 probe read-only extra por
+    plano, só para fusion com geometria)."""
+
+    try:
+        from app.modeling.model_state import capture_model_state
+
+        state = capture_model_state(executor, plan)
+        if state is None:
+            return
+        plan.model_state = state
+        store = getattr(executor, "store", None)
+        if store is not None and hasattr(store, "upsert_modeling_plan"):
+            store.upsert_modeling_plan(plan)
+    except Exception as exc:  # noqa: BLE001 - captura é best-effort
+        logger.debug("model_state capture pós-execução falhou: %s", exc)
 
 
 __all__ = [

@@ -510,3 +510,69 @@ def test_build_dimension_verifier_compares_expected_vs_measured() -> None:
 
     # Sem dados de verificação (passo sem expected/measured) → None.
     assert verifier(_step(2, "fusion.create_sketch"), {"ok": True}) is None
+
+
+def test_capture_model_state_populates_and_persists_plan() -> None:
+    """F1 (T1.6): _maybe_capture_model_state roda um probe query_geometry pós-
+    execução, parseia o ModelState (com tokens) e persiste em plan.model_state."""
+
+    from app.modeling.agent_loop import _maybe_capture_model_state
+
+    store = _FakeStore()
+
+    class _GeomExecutor:
+        def __init__(self, store):
+            self.store = store
+            self.calls: list[str] = []
+
+        def _execute_single_step(self, step, *, plan):
+            self.calls.append(step.tool_name)
+            output = {
+                "ok": True,
+                "bodies": [
+                    {
+                        "name": "Cubo",
+                        "stable_id": "sid-cubo",
+                        "dimensions_mm": [30, 30, 30],
+                        "is_solid": True,
+                        "faces": [{"face_token": "FT_TOP", "type": "planar", "area_mm2": 900}],
+                        "edges": [],
+                    }
+                ],
+            }
+            return _StepOutcome(step=step, output=output, tool_call_id=None, event="x", ok=True)
+
+    ex = _GeomExecutor(store)
+    plan = _plan(_step(1, "fusion.add_box"))
+
+    _maybe_capture_model_state(ex, plan)
+
+    assert ex.calls == ["fusion.query_geometry"]  # probe read-back rodou
+    assert plan.model_state is not None
+    assert plan.model_state.bodies[0].stable_id == "sid-cubo"
+    assert plan.model_state.bodies[0].faces[0].token == "FT_TOP"
+    # Persistido no store para o próximo bloco/edição ler.
+    assert store.plans[plan.id].model_state is not None
+
+
+def test_capture_model_state_skips_non_fusion() -> None:
+    """Captura só roda para fusion; blender/outros não geram probe."""
+    from app.modeling.agent_loop import _maybe_capture_model_state
+    from app.core.contracts import ModelingSoftware as _SW
+
+    store = _FakeStore()
+
+    class _Ex:
+        def __init__(self, store):
+            self.store = store
+            self.calls = 0
+
+        def _execute_single_step(self, step, *, plan):  # pragma: no cover
+            self.calls += 1
+            raise AssertionError("não deveria sondar para não-fusion")
+
+    ex = _Ex(store)
+    plan = _plan(_step(1, "blender.create_mesh_primitive"))
+    plan = plan.model_copy(update={"software_choice": _SW.blender})
+    _maybe_capture_model_state(ex, plan)
+    assert ex.calls == 0 and plan.model_state is None

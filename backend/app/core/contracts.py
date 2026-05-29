@@ -859,6 +859,52 @@ class ModelingPlanKind(StrEnum):
     edit = "edit"
 
 
+class ModelStateFace(BaseModel):
+    """F1: face do modelo com identidade ESTÁVEL (entityToken, sobrevive a
+    recompute) + geometria útil para o planner mirar mecanismos."""
+
+    token: str | None = None
+    type: str | None = None  # planar | cylindrical | conical | spherical | other
+    area_mm2: float | None = None
+    radius_mm: float | None = None  # cilíndrica/cônica/esférica
+    normal_axis: str | None = None  # +x..-z quando planar
+    center_mm: list[float] | None = None
+
+
+class ModelStateEdge(BaseModel):
+    token: str | None = None
+    length_mm: float | None = None
+    is_circular: bool = False
+    radius_mm: float | None = None  # arestas em arco/círculo (furos/knuckle)
+    adjacent_face_tokens: list[str] = Field(default_factory=list)
+
+
+class ModelStateBody(BaseModel):
+    stable_id: str | None = None
+    name: str | None = None
+    dimensions_mm: list[float] | None = None
+    is_solid: bool | None = None
+    is_closed: bool | None = None
+    surface_area_mm2: float | None = None
+    face_count: int | None = None
+    edge_count: int | None = None
+    faces: list[ModelStateFace] = Field(default_factory=list)
+    edges: list[ModelStateEdge] = Field(default_factory=list)
+
+
+class ModelState(BaseModel):
+    """F1: snapshot estruturado do estado geométrico real do modelo, capturado
+    após execução (read-back via ``fusion.query_geometry``) e injetado no
+    contexto do planner entre etapas/edições. Substitui o contexto puramente
+    textual (nomes de timeline/params) por geometria com tokens estáveis."""
+
+    captured_at: datetime = Field(default_factory=now_utc)
+    source: str = "query_geometry"
+    bodies: list[ModelStateBody] = Field(default_factory=list)
+    timeline_count: int | None = None
+    parameters: dict[str, str] = Field(default_factory=dict)
+
+
 class ModelingPlan(BaseModel):
     id: str = Field(default_factory=lambda: new_id("m3d_plan"))
     project_id: str | None = None
@@ -885,6 +931,12 @@ class ModelingPlan(BaseModel):
     /plans/{id}/rollback`` reverts the model to this count via
     ``fusion.rollback_timeline``. ``None`` when the pre-edit read failed or
     the software has no timeline (rollback then unavailable for this edit)."""
+    model_state: ModelState | None = None
+    """F1: snapshot geométrico estruturado capturado (best-effort) ao fim da
+    execução via read-back ``fusion.query_geometry``. Injetado no contexto do
+    planner em edições/blocos seguintes (faces/edges com tokens estáveis +
+    medidas), substituindo o contexto textual pobre. ``None`` quando a captura
+    falhou, não há body, ou o software não suporta (JSONB, migration-free)."""
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
 
