@@ -28,22 +28,65 @@ forwards to it.
 
 from __future__ import annotations
 
-import base64
+import asyncio
+import concurrent.futures
 import logging
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 from app.core.contracts import (
+    ModelCapability,
+    ModelConfig,
     ModelingPlanStep,
     ModelingRiskLevel,
     ModelingSoftware,
     PlatformFile,
 )
 from app.llm_gateway.gateway import LLMGateway
+from app.llm_gateway.multimodal import media_type_for, user_message_with_images
 from app.modeling.blender_adapter import BlenderAdapter
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+def _run_coro(coro: Coroutine[Any, Any, _T]) -> _T:
+    """Executa uma corrotina de forma síncrona, em qualquer contexto.
+
+    O analyzer é chamado tanto de rotas síncronas quanto de dentro do
+    orchestrator assíncrono. ``asyncio.run`` quebra se já houver loop ativo,
+    então, nesse caso, rodamos a corrotina numa thread dedicada.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(coro)).result()
+
+
+# Prompt da análise vision (F4): descrição estruturada que aterra o planner.
+_VISION_SYSTEM = (
+    "Você é um engenheiro de CAD analisando uma imagem de referência para "
+    "modelagem 3D paramétrica (sólidos mecânicos). Seja objetivo e técnico."
+)
+_VISION_PROMPT = (
+    "Descreva a peça da imagem para reproduzi-la em CAD. Responda em PT-BR, "
+    "em tópicos curtos:\n"
+    "1. O que é a peça (função provável).\n"
+    "2. Forma geral em primitivas reconhecíveis (caixa, cilindro, placa, "
+    "revolução) e como se compõem.\n"
+    "3. Proporções relativas (a imagem não dá escala — descreva razões, ex.: "
+    "'altura ~2x a largura').\n"
+    "4. Features mecânicas visíveis: furos, roscas, dobradiças/knuckles, "
+    "encaixes, chanfros, nervuras, padrões.\n"
+    "5. Esboço de um plano de modelagem (ordem de operações).\n"
+    "Não invente dimensões absolutas em mm; deixe claro o que precisa ser "
+    "confirmado com o usuário."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -124,9 +167,11 @@ class ModelingAttachmentAnalyzer:
         blender: BlenderAdapter | None = None,
         max_bytes: int = DEFAULT_MAX_BYTES,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        vision_model: ModelConfig | None = None,
     ) -> None:
         self.store = store
         self.gateway = gateway or LLMGateway()
+        self._vision_model = vision_model
         self.blender = blender or BlenderAdapter(timeout_seconds=timeout_seconds)
         self.max_bytes = max_bytes
         self.timeout_seconds = timeout_seconds
@@ -162,8 +207,7 @@ class ModelingAttachmentAnalyzer:
                 kind=kind,
                 ok=False,
                 summary=(
-                    "Arquivo excede o limite de "
-                    f"{self.max_bytes // (1024 * 1024)} MB para análise."
+                    f"Arquivo excede o limite de {self.max_bytes // (1024 * 1024)} MB para análise."
                 ),
                 error="attachment_too_large",
             )
@@ -210,16 +254,14 @@ class ModelingAttachmentAnalyzer:
     # internals — image
     # ------------------------------------------------------------------
 
-    def _analyze_image(
-        self, platform_file: PlatformFile, path: Path
-    ) -> AttachmentAnalysis:
-        """Send the image to the vision-capable LLM via the gateway.
+    def _analyze_image(self, platform_file: PlatformFile, path: Path) -> AttachmentAnalysis:
+        """Send the image to the vision-capable LLM via the gateway (F4).
 
-        The gateway today accepts ``list[dict[str, str]]`` messages,
-        which is too narrow for multimodal payloads. Until that contract
-        is widened, this method records a metadata-only summary so the
-        agent still has something to work with. Provider-side vision
-        support can be wired in later by swapping :meth:`_call_vision`.
+        Builds a multimodal message (text + image block in the chosen
+        provider's format) and asks for a structured CAD description that
+        grounds the planner. When no vision model is configured the call
+        returns ``None`` and we fall back to a metadata-only summary so the
+        agent still has something to work with.
         """
 
         size_bytes = path.stat().st_size
@@ -237,8 +279,9 @@ class ModelingAttachmentAnalyzer:
 
         vision_summary = self._call_vision(image_bytes, platform_file)
         summary = vision_summary or (
-            "Imagem recebida como referência. Análise vision indisponível "
-            "neste backend — siga descrevendo o objetivo em texto."
+            "Imagem recebida como referência. Nenhum modelo vision habilitado "
+            "no momento — confirme o objetivo em texto (forma, features e "
+            "proporções) para eu reproduzir a peça."
         )
 
         return AttachmentAnalysis(
@@ -260,25 +303,71 @@ class ModelingAttachmentAnalyzer:
             ],
         )
 
-    def _call_vision(
-        self, image_bytes: bytes, platform_file: PlatformFile
-    ) -> str | None:
-        """Stub for vision integration.
+    def _resolve_vision_model(self) -> ModelConfig | None:
+        """Escolhe um modelo multimodal habilitado para a análise vision.
 
-        Returns ``None`` to indicate "gateway has no vision support
-        wired yet"; the caller falls back to a metadata-only summary.
-        Override this method (or replace the analyzer entirely) once the
-        gateway accepts multimodal messages.
+        Preferência: modelos com capability ``vision``; senão, modelos ``chat``
+        de provedores que sabemos montar blocos de imagem (Anthropic/OpenAI).
+        ``None`` => sem modelo vision => o caller cai no resumo metadata-only.
         """
+        if self._vision_model is not None:
+            return self._vision_model
+        if not hasattr(self.store, "list_models"):
+            return None
+        try:
+            models = [m for m in self.store.list_models() if getattr(m, "enabled", True)]
+        except Exception:  # noqa: BLE001 - resolução é best-effort
+            return None
+        vision = [m for m in models if ModelCapability.vision in m.capabilities]
+        pool = vision or [m for m in models if ModelCapability.chat in m.capabilities]
+        if not pool:
+            return None
+        return next((m for m in pool if getattr(m, "default", False)), None) or pool[0]
 
-        # Encoding here keeps the door open for a future provider that
-        # accepts ``data:`` URLs without changing call sites.
-        _ = base64.b64encode(image_bytes).decode("ascii")
-        logger.debug(
-            "Vision provider not wired yet; skipping LLM call for %s.",
-            platform_file.filename,
+    def _call_vision(self, image_bytes: bytes, platform_file: PlatformFile) -> str | None:
+        """Análise vision real (F4): manda a imagem ao LLM multimodal.
+
+        Monta uma mensagem com texto + bloco de imagem no formato do provedor
+        do modelo escolhido (``llm_gateway.multimodal``) e coleta a descrição
+        estruturada da peça via ``stream_chat``. Best-effort: qualquer falha
+        (sem modelo, rede, timeout) devolve ``None`` e o caller usa o resumo
+        metadata-only — o chat nunca quebra por causa da análise.
+        """
+        model = self._resolve_vision_model()
+        if model is None:
+            logger.debug(
+                "Sem modelo vision habilitado; análise metadata-only para %s.",
+                platform_file.filename,
+            )
+            return None
+        media_type = media_type_for(platform_file.filename)
+        message = user_message_with_images(
+            model.provider, _VISION_PROMPT, [(image_bytes, media_type)]
         )
-        return None
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _VISION_SYSTEM},
+            message,
+        ]
+        try:
+            text = _run_coro(self._collect_vision(model, messages))
+        except Exception as exc:  # noqa: BLE001 - defensive: never crash chat
+            logger.warning("Falha na análise vision de %s: %s", platform_file.filename, exc)
+            return None
+        text = (text or "").strip()
+        return text or None
+
+    async def _collect_vision(self, model: ModelConfig, messages: list[dict[str, Any]]) -> str:
+        """Acumula os tokens do ``stream_chat`` num texto, com timeout."""
+
+        async def _run() -> str:
+            chunks: list[str] = []
+            async for event in self.gateway.stream_chat(model, messages):
+                if event.kind == "token":
+                    chunks.append(event.content)
+            return "".join(chunks)
+
+        timeout = max(self.timeout_seconds, 60)
+        return await asyncio.wait_for(_run(), timeout=timeout)
 
     # ------------------------------------------------------------------
     # internals — mesh / blend
@@ -322,9 +411,7 @@ class ModelingAttachmentAnalyzer:
                 platform_file.filename,
                 exc,
             )
-            return self._mesh_metadata_only(
-                platform_file, path, kind=kind, note=str(exc)
-            )
+            return self._mesh_metadata_only(platform_file, path, kind=kind, note=str(exc))
 
         ok = bool(output.get("ok"))
         result = output.get("result") if isinstance(output.get("result"), dict) else {}
@@ -375,9 +462,7 @@ class ModelingAttachmentAnalyzer:
         )
 
     @staticmethod
-    def _mesh_metrics_from_blender(
-        result: dict[str, Any], path: Path
-    ) -> dict[str, Any]:
+    def _mesh_metrics_from_blender(result: dict[str, Any], path: Path) -> dict[str, Any]:
         metrics: dict[str, Any] = {
             "size_bytes": path.stat().st_size,
             "extension": path.suffix.lower().lstrip(".") or "?",
@@ -423,10 +508,7 @@ class ModelingAttachmentAnalyzer:
             if isinstance(base, str) and base.strip():
                 return base.strip()
             ext = metrics.get("extension", "?")
-            return (
-                f"Análise headless concluída para {platform_file.filename} "
-                f"({ext.upper()})."
-            )
+            return f"Análise headless concluída para {platform_file.filename} ({ext.upper()})."
         if isinstance(result, dict) and isinstance(result.get("message"), str):
             return f"Análise headless falhou: {result['message']}"
         return "Análise headless falhou; sem detalhes do adapter."
@@ -435,9 +517,7 @@ class ModelingAttachmentAnalyzer:
     # internals — CAD (.step)
     # ------------------------------------------------------------------
 
-    def _analyze_cad_metadata(
-        self, platform_file: PlatformFile, path: Path
-    ) -> AttachmentAnalysis:
+    def _analyze_cad_metadata(self, platform_file: PlatformFile, path: Path) -> AttachmentAnalysis:
         size_bytes = path.stat().st_size
         return AttachmentAnalysis(
             file_id=platform_file.id,
