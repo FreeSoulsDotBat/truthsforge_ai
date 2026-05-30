@@ -7,6 +7,7 @@ import re
 import unicodedata
 from typing import Any
 
+from app.core.config import settings
 from app.core.contracts import (
     KnowledgeBase,
     ModelConfig,
@@ -20,7 +21,6 @@ from app.core.contracts import (
     ModelingStepStatus,
     ModelingSubGoal,
 )
-from app.core.config import settings
 from app.llm_gateway.gateway import LLMGateway
 from app.modeling import tool_schemas
 from app.modeling.plan_sanitizer import sanitize_tool_arguments
