@@ -465,6 +465,36 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Boolean (join/cut/intersect) entre corpos existentes — high risk (Onda D).",
     ),
     _t(
+        "fusion.thread",
+        _FUSION,
+        _MUT,
+        "Rosca modelada (real) em face cilíndrica — externa/interna (F3).",
+    ),
+    _t(
+        "fusion.make_component",
+        _FUSION,
+        _MUT,
+        "Transforma um corpo em componente (occurrence) p/ montagens/juntas (F3).",
+    ),
+    _t(
+        "fusion.joint",
+        _FUSION,
+        _MUT,
+        "Junta revolute/rigid/slider/cylindrical entre corpos/componentes (F3).",
+    ),
+    _t(
+        "fusion.knuckle_hinge",
+        _FUSION,
+        _ADD,
+        "Macro: dobradiça de knuckles que abre em torno de um pino (F3).",
+    ),
+    _t(
+        "fusion.metric_screw",
+        _FUSION,
+        _ADD,
+        "Macro: parafuso métrico (haste + cabeça + rosca modelada) (F3).",
+    ),
+    _t(
         "fusion.delete_body",
         _FUSION,
         _DESTR,

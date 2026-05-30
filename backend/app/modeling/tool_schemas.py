@@ -475,6 +475,237 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
             ),
         },
     ),
+    "fusion.thread": ToolSchema(
+        summary=(
+            "Rosca MODELADA (geometria real) numa face cilíndrica de um corpo "
+            "— externa (parafuso/eixo) ou interna (furo). F3."
+        ),
+        args={
+            "body_ref": ArgSpec(
+                "Corpo cuja face cilíndrica recebe a rosca.",
+                type="string",
+                unit=None,
+                required=False,
+                example="Screw_Shank",
+            ),
+            "diameter_mm": ArgSpec(
+                "Diâmetro nominal (mm) — usado p/ escolher a designação métrica "
+                "mais próxima quando 'designation' não vier.",
+                required=False,
+                example=6.0,
+            ),
+            "designation": ArgSpec(
+                "Designação da rosca (ex.: 'M6x1'). Tem precedência sobre diameter_mm.",
+                type="string",
+                unit=None,
+                required=False,
+                example="M6x1",
+            ),
+            "is_internal": ArgSpec(
+                "true = rosca interna (furo); false = externa (eixo). Default false.",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=False,
+            ),
+            "length_mm": ArgSpec(
+                "Comprimento da rosca (mm). Vazio = comprimento total da face.",
+                required=False,
+                example=18.0,
+            ),
+            "face_token": ArgSpec(
+                "entityToken (F1) da face cilíndrica a roscar. Preferido a "
+                "selector quando há ambiguidade.",
+                type="string",
+                unit=None,
+                required=False,
+                example="abc123==",
+            ),
+        },
+    ),
+    "fusion.make_component": ToolSchema(
+        summary=(
+            "Transforma um corpo em componente (occurrence) — base para montagens e juntas. F3."
+        ),
+        args={
+            "body_ref": ArgSpec(
+                "Corpo a virar componente.",
+                type="string",
+                unit=None,
+                required=False,
+                example="Leaf_A",
+            ),
+            "name": ArgSpec(
+                "Nome do componente.",
+                type="string",
+                unit=None,
+                required=False,
+                example="Hinge_A",
+            ),
+        },
+    ),
+    "fusion.joint": ToolSchema(
+        summary=(
+            "Cria uma junta entre dois corpos/componentes: revolute (dobradiça), "
+            "rigid (fixa), slider (linear) ou cylindrical. F3."
+        ),
+        args={
+            "joint_type": ArgSpec(
+                "revolute | rigid | slider | cylindrical (default revolute).",
+                type="string",
+                unit=None,
+                required=False,
+                example="revolute",
+            ),
+            "body_one": ArgSpec(
+                "Primeiro corpo/componente da junta.",
+                type="string",
+                unit=None,
+                required=False,
+                example="Hinge_A",
+            ),
+            "body_two": ArgSpec(
+                "Segundo corpo/componente da junta.",
+                type="string",
+                unit=None,
+                required=False,
+                example="Hinge_B",
+            ),
+            "face_token_one": ArgSpec(
+                "entityToken (F1) da face da junta no corpo 1 (preferido).",
+                type="string",
+                unit=None,
+                required=False,
+                example="tokA==",
+            ),
+            "face_token_two": ArgSpec(
+                "entityToken (F1) da face da junta no corpo 2 (preferido).",
+                type="string",
+                unit=None,
+                required=False,
+                example="tokB==",
+            ),
+            "face_selector_one": ArgSpec(
+                "Selector da face no corpo 1 quando sem token (ex.: cylindrical).",
+                type="string",
+                unit=None,
+                required=False,
+                example="cylindrical",
+            ),
+            "face_selector_two": ArgSpec(
+                "Selector da face no corpo 2 quando sem token.",
+                type="string",
+                unit=None,
+                required=False,
+                example="cylindrical",
+            ),
+            "axis": ArgSpec(
+                "Eixo do movimento (x|y|z) para revolute/slider/cylindrical.",
+                type="string",
+                unit=None,
+                required=False,
+                example="z",
+            ),
+        },
+    ),
+    "fusion.knuckle_hinge": ToolSchema(
+        summary=(
+            "MACRO: dobradiça de nós (knuckles) que abre em torno de um pino "
+            "vertical — duas abas + coluna de knuckles alternados + pino. F3."
+        ),
+        args={
+            "leaf_length_mm": ArgSpec(
+                "Altura total da dobradiça / coluna de knuckles (mm).",
+                required=False,
+                example=40.0,
+            ),
+            "leaf_width_mm": ArgSpec(
+                "Largura de cada aba a partir do pino (mm).",
+                required=False,
+                example=20.0,
+            ),
+            "thickness_mm": ArgSpec(
+                "Espessura das abas (mm).",
+                required=False,
+                example=4.0,
+            ),
+            "knuckle_count": ArgSpec(
+                "Número de knuckles (>=3, alternados entre as abas).",
+                type="integer",
+                unit=None,
+                required=False,
+                example=5,
+            ),
+            "knuckle_diameter_mm": ArgSpec(
+                "Diâmetro dos knuckles (mm). Default ~2.5x a espessura.",
+                required=False,
+                example=10.0,
+            ),
+            "pin_diameter_mm": ArgSpec(
+                "Diâmetro do pino (mm). Default ~0.45x o knuckle.",
+                required=False,
+                example=4.0,
+            ),
+            "joint": ArgSpec(
+                "revolute para já criar a junta que faz a dobradiça abrir.",
+                type="string",
+                unit=None,
+                required=False,
+                example="revolute",
+            ),
+            "name": ArgSpec(
+                "Prefixo dos corpos gerados.",
+                type="string",
+                unit=None,
+                required=False,
+                example="Hinge",
+            ),
+        },
+    ),
+    "fusion.metric_screw": ToolSchema(
+        summary=(
+            "MACRO: parafuso métrico = haste + cabeça + rosca modelada. "
+            "designation 'M6' dá o diâmetro nominal. F3."
+        ),
+        args={
+            "designation": ArgSpec(
+                "Designação métrica (ex.: 'M6'). Define o diâmetro nominal.",
+                type="string",
+                unit=None,
+                required=False,
+                example="M6",
+            ),
+            "length_mm": ArgSpec(
+                "Comprimento da haste (mm). Default ~4x o nominal.",
+                required=False,
+                example=24.0,
+            ),
+            "head_diameter_mm": ArgSpec(
+                "Diâmetro da cabeça (mm). Default ~1.6x o nominal.",
+                required=False,
+                example=10.0,
+            ),
+            "head_height_mm": ArgSpec(
+                "Altura da cabeça (mm). Default ~0.9x o nominal.",
+                required=False,
+                example=5.0,
+            ),
+            "threaded": ArgSpec(
+                "false desativa a rosca modelada (só a geometria). Default true.",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=True,
+            ),
+            "name": ArgSpec(
+                "Prefixo dos corpos gerados.",
+                type="string",
+                unit=None,
+                required=False,
+                example="Screw",
+            ),
+        },
+    ),
     "fusion.loft_profiles": ToolSchema(
         summary="Loft entre 2+ perfis de sketch ordenados.",
         args={

@@ -166,6 +166,12 @@ def test_planner_toolset_matches_allowlist() -> None:
         "fusion.pattern_circular",
         "fusion.mirror_feature",
         "fusion.combine_bodies",
+        # F3 (mecanismos funcionais)
+        "fusion.thread",
+        "fusion.make_component",
+        "fusion.joint",
+        "fusion.knuckle_hinge",
+        "fusion.metric_screw",
         # Onda E
         "fusion.loft_profiles",
         "fusion.sweep_profile",

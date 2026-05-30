@@ -28,6 +28,11 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.pattern_circular",
     "fusion.mirror_feature",
     "fusion.combine_bodies",
+    "fusion.thread",
+    "fusion.make_component",
+    "fusion.joint",
+    "fusion.knuckle_hinge",
+    "fusion.metric_screw",
     "fusion.loft_profiles",
     "fusion.sweep_profile",
     "fusion.create_surface_patch",
@@ -3690,6 +3695,431 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
+        # ---- F3: mecanismos funcionais (rosca, componente, junta, macros) ----
+
+        def _nearest_thread_designation(query, thread_type, diameter_mm, is_internal):
+            # Escolhe a designacao metrica cujo tamanho nominal mais se aproxima
+            # do diametro (mm). allSizes da os tamanhos nominais; allDesignations
+            # da as designacoes (ex.: "M6x1") — pega a primeira (passo grosso).
+            if diameter_mm <= 0:
+                return None
+            try:
+                sizes = list(query.allSizes(thread_type))
+            except Exception:
+                return None
+            best = None
+            best_err = None
+            for size in sizes:
+                try:
+                    nominal = float(size)
+                except (TypeError, ValueError):
+                    continue
+                err = abs(nominal - diameter_mm)
+                if best_err is None or err < best_err:
+                    best_err = err
+                    best = size
+            if best is None:
+                return None
+            try:
+                designations = list(query.allDesignations(thread_type, best))
+            except Exception:
+                return None
+            return designations[0] if designations else None
+
+
+        def _thread(args):
+            # F3: rosca MODELADA (geometria real, nao cosmetica) numa face
+            # cilindrica de um corpo. Usa ThreadFeatures.createInput +
+            # isModeled=True. Resolve a face por token (F1) ou selector
+            # "cylindrical". designation tipo "M6x1"; senao deriva do diametro.
+            design = _design()
+            body = _find_body(
+                design,
+                args.get("body_ref") or args.get("body") or args.get("body_name"),
+            )
+            face = None
+            tokens = args.get("face_tokens")
+            if not tokens and args.get("face_token"):
+                tokens = [args.get("face_token")]
+            if tokens:
+                faces = _faces_by_tokens(design, tokens)
+                if faces.count > 0:
+                    face = faces.item(0)
+            if face is None:
+                cyl = _select_faces(body, "cylindrical")
+                if cyl.count == 0:
+                    raise ToolError(
+                        "fusion.no_face",
+                        "Sem face cilindrica para rosca em '" + body.name + "'.",
+                    )
+                face = cyl.item(0)
+            threads = _root(design).features.threadFeatures
+            is_internal = bool(args.get("is_internal", False))
+            query = threads.threadDataQuery
+            thread_type = args.get("thread_type") or query.defaultMetricThreadType
+            designation = args.get("designation") or args.get("thread_designation")
+            if not designation:
+                diameter_mm = _eval_param(args.get("diameter_mm"), design, 0.0) or 0.0
+                if diameter_mm <= 0:
+                    r = _face_radius_mm(face)
+                    diameter_mm = (r * 2.0) if r else 0.0
+                designation = _nearest_thread_designation(
+                    query, thread_type, diameter_mm, is_internal
+                )
+            if not designation:
+                raise ToolError(
+                    "fusion.thread_designation",
+                    "Nao deu para determinar a rosca (passe designation tipo "
+                    "'M6x1' ou diameter_mm).",
+                )
+            try:
+                classes = list(query.allClasses(is_internal, thread_type, designation))
+            except Exception:
+                classes = []
+            thread_class = classes[0] if classes else ""
+            thread_info = threads.createThreadInfo(
+                is_internal, thread_type, designation, thread_class
+            )
+            thread_input = threads.createInput(face, thread_info)
+            try:
+                thread_input.isModeled = True
+            except Exception:
+                pass
+            length_mm = _eval_param(args.get("length_mm"), design, 0.0) or 0.0
+            if length_mm > 0:
+                try:
+                    thread_input.isFullLength = False
+                    thread_input.threadLength = adsk.core.ValueInput.createByReal(
+                        length_mm / 10.0
+                    )
+                except Exception:
+                    pass
+            threads.add(thread_input)
+            return {{
+                "message": "Rosca {{}} ({{}}) em '{{}}'.".format(
+                    designation,
+                    "interna" if is_internal else "externa",
+                    body.name,
+                ),
+                "body_name": body.name,
+                "designation": designation,
+                "is_internal": is_internal,
+                "dimensions_mm": _body_dims_mm(body),
+            }}
+
+
+        def _make_component(args):
+            # F3: transforma um corpo em componente (occurrence) — base para
+            # montagens e juntas. Cria occurrence vazia no root e move o corpo
+            # pra dentro (BRepBody.moveToComponent).
+            design = _design()
+            body = _find_body(
+                design,
+                args.get("body_ref") or args.get("body") or args.get("body_name"),
+            )
+            root = _root(design)
+            name = str(args.get("name") or args.get("component_name") or body.name)
+            transform = adsk.core.Matrix3D.create()
+            occ = root.occurrences.addNewComponent(transform)
+            try:
+                occ.component.name = name
+            except Exception:
+                pass
+            try:
+                body.moveToComponent(occ)
+            except Exception as exc:
+                raise ToolError(
+                    "fusion.component_failed",
+                    "Falha ao mover corpo para componente: " + str(exc),
+                )
+            return {{
+                "message": "Componente '{{}}' criado a partir do corpo.".format(name),
+                "component_name": name,
+                "occurrence_name": occ.name,
+            }}
+
+
+        def _joint_geo_from_ref(design, body_ref, face_token, face_selector):
+            # Monta JointGeometry a partir de uma face (token F1 preferido, senao
+            # selector). Planar => createByPlanarFace; cilindrica/curva =>
+            # createByNonPlanarFace. CenterKeyPoint para coaxialidade.
+            face = None
+            if face_token:
+                faces = _faces_by_tokens(design, [face_token])
+                if faces.count > 0:
+                    face = faces.item(0)
+            if face is None:
+                body = _find_body(design, body_ref)
+                coll = _select_faces(body, face_selector or "cylindrical")
+                if coll.count > 0:
+                    face = coll.item(0)
+            if face is None:
+                return None
+            kp = adsk.fusion.JointKeyPointTypes.CenterKeyPoint
+            try:
+                is_planar = (
+                    face.geometry.surfaceType
+                    == adsk.core.SurfaceTypes.PlaneSurfaceType
+                )
+            except Exception:
+                is_planar = False
+            try:
+                if is_planar:
+                    return adsk.fusion.JointGeometry.createByPlanarFace(face, None, kp)
+                return adsk.fusion.JointGeometry.createByNonPlanarFace(face, kp)
+            except Exception:
+                return None
+
+
+        def _joint(args):
+            # F3: junta entre dois corpos/componentes. revolute (dobradica),
+            # rigid (fixa), slider (linear), cylindrical. A geometria das juntas
+            # vem de faces (token F1 preferido, senao selector). Best-effort: se
+            # a API recusar a geometria, erro claro — a geometria do mecanismo
+            # segue valida (a junta e a cinematica por cima dela).
+            design = _design()
+            joint_type = str(
+                args.get("joint_type") or args.get("type") or "revolute"
+            ).lower()
+            geo0 = _joint_geo_from_ref(
+                design,
+                args.get("occurrence_one")
+                or args.get("body_one")
+                or args.get("body_a"),
+                args.get("face_token_one"),
+                args.get("face_selector_one"),
+            )
+            geo1 = _joint_geo_from_ref(
+                design,
+                args.get("occurrence_two")
+                or args.get("body_two")
+                or args.get("body_b"),
+                args.get("face_token_two"),
+                args.get("face_selector_two"),
+            )
+            if geo0 is None or geo1 is None:
+                raise ToolError(
+                    "fusion.joint_geometry",
+                    "Nao deu para montar a geometria da junta (faces). Passe "
+                    "face_token_one/two (F1) ou face_selector_one/two.",
+                )
+            joints = _root(design).joints
+            jinp = joints.createInput(geo0, geo1)
+            axis_map = {{
+                "x": adsk.fusion.JointDirections.XAxisJointDirection,
+                "y": adsk.fusion.JointDirections.YAxisJointDirection,
+                "z": adsk.fusion.JointDirections.ZAxisJointDirection,
+            }}
+            axis = axis_map.get(
+                str(args.get("axis") or "z").lower(),
+                adsk.fusion.JointDirections.ZAxisJointDirection,
+            )
+            if joint_type in ("revolute", "hinge", "pin"):
+                jinp.setAsRevoluteJointMotion(axis)
+            elif joint_type in ("slider", "prismatic"):
+                jinp.setAsSliderJointMotion(axis)
+            elif joint_type == "cylindrical":
+                jinp.setAsCylindricalJointMotion(axis)
+            else:
+                jinp.setAsRigidJointMotion()
+            feat = joints.add(jinp)
+            return {{
+                "message": "Junta {{}} criada.".format(joint_type),
+                "joint_type": joint_type,
+                "joint_name": getattr(feat, "name", None),
+            }}
+
+
+        def _metric_nominal_mm(designation):
+            # "M6" / "M6x1" -> 6.0 (diametro nominal em mm).
+            s = str(designation or "M6").upper().strip()
+            if s.startswith("M"):
+                s = s[1:]
+            for sep in ("X", "-"):
+                if sep in s:
+                    s = s.split(sep)[0]
+            try:
+                return float(s)
+            except (TypeError, ValueError):
+                return 6.0
+
+
+        def _metric_screw(args):
+            # F3 macro: parafuso metrico = haste (shank) + cabeca + rosca
+            # modelada na haste. Compoe primitivas validadas (_add_cylinder x2,
+            # _thread, _combine_bodies). Eixo Z. designation "M6" da o diametro
+            # nominal; length_mm = comprimento da haste.
+            design = _design()
+            designation = str(args.get("designation") or args.get("size") or "M6")
+            nominal = _eval_param(args.get("diameter_mm"), design, 0.0) or 0.0
+            if nominal <= 0:
+                nominal = _metric_nominal_mm(designation)
+            length_mm = _eval_param(args.get("length_mm"), design, 0.0) or (
+                nominal * 4.0
+            )
+            head_d = _eval_param(args.get("head_diameter_mm"), design, 0.0) or (
+                nominal * 1.6
+            )
+            head_h = _eval_param(args.get("head_height_mm"), design, 0.0) or (
+                nominal * 0.9
+            )
+            center = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
+            cx, cy = center[0], center[1]
+            name = str(args.get("name") or "Screw")
+            shank = _add_cylinder({{
+                "diameter_mm": nominal,
+                "height_mm": length_mm,
+                "center_mm": [cx, cy, 0.0],
+                "name": name + "_Shank",
+            }})
+            shank_name = shank.get("body_name")
+            thread_note = ""
+            if args.get("threaded") is not False:
+                try:
+                    _thread({{
+                        "body_ref": shank_name,
+                        "diameter_mm": nominal,
+                        "is_internal": False,
+                        "length_mm": length_mm,
+                        "face_selector": "cylindrical",
+                    }})
+                    thread_note = " + rosca"
+                except Exception as exc:
+                    thread_note = " [rosca pulada: " + str(exc) + "]"
+            head = _add_cylinder({{
+                "diameter_mm": head_d,
+                "height_mm": head_h,
+                "center_mm": [cx, cy, length_mm],
+                "name": name + "_Head",
+            }})
+            head_name = head.get("body_name")
+            try:
+                _combine_bodies({{
+                    "target_ref": shank_name,
+                    "tool_refs": [head_name],
+                    "operation": "join",
+                }})
+            except Exception:
+                pass
+            return {{
+                "message": "Parafuso {{}} L{{}}mm (cabeca o{{}}mm){{}}.".format(
+                    designation, length_mm, head_d, thread_note
+                ),
+                "body_name": shank_name,
+                "designation": designation,
+                "nominal_mm": nominal,
+                "length_mm": length_mm,
+            }}
+
+
+        def _knuckle_hinge(args):
+            # F3 macro: dobradica de nos (knuckles) que abre em torno de um pino
+            # vertical (eixo Z). Duas abas (leaves) planares flanqueando uma
+            # coluna de knuckles cilindricos alternados (par->aba A, impar->aba
+            # B) + pino passante coaxial. Compoe primitivas validadas. Eixo Z
+            # (orientacao reparametrizavel). joint=revolute opcional cria a junta.
+            design = _design()
+            leaf_len = _eval_param(args.get("leaf_length_mm"), design, 0.0) or 40.0
+            leaf_w = _eval_param(args.get("leaf_width_mm"), design, 0.0) or 20.0
+            thickness = _eval_param(args.get("thickness_mm"), design, 0.0) or 4.0
+            n = int(args.get("knuckle_count") or 5)
+            if n < 3:
+                n = 3
+            knuckle_d = _eval_param(args.get("knuckle_diameter_mm"), design, 0.0) or (
+                thickness * 2.5
+            )
+            pin_d = _eval_param(args.get("pin_diameter_mm"), design, 0.0) or (
+                knuckle_d * 0.45
+            )
+            center = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
+            cx, cy = center[0], center[1]
+            name = str(args.get("name") or "Hinge")
+            seg = leaf_len / float(n)
+            knuckle_r = knuckle_d / 2.0
+            a_names = []
+            b_names = []
+            for i in range(n):
+                k = _add_cylinder({{
+                    "diameter_mm": knuckle_d,
+                    "height_mm": seg,
+                    "center_mm": [cx, cy, i * seg],
+                    "name": name + "_Knuckle_" + str(i),
+                }})
+                if i % 2 == 0:
+                    a_names.append(k.get("body_name"))
+                else:
+                    b_names.append(k.get("body_name"))
+            leaf_a = _add_box({{
+                "width_mm": leaf_w,
+                "depth_mm": thickness,
+                "height_mm": leaf_len,
+                "origin_mm": [cx + knuckle_r * 0.5, cy - thickness / 2.0, 0.0],
+                "name": name + "_Leaf_A",
+            }})
+            leaf_b = _add_box({{
+                "width_mm": leaf_w,
+                "depth_mm": thickness,
+                "height_mm": leaf_len,
+                "origin_mm": [
+                    cx - knuckle_r * 0.5 - leaf_w,
+                    cy - thickness / 2.0,
+                    0.0,
+                ],
+                "name": name + "_Leaf_B",
+            }})
+            a_asm = leaf_a.get("body_name")
+            b_asm = leaf_b.get("body_name")
+            if a_names:
+                try:
+                    _combine_bodies({{
+                        "target_ref": a_asm,
+                        "tool_refs": a_names,
+                        "operation": "join",
+                    }})
+                except Exception:
+                    pass
+            if b_names:
+                try:
+                    _combine_bodies({{
+                        "target_ref": b_asm,
+                        "tool_refs": b_names,
+                        "operation": "join",
+                    }})
+                except Exception:
+                    pass
+            pin = _add_cylinder({{
+                "diameter_mm": pin_d,
+                "height_mm": leaf_len,
+                "center_mm": [cx, cy, 0.0],
+                "name": name + "_Pin",
+            }})
+            pin_name = pin.get("body_name")
+            joint_note = ""
+            if str(args.get("joint") or "").lower() in ("revolute", "true", "1", "yes"):
+                try:
+                    _make_component({{"body_ref": a_asm, "name": name + "_A"}})
+                    _make_component({{"body_ref": b_asm, "name": name + "_B"}})
+                    _joint({{
+                        "joint_type": "revolute",
+                        "body_one": a_asm,
+                        "body_two": b_asm,
+                        "face_selector_one": "cylindrical",
+                        "face_selector_two": "cylindrical",
+                        "axis": "z",
+                    }})
+                    joint_note = " + junta revolute"
+                except Exception as exc:
+                    joint_note = " [junta pulada: " + str(exc) + "]"
+            return {{
+                "message": "Dobradica '{{}}' {{}} knuckles (pino o{{}}mm){{}}.".format(
+                    name, n, pin_d, joint_note
+                ),
+                "body_names": [a_asm, b_asm, pin_name],
+                "knuckle_count": n,
+                "pin_diameter_mm": pin_d,
+            }}
+
+
         def _dispatch_inner(tool_name, args):
             if tool_name == "fusion.open_design":
                 return _open_design(args)
@@ -3737,6 +4167,16 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _mirror_feature(args)
             if tool_name == "fusion.combine_bodies":
                 return _combine_bodies(args)
+            if tool_name == "fusion.thread":
+                return _thread(args)
+            if tool_name == "fusion.make_component":
+                return _make_component(args)
+            if tool_name == "fusion.joint":
+                return _joint(args)
+            if tool_name == "fusion.knuckle_hinge":
+                return _knuckle_hinge(args)
+            if tool_name == "fusion.metric_screw":
+                return _metric_screw(args)
             if tool_name == "fusion.loft_profiles":
                 return _loft_profiles(args)
             if tool_name == "fusion.sweep_profile":
