@@ -4,6 +4,16 @@
 
 > **Depende de**: Fase 8 fechada (cobertura "todo o Design" estável). Frente nasceu do gate da Fase 4 (Cenário A), onde se confirmou que o nudge é a camada mais fraca contra variabilidade do planner. O detalhe abaixo é um **stub** — o micro-plano é reescrito just-in-time antes de iniciar a fase. Mantido aqui para preservar cross-links e a decisão de roadmap.
 
+## Status (replan v4 — F6)
+
+> Esta fase virou a **Frente F6** do replan. Entrega incremental:
+> - **9.1 Structured Outputs** — JÁ ativo: o planner usa `gateway.generate_structured` com `EXECUTION_PLAN_SCHEMA` (tool_name por enum = `PLANNER_TOOLSET`). Campo fora do schema é rejeitado na origem.
+> - **9.2 Sanitizer determinístico** — ✅ **ENTREGUE** (`backend/app/modeling/plan_sanitizer.py`): `sanitize_tool_arguments` remove campos-fantasma (`GHOST_KEYS`: face/target_face/surface/…), descarta valores com referência geométrica (`<body>.bounding_box.max_x`, `.center`, `.top_face`), remapeia alias (`axis_line`→`axis`). Wired em `planner._plan_from_llm_payload` atrás de `modeling_plan_sanitizer_enabled` (**default ON**, guardrail conservador; planos válidos passam intactos). Telemetria por `logger.warning` + `SanitizeAction`. **11 testes (`test_f6_plan_sanitizer.py`) + 94 consumidores verdes.**
+> - **9.3 Retry agêntico** — JÁ existe no `agent_loop` (correção de step por erro real, teto 5). Guidance dirigida por campo suspeito = follow-up.
+> - **9.4 Verifier LLM (flag)** e **9.5 Templates** — não iniciados (opt-in/sob demanda).
+>
+> **Pendente:** gate do dono (cenários A/B/C reproduzíveis sem ajuste manual) + ADR-020 formalizado + medição de telemetria antes/depois.
+
 ## Objetivo
 
 Reduzir a variabilidade do planner contra o adapter Fusion por **defesa em camadas determinísticas**, na ordem de robustez × custo. Eliminar a dependência da boa vontade do modelo (nudges em system prompt) substituindo por contratos forçados, normalização determinística e re-prompts dirigidos por erro real.

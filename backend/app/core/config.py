@@ -132,6 +132,19 @@ class Settings(BaseModel):
             in {"1", "true", "yes", "on"}
         )
     )
+    # Sanitizer determinístico pós-LLM (Frente F6 / ex-Fase 9.2, replan v4).
+    # Camada entre planner e executor que remove campos-fantasma e valores de
+    # referência geométrica (ex.: `face:"X.top_face"`, `bounding_box.max_x`) que
+    # os nudges do system prompt não eliminam 100% (Bug J' do gate da Fase 4).
+    # Conservador: só descarta o que NENHUM handler aceita e os nudges proíbem;
+    # planos válidos passam intactos. Default ON (guardrail puro, com telemetria
+    # por aviso); desligue para depurar o comportamento cru do planner.
+    modeling_plan_sanitizer_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_PLAN_SANITIZER_ENABLED", "true").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",

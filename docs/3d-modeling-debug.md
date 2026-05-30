@@ -181,9 +181,11 @@ backend**:
 
 ```dotenv
 TRUTHS_FORGE_MODELING_OBSERVABILITY_ENABLED=true
-TRUTHS_FORGE_MODELING_AGENTIC_LOOP_ENABLED=true   # loop de auto-correção (Fase 2)
-TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE=true        # inclui prompt/resposta no trace
-TRUTHS_FORGE_MCP_TRANSPORT=mcp_http               # roteia fusion.* pelo servidor standalone
+TRUTHS_FORGE_MODELING_AGENTIC_LOOP_ENABLED=true        # loop de auto-correção (Fase 2)
+TRUTHS_FORGE_MODELING_HIERARCHICAL_PLANNING_ENABLED=true  # decompõe→observa→replaneja (F2); default OFF
+TRUTHS_FORGE_MODELING_PLAN_SANITIZER_ENABLED=true      # sanitizer pós-LLM (F6); DEFAULT ON, desligue p/ depurar planner cru
+TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE=true             # inclui prompt/resposta no trace
+TRUTHS_FORGE_MCP_TRANSPORT=mcp_http                    # roteia fusion.* pelo servidor standalone
 ```
 
 ```powershell

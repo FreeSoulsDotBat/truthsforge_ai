@@ -20,8 +20,10 @@ from app.core.contracts import (
     ModelingStepStatus,
     ModelingSubGoal,
 )
+from app.core.config import settings
 from app.llm_gateway.gateway import LLMGateway
 from app.modeling import tool_schemas
+from app.modeling.plan_sanitizer import sanitize_tool_arguments
 from app.modeling.tool_registry import PLANNER_TOOLSET
 
 logger = logging.getLogger(__name__)
@@ -1017,6 +1019,10 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
             item.get("approval_required", False)
         )
         input_json = _decode_input_json(item.get("input_json"))
+        # F6 (sanitizer determinístico): remove campos-fantasma e valores de
+        # referência geométrica que os nudges não eliminam, antes do executor.
+        if settings.modeling_plan_sanitizer_enabled and isinstance(input_json, dict):
+            input_json, _sanitize_actions = sanitize_tool_arguments(tool_name, input_json)
         step_software = _step_software(tool_name, software)
         status = (
             ModelingStepStatus.pending
