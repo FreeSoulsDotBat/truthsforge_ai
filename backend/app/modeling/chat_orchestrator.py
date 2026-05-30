@@ -691,6 +691,68 @@ class ModelingChatOrchestrator:
             return None
         return self._inner_fusion_payload(outcome.output)
 
+    def _read_live_geometry(
+        self, *, software: ModelingSoftware | None, context_plan: ModelingPlan
+    ) -> dict[str, Any] | None:
+        """F5: leitura best-effort da GEOMETRIA real antes da edição.
+
+        Mesmo padrão de ``_read_live_timeline``, mas com ``fusion.query_geometry``
+        — traz corpos, faces/arestas e tokens estáveis (F1) do estado AO VIVO.
+        Alimenta a reconciliação estruturada (ModelState ao vivo) para o planner
+        editar o modelo atual, captando mudanças manuais do usuário desde o
+        último plano. ``None`` para não-fusion / qualquer falha (nunca bloqueia).
+        """
+
+        if software != ModelingSoftware.fusion:
+            return None
+        probe = ModelingPlanStep(
+            seq=1,
+            title="Ler geometria atual do modelo",
+            software=ModelingSoftware.fusion,
+            tool_name="fusion.query_geometry",
+            risk_level=ModelingRiskLevel.low,
+            status=ModelingStepStatus.approved,
+            input_json={},
+        )
+        try:
+            outcome = self.executor._execute_single_step(probe, plan=context_plan)
+        except Exception:  # pragma: no cover - defensive: read must not block edit
+            logger.warning("live geometry read raised; edit proceeds without it", exc_info=True)
+            return None
+        if not outcome.ok or not isinstance(outcome.output, dict):
+            return None
+        return outcome.output
+
+    def _build_live_state_block(
+        self,
+        reconciliation: str | None,
+        geometry_output: dict[str, Any] | None,
+    ) -> str | None:
+        """F5: combina a reconciliação da timeline com o ModelState AO VIVO.
+
+        Parseia ``query_geometry`` num ``ModelState`` (F1) e o renderiza como
+        bloco estruturado, anexando-o à reconciliação textual. Best-effort: se
+        a geometria não parsear, devolve a reconciliação original intacta.
+        """
+
+        if not isinstance(geometry_output, dict):
+            return reconciliation
+        # Import tardio para evitar ciclo (model_state importa do executor).
+        from app.modeling.model_state import (
+            model_state_from_query_output,
+            render_model_state_block,
+        )
+
+        live_state = model_state_from_query_output(geometry_output)
+        if live_state is None:
+            return reconciliation
+        block = render_model_state_block(live_state)
+        if not block:
+            return reconciliation
+        if reconciliation:
+            return reconciliation + "\n\n" + block
+        return block
+
     @staticmethod
     def _inner_fusion_payload(output: dict[str, Any] | None) -> dict[str, Any] | None:
         """Delegação p/ ``executor.inner_fusion_payload`` (fonte única).
@@ -820,6 +882,13 @@ class ModelingChatOrchestrator:
             )
             live_output = self._read_live_timeline(software=software, context_plan=read_context)
             reconciliation = self._build_reconciliation_block(live_output)
+            # F5: reconciliação estruturada — lê a geometria AO VIVO (tokens/raios
+            # reais, F1) e injeta um ModelState atual no contexto do planner.
+            if settings.modeling_live_geometry_reconciliation_enabled:
+                geometry_output = self._read_live_geometry(
+                    software=software, context_plan=read_context
+                )
+                reconciliation = self._build_live_state_block(reconciliation, geometry_output)
 
         plan = self.planner.create_plan(edit_payload, live_state_block=reconciliation)
         plan = self._apply_rollback_marker(plan, live_output)

@@ -145,6 +145,19 @@ class Settings(BaseModel):
             in {"1", "true", "yes", "on"}
         )
     )
+    # Reconciliação por geometria ao vivo na edição (Frente F5, replan v4).
+    # Quando ``true``, antes de planejar uma edição o orchestrator lê a
+    # GEOMETRIA real (``fusion.query_geometry``) além da timeline e injeta um
+    # ModelState ao vivo (tokens/raios reais — F1) no contexto do planner, para
+    # editar o modelo ATUAL e não um snapshot velho (capta mudanças manuais do
+    # usuário). Default OFF: probe extra (custo/latência) e preserva o caminho
+    # da Fase 3 já homologado até o gate do dono.
+    modeling_live_geometry_reconciliation_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_LIVE_GEOMETRY_RECONCILIATION_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",
