@@ -799,12 +799,24 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # embrulha a lista em {{"_raw": [...]}}; aqui desempacotamos e
             # iteramos. Mantemos so itens dict para evitar recursao maligna.
             raw_batch = args.get("_raw")
+            if raw_batch is None:
+                # Drift do gate F6 (placa-2 e8cc2734): o LLM manda os furos numa
+                # chave circles/holes em vez de _raw. Roteia p/ o mesmo batch.
+                for _bk in ("circles", "holes"):
+                    if isinstance(args.get(_bk), list):
+                        raw_batch = args.get(_bk)
+                        break
             if isinstance(raw_batch, list):
+                parent_sketch = args.get("sketch")
                 batch_results = []
                 batch_messages = []
                 for item in raw_batch:
                     if not isinstance(item, dict):
                         continue
+                    # Os itens do batch herdam o sketch do nível superior.
+                    if parent_sketch is not None and item.get("sketch") is None:
+                        item = dict(item)
+                        item["sketch"] = parent_sketch
                     inner = _add_circle(item)
                     batch_results.append(inner)
                     inner_msg = inner.get("message") if isinstance(inner, dict) else None
@@ -2777,8 +2789,16 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Onda D (high_risk): boolean entre bodies existentes.
             # target_ref + tool_refs[] (nomes/indices) + operation.
             design = _design()
-            target = _find_body(design, args.get("target_ref") or args.get("target"))
-            tool_refs = args.get("tool_refs") or args.get("tools") or []
+            # Drift do gate F3 (parafuso f9f2ce0b): o LLM usa target_body/
+            # target_name em vez de target_ref/target.
+            target = _find_body(
+                design,
+                args.get("target_ref")
+                or args.get("target")
+                or args.get("target_body")
+                or args.get("target_name"),
+            )
+            tool_refs = args.get("tool_refs") or args.get("tools") or args.get("tool_bodies") or []
             if not isinstance(tool_refs, list) or not tool_refs:
                 raise ToolError(
                     "fusion.invalid_dimensions",
@@ -3741,6 +3761,14 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             tokens = args.get("face_tokens")
             if not tokens and args.get("face_token"):
                 tokens = [args.get("face_token")]
+            # F3 (parafuso f9f2ce0b): o LLM às vezes deixa um PLACEHOLDER no
+            # face_token (ex.: "<use_cylindrical_shank_face_token...>"). Ignora
+            # tokens que não parecem reais e cai no selector cylindrical.
+            if tokens:
+                tokens = [
+                    t for t in tokens
+                    if isinstance(t, str) and t.strip() and "<" not in t
+                ]
             if tokens:
                 faces = _faces_by_tokens(design, tokens)
                 if faces.count > 0:

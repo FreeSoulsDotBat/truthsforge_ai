@@ -529,6 +529,57 @@ def test_service_uses_llm_plan_when_gateway_returns_valid_payload() -> None:
     assert plan.steps[0].approval_required is False
 
 
+def test_service_retries_once_then_succeeds_before_fallback() -> None:
+    """F6: uma falha transitória do provedor (truncação/timeout/vazio) é
+    re-tentada 1x antes do fallback heurístico. No gate F3 (2026-06-01) o
+    planner caía no heurístico já no 1º erro, matando 4 gates complexos.
+    """
+
+    valid = {
+        "software_choice": "blender",
+        "confidence": 0.9,
+        "rationale": "ok",
+        "assumptions": [],
+        "risks": [],
+        "steps": [
+            {
+                "seq": 1,
+                "title": "Validar mesh",
+                "tool_name": "blender.validate_mesh",
+                "risk_level": "low",
+                "approval_required": False,
+                "input_json": "{}",
+            }
+        ],
+    }
+
+    class _FlakyGateway:
+        def __init__(self, response: Any) -> None:
+            self.response = response
+            self.calls = 0
+
+        async def generate_structured(
+            self, *, model: Any, messages: Any, schema_name: str, schema: Any
+        ) -> Any:
+            self.calls += 1
+            if self.calls == 1:
+                raise ProviderExecutionError("resposta truncada (simulada)")
+            return self.response
+
+    gateway = _FlakyGateway(valid)
+    service = ModelingService(store=get_store(), gateway=gateway)
+    plan = service.create_plan(
+        ModelingPlanCreate(
+            prompt="valide a malha do meu modelo",
+            mode=ModelingExecutionMode.approval_required,
+        )
+    )
+
+    assert gateway.calls == 2  # re-tentou após a 1ª falha
+    assert len(plan.steps) == 1  # plano do LLM, não o heurístico (3 passos)
+    assert plan.steps[0].tool_name == "blender.validate_mesh"
+
+
 def test_create_heuristic_plan_still_available_as_alias() -> None:
     """Backwards-compatible behaviour kept so external callers do not break."""
     from app.modeling.planner import create_structured_plan

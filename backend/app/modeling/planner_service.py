@@ -409,36 +409,56 @@ class ModelingPlannerService:
                 ModelingPlannerSource.heuristic,
                 "planner_model_unavailable",
             )
-        try:
-            knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
-            edit_context = self._resolve_edit_context(payload, live_state_block=live_state_block)
-            with self._tracer.record_span(
-                "planner.llm_request",
-                source=ModelingTraceSource.backend,
-                payload=self._build_llm_request_payload(model, payload),
-            ) as span:
-                plan = create_llm_plan(
-                    payload,
-                    gateway=self.gateway,
-                    model=model,
-                    knowledge_bases=knowledge_bases,
-                    edit_context=edit_context,
+        plan_model = self._planning_model(model)
+        knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
+        edit_context = self._resolve_edit_context(payload, live_state_block=live_state_block)
+        # F6: 1 retry antes do fallback heurístico. Truncação/timeout/resposta
+        # vazia do provedor costumam ser transitórios; ``plan_model`` cobre a
+        # truncação por orçamento de saída curto (causa dos 4 fallbacks do gate
+        # F3 em 2026-06-01).
+        for _attempt in range(2):
+            try:
+                with self._tracer.record_span(
+                    "planner.llm_request",
+                    source=ModelingTraceSource.backend,
+                    payload=self._build_llm_request_payload(plan_model, payload),
+                ) as span:
+                    plan = create_llm_plan(
+                        payload,
+                        gateway=self.gateway,
+                        model=plan_model,
+                        knowledge_bases=knowledge_bases,
+                        edit_context=edit_context,
+                    )
+                    span.attach(
+                        {
+                            "step_count": len(plan.steps),
+                            "kind": plan.kind.value,
+                            "edit_context": bool(edit_context),
+                            "attempt": _attempt + 1,
+                        }
+                    )
+                return plan, ModelingPlannerSource.llm, None
+            except Exception as exc:  # noqa: BLE001 - fallback is intentional
+                if _attempt == 0:
+                    self._tracer.record(
+                        "planner.llm_retry",
+                        source=ModelingTraceSource.backend,
+                        level=ModelingTraceLevel.warn,
+                        message=f"Planner LLM falhou ({exc}); 1 nova tentativa.",
+                    )
+                    continue
+                classified = self._classify_and_record_llm_error(exc, model)
+                return (
+                    create_heuristic_plan(payload),
+                    ModelingPlannerSource.heuristic,
+                    str(classified),
                 )
-                span.attach(
-                    {
-                        "step_count": len(plan.steps),
-                        "kind": plan.kind.value,
-                        "edit_context": bool(edit_context),
-                    }
-                )
-            return plan, ModelingPlannerSource.llm, None
-        except Exception as exc:  # noqa: BLE001 - fallback is intentional
-            classified = self._classify_and_record_llm_error(exc, model)
-            return (
-                create_heuristic_plan(payload),
-                ModelingPlannerSource.heuristic,
-                str(classified),
-            )
+        return (  # pragma: no cover - o loop acima sempre retorna
+            create_heuristic_plan(payload),
+            ModelingPlannerSource.heuristic,
+            "planner_retry_exhausted",
+        )
 
     async def _build_plan_async(
         self, payload: ModelingPlanCreate
@@ -453,33 +473,71 @@ class ModelingPlannerService:
         try:
             knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
             edit_context = self._resolve_edit_context(payload)
-            with self._tracer.record_span(
-                "planner.llm_request",
-                source=ModelingTraceSource.backend,
-                payload=self._build_llm_request_payload(model, payload),
-            ) as span:
-                plan = await create_llm_plan_async(
-                    payload,
-                    gateway=self.gateway,
-                    model=model,
-                    knowledge_bases=knowledge_bases,
-                    edit_context=edit_context,
-                )
-                span.attach(
-                    {
-                        "step_count": len(plan.steps),
-                        "kind": plan.kind.value,
-                        "edit_context": bool(edit_context),
-                    }
-                )
-            return plan, ModelingPlannerSource.llm, None
-        except Exception as exc:  # noqa: BLE001 - fallback is intentional
+            plan_model = self._planning_model(model)
+            for _attempt in range(2):  # F6: 1 retry antes do fallback heurístico
+                try:
+                    with self._tracer.record_span(
+                        "planner.llm_request",
+                        source=ModelingTraceSource.backend,
+                        payload=self._build_llm_request_payload(plan_model, payload),
+                    ) as span:
+                        plan = await create_llm_plan_async(
+                            payload,
+                            gateway=self.gateway,
+                            model=plan_model,
+                            knowledge_bases=knowledge_bases,
+                            edit_context=edit_context,
+                        )
+                        span.attach(
+                            {
+                                "step_count": len(plan.steps),
+                                "kind": plan.kind.value,
+                                "edit_context": bool(edit_context),
+                                "attempt": _attempt + 1,
+                            }
+                        )
+                    return plan, ModelingPlannerSource.llm, None
+                except Exception as exc:  # noqa: BLE001 - fallback is intentional
+                    if _attempt == 0:
+                        self._tracer.record(
+                            "planner.llm_retry",
+                            source=ModelingTraceSource.backend,
+                            level=ModelingTraceLevel.warning,
+                            message=f"Planner LLM falhou ({exc}); 1 nova tentativa.",
+                        )
+                        continue
+                    classified = self._classify_and_record_llm_error(exc, model)
+                    return (
+                        create_heuristic_plan(payload),
+                        ModelingPlannerSource.heuristic,
+                        str(classified),
+                    )
+        except Exception as exc:  # noqa: BLE001 - resolução/retry caem no heurístico
             classified = self._classify_and_record_llm_error(exc, model)
             return (
                 create_heuristic_plan(payload),
                 ModelingPlannerSource.heuristic,
                 str(classified),
             )
+
+    # F6: piso de tokens de saída para a chamada de planejamento.
+    _PLANNING_OUTPUT_TOKEN_FLOOR = 16384
+
+    def _planning_model(self, model: ModelConfig) -> ModelConfig:
+        """Garante orçamento de saída suficiente para o plano (F6).
+
+        Planos complexos truncam o JSON quando ``max_output_tokens`` é curto —
+        pior em modelos de reasoning (gpt-5-mini gasta tokens "pensando" antes
+        de emitir o plano). Os 4 fallbacks do gate F3 (2026-06-01) eram
+        exatamente isto: JSON truncado/vazio. Eleva o teto só para a chamada de
+        planejamento, sem tocar no registro do modelo.
+        """
+        current = model.max_output_tokens or 0
+        if current >= self._PLANNING_OUTPUT_TOKEN_FLOOR:
+            return model
+        return model.model_copy(
+            update={"max_output_tokens": self._PLANNING_OUTPUT_TOKEN_FLOOR}
+        )
 
     def _classify_and_record_llm_error(
         self, exc: BaseException, model: ModelConfig
