@@ -171,6 +171,98 @@ executor.step_ok
 
 ---
 
+## Gate F3 — Mecanismos funcionais (thread/joint/macros) ⭐ maior risco (API blind)
+
+`thread`/`joint` foram escritos contra a API documentada **sem Fusion à mão** —
+é onde o teu olho vale mais. Os macros (`knuckle_hinge`/`metric_screw`) compõem
+primitivas já validadas, então têm menos risco.
+
+### F3.1 — Dobradiça de nós que ABRE
+
+**Dirigido** (prova o macro `knuckle_hinge`):
+```
+Crie uma dobradiça de nós (knuckle hinge) com 5 nós, abas de 40 mm de
+comprimento por 20 mm de largura, 4 mm de espessura, pino de 4 mm, e já
+monte a junta revolute para ela abrir.
+```
+**Natural** (prova o planner compondo a montagem):
+```
+Modele uma caixa de 60x40x30 mm com uma tampa, ligadas por uma dobradiça de
+nós (knuckles) numa borda de 60 mm, de modo que a tampa abra e feche.
+```
+**Observar:** as abas/tampa giram em torno do pino (junta revolute no browser);
+os nós são coaxiais e alternados; o pino atravessa todos.
+
+### F3.2 — Parafuso que ENCAIXA (rosca modelada)
+
+**Dirigido** (prova `metric_screw` + `thread`):
+```
+Crie um parafuso métrico M6 de 24 mm com rosca modelada.
+```
+**Encaixe** (prova rosca interna casando a externa — a MESMA designação):
+```
+Crie um bloco de 30x30x15 mm com um furo central roscado M6 (rosca interna
+modelada) e um parafuso M6 de 20 mm que encaixe nessa rosca.
+```
+**Observar:** a rosca é **geometria real** (helicoidal modelada, não textura
+cosmética); o parafuso e o furo têm a mesma designação M6 → encaixam.
+
+### F3.3 — Suporte de monitor paramétrico
+
+```
+Crie um suporte de monitor em L paramétrico: base de 120x100 mm, coluna
+vertical de 200 mm e uma chapa VESA de 100x100 mm com 4 furos M4 nos cantos.
+Deixe altura e largura como parâmetros.
+```
+**Observar:** os 4 furos M4 simétricos; mude `altura` em *Change Parameters* e a
+coluna recomputa.
+
+---
+
+## Gate F4 — Image-to-model (vision real)
+
+**Pré-requisito:** ter um modelo **com capability `vision`** habilitado no
+registro (Anthropic/OpenAI). Sem isso, cai em metadata-only (sem análise da
+imagem) — confirme no modal de Diagnóstico / `GET /api/models`.
+
+**Fluxo:** anexe uma **foto** de uma peça no chat 3D e mande:
+```
+Analise essa imagem e modele a peça o mais fiel possível. Antes de gerar,
+me diga em texto o que você entendeu da forma e das features.
+```
+**Observar:** a descrição fala da **forma/features da imagem** (caixa, furos,
+nervuras…), não do nome do arquivo; o sólido gerado lembra a foto.
+
+---
+
+## Gate F5 — Edição robusta (geometria ao vivo)
+
+Precisa da flag `LIVE_GEOMETRY_RECONCILIATION_ENABLED=true`. Sequência:
+1. **Chat:** `Crie um cilindro de 20 mm de diâmetro e 40 mm de altura.`
+2. **À mão no Fusion:** mude o diâmetro para **30 mm** (edite a feature/parâmetro).
+3. **Chat (mesma conversa):** `Adicione um furo de 6 mm centralizado no topo.`
+
+**Observar:** o furo sai centrado no topo de **30 mm** (estado atual), não no de
+20 mm (snapshot velho). No trace, a reconciliação da edição mostra a geometria
+ao vivo (`<model-state>` com o raio real). Comparativo opcional: repita com a
+flag OFF e veja a diferença.
+
+---
+
+## Gate F6 — Determinismo (sanitizer)
+
+Roda o mesmo pedido **2×** sem mudar nada — ambos devem fechar igual:
+```
+Crie uma placa de 120x80x6 mm com 4 furos de 8 mm nos cantos, a 15 mm de
+cada borda.
+```
+**Observar:** os 4 furos saem certos nas 2 execuções (era o Bug J'). Se o LLM
+tentar um campo-fantasma (`face:"Placa.top_face"`, `bounding_box.max_x`), o trace
+mostra `plan_sanitizer drop_ghost_key`/`drop_geom_ref_value` e o step **não falha**
+por causa disso. Sanitizer já vem ON por padrão.
+
+---
+
 ## Plano literal via API (fallback — quando nem natural nem dirigido funcionam)
 
 Isola 100% o adapter do planner (tira o LLM da equação). Útil pros casos
