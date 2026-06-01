@@ -12,14 +12,23 @@
 1. **Subir a stack:** `.\scripts\dev.ps1`
    - Se o Qdrant travar o backend:
      `docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --no-deps backend web`
-2. **Ligar loop + observabilidade** em `infra/.env`:
+2. **Ligar loop + observabilidade + frentes de capacidade** em `infra/.env`:
    ```dotenv
    TRUTHS_FORGE_MODELING_OBSERVABILITY_ENABLED=true
    TRUTHS_FORGE_MODELING_AGENTIC_LOOP_ENABLED=true
    TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE=true
+   TRUTHS_FORGE_MODELING_HIERARCHICAL_PLANNING_ENABLED=true     # F2 (decompõe→observa→replaneja)
+   TRUTHS_FORGE_MODELING_LIVE_GEOMETRY_RECONCILIATION_ENABLED=true  # F5 (lê geometria ao vivo na edição)
+   # F6 (sanitizer determinístico) já vem ON por padrão; só desligue p/ depurar planner cru.
    ```
+   > As 3 flags de capacidade (loop/hierárquico/reconciliação) só fazem efeito
+   > porque estão repassadas no `environment:` do compose — ligar só no `.env`
+   > sem isso NÃO chega ao container (bug já visto). NÃO precisa de
+   > `MCP_TRANSPORT=mcp_http` (isso é o servidor standalone da Fase 1, adiada);
+   > o Fusion real é alcançado pelo add-in (27182) + `FUSION_MCP_URL`.
+
    Reinicie: `docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml restart backend`
-   Confirme: `docker exec truths-forge-backend printenv | Select-String 'MODELING_AGENTIC|MODELING_OBSERV'`
+   Confirme: `docker exec truths-forge-backend printenv | Select-String 'MODELING_AGENTIC|MODELING_HIERARCHICAL|MODELING_LIVE_GEOMETRY|MODELING_PLAN_SANITIZER'`
 3. **Fusion conectado:** add-in/MCP Server ligado (27182). No chat 3D → modal de
    Diagnóstico → *Adapters*: `fusion` = **`conectado` / `http`** (se vier `mock`,
    o backend não alcança o Fusion).
