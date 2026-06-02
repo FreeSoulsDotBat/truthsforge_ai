@@ -405,7 +405,26 @@ def run_plan_with_optional_loop(
     else:
         result = executor.execute_plan(plan)
     _maybe_capture_model_state(executor, getattr(result, "plan", None) or plan)
+    _maybe_visual_correction(executor, planner, getattr(result, "plan", None) or plan)
     return result
+
+
+def _maybe_visual_correction(
+    executor: ModelingExecutorService, planner: Any, plan: ModelingPlan
+) -> None:
+    """Passo 3 do motor genérico: render → crítica visual → replan corretivo.
+
+    Best-effort, atrás de ``modeling_visual_verification_enabled`` (default OFF).
+    Render só existe no Fusion real; nunca propaga erro."""
+
+    if not settings.modeling_visual_verification_enabled:
+        return
+    try:
+        from app.modeling.visual_critique import run_visual_correction
+
+        run_visual_correction(executor, planner, plan)
+    except Exception:  # noqa: BLE001 - verificação visual nunca derruba o plano
+        logger.warning("verificação visual falhou", exc_info=True)
 
 
 def _maybe_capture_model_state(executor: ModelingExecutorService, plan: ModelingPlan) -> None:

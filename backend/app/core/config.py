@@ -158,6 +158,22 @@ class Settings(BaseModel):
             in {"1", "true", "yes", "on"}
         )
     )
+    # Verificação VISUAL pós-execução (motor genérico, passo 3 — replan v4).
+    # Quando ``true``, após executar o plano o loop RENDERIZA o modelo
+    # (capture_viewport), manda o render + a intenção para a LLM de visão
+    # (gateway multimodal F4), recebe um veredito (corresponde? que diverge?) e,
+    # se divergir, REPLANEJA uma edição corretiva. É o que faz a composição
+    # genérica se auto-corrigir em qualquer produto. Default OFF (render só no
+    # Fusion real + custo de visão). Teto em ``modeling_visual_max_rounds``.
+    modeling_visual_verification_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_VISUAL_VERIFICATION_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
+    modeling_visual_max_rounds: int = Field(
+        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MODELING_VISUAL_MAX_ROUNDS", "2"))
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",
