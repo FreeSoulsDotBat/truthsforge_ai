@@ -647,14 +647,23 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
                 example=4.0,
             ),
             "joint": ArgSpec(
-                "revolute para já criar a junta que faz a dobradiça abrir.",
+                "revolute cria a junta cinemática que faz a dobradiça abrir — "
+                "MAS isso move as abas para COMPONENTES (<name>_A/<name>_B), e "
+                "elas deixam de ser corpos do root: você NÃO consegue mais "
+                "combiná-las com a caixa/tampa. Use joint só para montagem "
+                "cinemática (peça que abre na tela). Para uma peça IMPRESSA "
+                "(juntar a dobradiça à caixa/tampa via combine_bodies), OMITA "
+                "joint — aí as abas ficam como corpos combináveis.",
                 type="string",
                 unit=None,
                 required=False,
                 example="revolute",
             ),
             "name": ArgSpec(
-                "Prefixo dos corpos gerados.",
+                "Prefixo dos corpos gerados. Produz os corpos <name>_Leaf_A, "
+                "<name>_Leaf_B e <name>_Pin (ex.: name='Hinge' → 'Hinge_Leaf_A', "
+                "'Hinge_Leaf_B', 'Hinge_Pin'). Referencie ESSES nomes em passos "
+                "seguintes (combine/move) — não invente 'HingeLeaf'/'Hinge_Pin'.",
                 type="string",
                 unit=None,
                 required=False,
