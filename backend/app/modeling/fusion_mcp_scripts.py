@@ -1459,6 +1459,27 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 moves.add(inp)
 
 
+        def _rotate_body(design, body, angle_rad, axis_vec, origin_pt):
+            # Rotaciona um corpo em torno de um eixo (vetor) por um ponto, via
+            # Matrix3D.setToRotation (mesma fiação do move). No-op se angulo zero.
+            # Usado p/ orientar cilindros (knuckles horizontais de dobradica).
+            if angle_rad == 0.0:
+                return
+            root = _root(design)
+            coll = adsk.core.ObjectCollection.create()
+            coll.add(body)
+            transform = adsk.core.Matrix3D.create()
+            transform.setToRotation(angle_rad, axis_vec, origin_pt)
+            moves = root.features.moveFeatures
+            try:
+                inp = moves.createInput(coll, transform)
+                moves.add(inp)
+            except (AttributeError, RuntimeError):
+                inp = moves.createInput2(coll)
+                inp.defineAsFreeMove(transform)
+                moves.add(inp)
+
+
         def _body_dims_mm(body):
             # Read-back: dimensoes (bbox) do corpo em mm [x, y, z]. Alimenta o
             # verifier do loop (expected_dimensions_mm x medido). bbox ~0 sinaliza
@@ -1601,15 +1622,31 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 0.0,
                 0.0,
             )
+            # Eixo do cilindro: 'z' (default) OU 'x'/'y' p/ cilindros HORIZONTAIS
+            # (knuckles de dobradiça ao longo de uma aresta). Aceita string
+            # ('x'/'y'/'z') OU vetor ([1,0,0]) — usa o componente dominante.
+            axis_arg = args.get("axis")
+            if isinstance(axis_arg, (list, tuple)) and len(axis_arg) >= 3:
+                try:
+                    comps = [abs(float(v)) for v in axis_arg[:3]]
+                    axis = ["x", "y", "z"][comps.index(max(comps))]
+                except (TypeError, ValueError):
+                    axis = "z"
+            else:
+                axis = str(axis_arg or "z").lower()
+            if axis not in ("x", "y", "z"):
+                axis = "z"
+            cx, cy = center[0], center[1]
+            cz = _xyz_mm(args.get("center_mm") or args.get("origin_mm"), design)[2]
             root = _root(design)
             sketch = root.sketches.add(root.xYConstructionPlane)
             sketch.name = _unique_sketch_name(design, str(args.get("name") or "Cylinder"))
-            center_pt = adsk.core.Point3D.create(
-                center[0] / 10.0, center[1] / 10.0, 0
-            )
-            sketch.sketchCurves.sketchCircles.addByCenterRadius(
-                center_pt, diameter_mm / 20.0
-            )
+            # Para x/y o cilindro nasce na ORIGEM (vai ser rotacionado Z->eixo e
+            # depois transladado p/ a base); para z, nasce direto em (cx,cy).
+            base_x = 0.0 if axis in ("x", "y") else cx
+            base_y = 0.0 if axis in ("x", "y") else cy
+            center_pt = adsk.core.Point3D.create(base_x / 10.0, base_y / 10.0, 0)
+            sketch.sketchCurves.sketchCircles.addByCenterRadius(center_pt, diameter_mm / 20.0)
             extrudes = root.features.extrudeFeatures
             inp = extrudes.createInput(
                 sketch.profiles.item(0),
@@ -1621,19 +1658,36 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             stable_id = None
             dims = [0.0, 0.0, 0.0]
             if feat.bodies.count > 0:
+                body = feat.bodies.item(0)
                 body_name = _unique_body_name(design, str(args.get("name") or "Cylinder"))
-                feat.bodies.item(0).name = body_name
-                stable_id = _attach_stable_id(feat.bodies.item(0))
-                _oz = _xyz_mm(args.get("center_mm") or args.get("origin_mm"), design)[2]
-                _translate_body(design, feat.bodies.item(0), 0.0, 0.0, _oz / 10.0)
-                dims = _body_dims_mm(feat.bodies.item(0))
+                body.name = body_name
+                stable_id = _attach_stable_id(body)
+                if axis in ("x", "y"):
+                    # Rotaciona Z->eixo em torno da origem (a base fica em 0,0,0),
+                    # depois posiciona a base do cilindro em (cx, cy, cz).
+                    origin0 = adsk.core.Point3D.create(0, 0, 0)
+                    if axis == "x":
+                        _rotate_body(
+                            design, body, math.pi / 2.0,
+                            adsk.core.Vector3D.create(0, 1, 0), origin0,
+                        )
+                    else:
+                        _rotate_body(
+                            design, body, -math.pi / 2.0,
+                            adsk.core.Vector3D.create(1, 0, 0), origin0,
+                        )
+                    _translate_body(design, body, cx / 10.0, cy / 10.0, cz / 10.0)
+                else:
+                    _translate_body(design, body, 0.0, 0.0, cz / 10.0)
+                dims = _body_dims_mm(body)
             return {{
-                "message": "Cilindro o{{}}x{{}} mm criado (corpo '{{}}').".format(
-                    diameter_mm, h, body_name
+                "message": "Cilindro o{{}}x{{}} mm criado (corpo '{{}}', eixo {{}}).".format(
+                    diameter_mm, h, body_name, axis
                 ),
                 "sketch_name": sketch.name,
                 "body_name": body_name,
                 "stable_id": stable_id,
+                "axis": axis,
                 "dimensions_mm": dims,
             }}
 
