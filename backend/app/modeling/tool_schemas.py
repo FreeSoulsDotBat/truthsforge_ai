@@ -697,6 +697,15 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
                 required=False,
                 example=True,
             ),
+            "head_type": ArgSpec(
+                "Tipo de cabeça: 'hex' (sextavada, default — cara de parafuso) "
+                "ou 'cylinder'/'socket' (cilíndrica). Em hex, head_diameter_mm é "
+                "o entre-faces (boca da chave).",
+                type="string",
+                unit=None,
+                required=False,
+                example="hex",
+            ),
             "name": ArgSpec(
                 "Prefixo dos corpos gerados.",
                 type="string",

@@ -969,6 +969,25 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             input_obj = extrudes.createInput(profile, operation_map[operation])
             if as_surface:
                 input_obj.isSolid = False
+            # Fix gate F3/F6 ("3 : No target body found to cut or intersect!"):
+            # cut/intersect EXIGEM participantBodies explícitos — a API do Fusion
+            # NÃO escolhe os corpos sozinha quando há sólidos na cena. Inclui
+            # todos os corpos sólidos; o Fusion só remove onde o perfil cruza.
+            if operation in ("cut", "intersect") and not as_surface:
+                _bodies = _root(design).bRepBodies
+                _solids = []
+                for _i in range(_bodies.count):
+                    _b = _bodies.item(_i)
+                    try:
+                        if _b.isSolid:
+                            _solids.append(_b)
+                    except Exception:
+                        _solids.append(_b)
+                if _solids:
+                    try:
+                        input_obj.participantBodies = _solids
+                    except Exception:
+                        pass
             input_obj.setDistanceExtent(
                 False,
                 _param_value_input(args.get("distance_mm"), design),
@@ -4014,12 +4033,40 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     thread_note = " + rosca"
                 except Exception as exc:
                     thread_note = " [rosca pulada: " + str(exc) + "]"
-            head = _add_cylinder({{
-                "diameter_mm": head_d,
-                "height_mm": head_h,
-                "center_mm": [cx, cy, length_mm],
-                "name": name + "_Head",
-            }})
+            # head_type: hex (sextavada, default — cara de parafuso) ou
+            # cylinder/socket (cabeça cilíndrica). A sextavada compõe plano no
+            # topo da haste + hexágono + extrude (entre-faces = head_diameter_mm,
+            # circunraio = AF/sqrt(3)). A cilíndrica é 1 _add_cylinder.
+            head_type = str(args.get("head_type") or "hex").lower()
+            if head_type in ("hex", "hexagon", "sextavada", "sextavado", "bolt"):
+                _add_construction_plane({{
+                    "name": name + "_HeadPlane",
+                    "plane": "xy",
+                    "offset_mm": length_mm,
+                }})
+                _create_sketch({{
+                    "name": name + "_HeadSketch",
+                    "plane": name + "_HeadPlane",
+                }})
+                _add_polygon({{
+                    "sketch": name + "_HeadSketch",
+                    "sides": 6,
+                    "radius_mm": head_d / (3.0 ** 0.5),
+                    "center_mm": [cx, cy],
+                }})
+                head = _extrude_profile({{
+                    "sketch": name + "_HeadSketch",
+                    "operation": "new_body",
+                    "distance_mm": head_h,
+                    "name": name + "_Head",
+                }})
+            else:
+                head = _add_cylinder({{
+                    "diameter_mm": head_d,
+                    "height_mm": head_h,
+                    "center_mm": [cx, cy, length_mm],
+                    "name": name + "_Head",
+                }})
             head_name = head.get("body_name")
             try:
                 _combine_bodies({{
