@@ -166,12 +166,13 @@ def test_planner_toolset_matches_allowlist() -> None:
         "fusion.pattern_circular",
         "fusion.mirror_feature",
         "fusion.combine_bodies",
-        # F3 (mecanismos funcionais)
+        # F3 (mecanismos funcionais — features genéricas)
         "fusion.thread",
         "fusion.make_component",
         "fusion.joint",
-        "fusion.knuckle_hinge",
-        "fusion.metric_screw",
+        # knuckle_hinge / metric_screw: DEPRECADOS do planner (macros de produto,
+        # não escalam). Seguem no adapter, mas o LLM não os escolhe — ver
+        # DEPRECATED_PLANNER_TOOLS e test_deprecated_macros_excluded_from_planner.
         # Onda E
         "fusion.loft_profiles",
         "fusion.sweep_profile",
@@ -214,6 +215,22 @@ def test_fusion_tools_lists_every_fusion_descriptor_except_run_script() -> None:
         entry.name for entry in descriptors() if entry.software is ToolSoftware.fusion
     }
     assert fusion_entries == set(FUSION_TOOLS) | {"fusion.run_script"}
+
+
+def test_deprecated_macros_excluded_from_planner_but_kept_in_adapter() -> None:
+    """Virada motor-genérico (2026-06-02): macros de PRODUTO (knuckle_hinge/
+    metric_screw) saíram do planner (não escalam), mas os handlers seguem no
+    adapter (backward-compat). O LLM compõe mecanismos de primitivas."""
+    from app.modeling.tool_registry import DEPRECATED_PLANNER_TOOLS
+
+    assert DEPRECATED_PLANNER_TOOLS == {"fusion.knuckle_hinge", "fusion.metric_screw"}
+    for name in DEPRECATED_PLANNER_TOOLS:
+        assert name not in PLANNER_TOOLSET  # LLM não escolhe mais
+        assert name in FUSION_TOOLS  # adapter ainda conhece (smoke/compat)
+    # As features GENÉRICAS continuam visíveis ao planner.
+    assert "fusion.thread" in PLANNER_TOOLSET
+    assert "fusion.joint" in PLANNER_TOOLSET
+    assert "fusion.make_component" in PLANNER_TOOLSET
 
 
 def test_read_only_set_matches_allowlist() -> None:

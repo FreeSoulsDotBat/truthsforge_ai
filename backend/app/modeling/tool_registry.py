@@ -558,6 +558,17 @@ BLOCKED_TOOL_PREFIXES: tuple[str, ...] = (
 )
 
 
+# Macros com forma de PRODUTO (não de feature genérica). Deprecados do planner
+# na virada para o "motor genérico" (2026-06-02): a inteligência mora na
+# composição + verificação visual/geométrica do loop, não em macros por caso —
+# que não escalam (1 macro por produto = milhares). Os handlers seguem no
+# adapter (backward-compat / smoke), mas o LLM não os escolhe mais; ele compõe
+# mecanismos a partir de primitivas + features genéricas (thread/joint/pattern).
+DEPRECATED_PLANNER_TOOLS: frozenset[str] = frozenset(
+    {"fusion.knuckle_hinge", "fusion.metric_screw"}
+)
+
+
 # ---------------------------------------------------------------------------
 # Derived collections. Computed at import time so legacy callers keep working
 # while we migrate to direct registry access in Ondas 2–3.
@@ -590,6 +601,8 @@ def _planner_visible() -> tuple[str, ...]:
         if entry.name.endswith(".rollback_timeline"):
             return False
         if entry.name.endswith(".query_timeline"):
+            return False
+        if entry.name in DEPRECATED_PLANNER_TOOLS:
             return False
         return True
 

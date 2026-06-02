@@ -69,13 +69,27 @@ F3_CASES: dict[str, dict] = {
 }
 
 
-def test_f3_tools_are_in_every_allowlist() -> None:
+# Features genéricas (o LLM compõe com elas) vs. macros de produto deprecados
+# do planner na virada motor-genérico (2026-06-02).
+F3_GENERIC_TOOLS = ("fusion.thread", "fusion.make_component", "fusion.joint")
+F3_DEPRECATED_MACROS = ("fusion.knuckle_hinge", "fusion.metric_screw")
+
+
+def test_f3_tools_are_in_adapter_allowlists() -> None:
+    # TODAS as tools F3 seguem no adapter/registry/schema (handlers vivos).
     for tool in F3_TOOLS:
         assert tool in FUSION_SCRIPT_TOOLS, f"{tool} ausente em FUSION_SCRIPT_TOOLS"
         assert tool in FUSION_TOOLS, f"{tool} ausente em FUSION_TOOLS (registry)"
-        assert tool in PLANNER_TOOLSET, f"{tool} não exposto ao planner"
         assert tool in TOOL_REGISTRY, f"{tool} ausente em TOOL_REGISTRY"
         assert tool in TOOL_SCHEMAS, f"{tool} sem schema de args (drift LLM↔adapter)"
+
+
+def test_f3_generic_features_exposed_macros_deprecated() -> None:
+    # Features genéricas: o LLM escolhe. Macros de produto: deprecados do planner.
+    for tool in F3_GENERIC_TOOLS:
+        assert tool in PLANNER_TOOLSET, f"{tool} (genérica) deveria estar no planner"
+    for tool in F3_DEPRECATED_MACROS:
+        assert tool not in PLANNER_TOOLSET, f"{tool} (macro) deveria estar deprecado"
 
 
 def test_f3_risk_categories() -> None:
