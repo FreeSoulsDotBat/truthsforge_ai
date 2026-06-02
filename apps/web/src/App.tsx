@@ -457,7 +457,26 @@ function App() {
         if (nextStatus.backlog_files > 0) {
           const nextDocumentsPage = await api.documentsPage({ limit: DOCUMENT_SNAPSHOT_PAGE_SIZE, offset: 0 });
           if (!active) return;
-          setDocuments(nextDocumentsPage.items);
+          // Preserve a referência quando o conteúdo é equivalente para evitar
+          // cascatas de efeitos que reagem a `documents` (ex.: o resolver de
+          // metadados via /api/documents/batch).
+          setDocuments((current) => {
+            const next = nextDocumentsPage.items;
+            if (
+              current.length === next.length &&
+              current.every((doc, index) => {
+                const candidate = next[index];
+                return (
+                  doc.id === candidate.id &&
+                  doc.updated_at === candidate.updated_at &&
+                  doc.index_status === candidate.index_status
+                );
+              })
+            ) {
+              return current;
+            }
+            return next;
+          });
         }
       } catch (error) {
         console.error(error);
@@ -483,8 +502,13 @@ function App() {
     if (fetchedSessionDetailsRef.current.has(activeSessionId)) return;
     fetchedSessionDetailsRef.current.add(activeSessionId);
     chatStickToBottomRef.current = true;
-    void loadSessionPage(activeSessionId).finally(() => {
-      fetchedSessionDetailsRef.current.delete(activeSessionId);
+    // O Set vira "já tentei carregar essa session nesta sessão de browser".
+    // Limpar no .finally causava loop quando o servidor devolvia messages: []
+    // (ex.: draft vazio) porque loadSessionPage chama setSessions → muda a
+    // ref de `sessions` → effect re-dispara → guarda de messages.length não
+    // pega → refetch infinito.
+    void loadSessionPage(activeSessionId).catch((error) => {
+      console.error("Failed to load session detail", error);
     });
   }, [activeSessionId, loadSessionPage, sessions]);
 
@@ -899,14 +923,30 @@ function App() {
     const missingIds = selectedKnowledgeBaseItemIdList.filter((documentId) => !knownDocumentIds.has(documentId));
     if (!missingIds.length) return;
     let active = true;
-    void api.documentsByIds(missingIds).then((nextDocuments) => {
-      if (!active || !nextDocuments.length) return;
-      setDocuments((current) => {
-        const currentIds = new Set(current.map((document) => document.id).filter(Boolean));
-        const merged = [...nextDocuments.filter((document) => document.id && !currentIds.has(document.id)), ...current];
-        return merged.sort((left, right) => Date.parse(right.updated_at ?? "") - Date.parse(left.updated_at ?? ""));
+    // Quebra em lotes para respeitar o limite de 200 itens do contrato
+    // DocumentBatchRequest (backend/app/core/contracts.py).
+    const DOCUMENT_BATCH_LIMIT = 200;
+    const batches: string[][] = [];
+    for (let i = 0; i < missingIds.length; i += DOCUMENT_BATCH_LIMIT) {
+      batches.push(missingIds.slice(i, i + DOCUMENT_BATCH_LIMIT));
+    }
+    Promise.all(batches.map((batch) => api.documentsByIds(batch)))
+      .then((results) => {
+        if (!active) return;
+        const nextDocuments = results.flat();
+        if (!nextDocuments.length) return;
+        setDocuments((current) => {
+          const currentIds = new Set(current.map((document) => document.id).filter(Boolean));
+          const merged = [
+            ...nextDocuments.filter((document) => document.id && !currentIds.has(document.id)),
+            ...current
+          ];
+          return merged.sort((left, right) => Date.parse(right.updated_at ?? "") - Date.parse(left.updated_at ?? ""));
+        });
+      })
+      .catch((error) => {
+        console.error("Failed to resolve documents by ids", error);
       });
-    });
     return () => {
       active = false;
     };
