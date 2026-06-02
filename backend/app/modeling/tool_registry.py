@@ -207,6 +207,12 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Lista bodies/faces/arestas com índice estável + metadata para seleção precisa (G2.2).",
     ),
     _t(
+        "fusion.capture_viewport",
+        _FUSION,
+        _RO,
+        "Renderiza o viewport e devolve a imagem (base64) p/ verificação visual no loop.",
+    ),
+    _t(
         "fusion.query_timeline",
         _FUSION,
         _RO,
@@ -602,6 +608,8 @@ def _planner_visible() -> tuple[str, ...]:
             return False
         if entry.name.endswith(".query_timeline"):
             return False
+        if entry.name.endswith(".capture_viewport"):
+            return False  # probe do loop visual (render→visão), não passo do plano
         if entry.name in DEPRECATED_PLANNER_TOOLS:
             return False
         return True

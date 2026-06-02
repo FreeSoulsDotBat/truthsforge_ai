@@ -243,6 +243,8 @@ def test_read_only_set_matches_allowlist() -> None:
         "project_store.list_snapshots",
         # G2.2: inspeção de geometria para seleção por índice.
         "fusion.query_geometry",
+        # Loop visual: render do viewport p/ verificação por visão (read-only).
+        "fusion.capture_viewport",
         # T3.1: leitura da timeline (reconciliação/rollback; interna do orchestrator).
         "fusion.query_timeline",
     }

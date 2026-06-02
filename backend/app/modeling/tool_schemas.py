@@ -849,6 +849,37 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
             ),
         },
     ),
+    "fusion.capture_viewport": ToolSchema(
+        summary=(
+            "Renderiza o viewport ativo do Fusion e devolve a imagem (base64) "
+            "para verificação VISUAL do modelo. Read-only. Interno do loop "
+            "(render→visão→replaneja); o planner não gasta passo com ela."
+        ),
+        args={
+            "view": ArgSpec(
+                "Orientação: iso|front|back|top|bottom|left|right (default iso), "
+                "com fit automático.",
+                type="string",
+                unit=None,
+                required=False,
+                example="iso",
+            ),
+            "width_px": ArgSpec(
+                "Largura da imagem em px (default 1024).",
+                type="integer",
+                unit=None,
+                required=False,
+                example=1024,
+            ),
+            "height_px": ArgSpec(
+                "Altura da imagem em px (default 768).",
+                type="integer",
+                unit=None,
+                required=False,
+                example=768,
+            ),
+        },
+    ),
 }
 
 

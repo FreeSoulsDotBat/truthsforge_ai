@@ -49,6 +49,7 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.delete_body",
     "fusion.split_body",
     "fusion.query_geometry",
+    "fusion.capture_viewport",
     "fusion.query_timeline",
     "fusion.rollback_timeline",
     "fusion.set_parameter",
@@ -4195,6 +4196,71 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
+        def _capture_viewport(args):
+            # Loop visual (motor genérico): renderiza o viewport ATIVO do Fusion
+            # e devolve a imagem em base64, para a LLM de visão criticar a
+            # geometria vs. a intenção (e replanejar). Read-only: não muda o
+            # modelo. view=iso|front|back|top|bottom|left|right (default iso),
+            # com fit automático. Defensivo: nunca derruba a execução.
+            app = _app()
+            vp = app.activeViewport
+            view = str(args.get("view") or "iso").lower()
+            orient_map = {{
+                "iso": adsk.core.ViewOrientations.IsoTopRightViewOrientation,
+                "front": adsk.core.ViewOrientations.FrontViewOrientation,
+                "back": adsk.core.ViewOrientations.BackViewOrientation,
+                "top": adsk.core.ViewOrientations.TopViewOrientation,
+                "bottom": adsk.core.ViewOrientations.BottomViewOrientation,
+                "left": adsk.core.ViewOrientations.LeftViewOrientation,
+                "right": adsk.core.ViewOrientations.RightViewOrientation,
+            }}
+            if view in orient_map:
+                try:
+                    cam = vp.camera
+                    cam.viewOrientation = orient_map[view]
+                    cam.isFitView = True
+                    vp.camera = cam
+                except Exception:
+                    try:
+                        vp.fit()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    vp.fit()
+                except Exception:
+                    pass
+            try:
+                vp.refresh()
+            except Exception:
+                pass
+            width = int(_eval_param(args.get("width_px"), _design(), 0.0) or 0) or 1024
+            height = int(_eval_param(args.get("height_px"), _design(), 0.0) or 0) or 768
+            import base64 as _b64
+            import os as _os
+            import tempfile as _tf
+
+            path = _os.path.join(_tf.gettempdir(), "tf_viewport_capture.png")
+            saved = vp.saveAsImageFile(path, width, height)
+            if not saved:
+                raise ToolError(
+                    "fusion.capture_failed",
+                    "saveAsImageFile retornou falso (viewport indisponível?).",
+                )
+            with open(path, "rb") as _fh:
+                raw = _fh.read()
+            return {{
+                "message": "Viewport {{}} capturado ({{}}x{{}}, {{}} bytes).".format(
+                    view, width, height, len(raw)
+                ),
+                "image_base64": _b64.b64encode(raw).decode("ascii"),
+                "image_format": "png",
+                "width_px": width,
+                "height_px": height,
+                "view": view,
+            }}
+
+
         def _dispatch_inner(tool_name, args):
             if tool_name == "fusion.open_design":
                 return _open_design(args)
@@ -4284,6 +4350,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _split_body(args)
             if tool_name == "fusion.query_geometry":
                 return _query_geometry(args)
+            if tool_name == "fusion.capture_viewport":
+                return _capture_viewport(args)
             if tool_name == "fusion.query_timeline":
                 return _query_timeline(args)
             if tool_name == "fusion.rollback_timeline":
