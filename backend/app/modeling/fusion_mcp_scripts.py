@@ -1551,6 +1551,38 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
         def _add_cylinder(args):
             # Onda B: cilindro = circulo + extrude.
             design = _design()
+            # Batch (gate motor-genérico m3d_plan_5d42b34f): o LLM manda VÁRIOS
+            # cilindros numa lista (knuckles/cylinders) num único step — igual ao
+            # add_circle. Sem isto o step falhava e os corpos referenciados
+            # depois (combine) não existiam. Desempacota e itera.
+            raw_batch = args.get("_raw")
+            if raw_batch is None:
+                for _bk in ("cylinders", "knuckles"):
+                    if isinstance(args.get(_bk), list):
+                        raw_batch = args.get(_bk)
+                        break
+            if isinstance(raw_batch, list):
+                results = []
+                names = []
+                for item in raw_batch:
+                    if not isinstance(item, dict):
+                        continue
+                    inner = _add_cylinder(item)
+                    results.append(inner)
+                    if isinstance(inner, dict) and inner.get("body_name"):
+                        names.append(inner.get("body_name"))
+                if not results:
+                    raise ToolError(
+                        "fusion.invalid_dimensions",
+                        "batch de cilindros vazio: forneça ao menos um item válido.",
+                    )
+                return {{
+                    "message": "{{}} cilindro(s) criado(s) em batch.".format(len(results)),
+                    "batch": True,
+                    "count": len(results),
+                    "body_names": names,
+                    "items": results,
+                }}
             diameter_mm = _eval_param(args.get("diameter_mm"), design, 0.0) or 0.0
             if diameter_mm <= 0:
                 radius_mm = _eval_param(args.get("radius_mm"), design, 0.0) or 0.0
@@ -1562,7 +1594,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     "fusion.invalid_dimensions",
                     "diameter_mm (ou radius_mm) e height_mm precisam ser positivos.",
                 )
-            center = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
+            # Aceita origin_mm como alias de center_mm p/ a posição XY (o LLM
+            # varia entre os dois; antes só center_mm valia → cilindros em batch
+            # caíam todos em (0,0)).
+            center = _eval_pair(args.get("center_mm") or args.get("origin_mm"), design) or (
+                0.0,
+                0.0,
+            )
             root = _root(design)
             sketch = root.sketches.add(root.xYConstructionPlane)
             sketch.name = _unique_sketch_name(design, str(args.get("name") or "Cylinder"))
