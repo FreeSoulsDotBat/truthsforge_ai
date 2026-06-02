@@ -185,6 +185,8 @@ TRUTHS_FORGE_MODELING_AGENTIC_LOOP_ENABLED=true        # loop de auto-correção
 TRUTHS_FORGE_MODELING_HIERARCHICAL_PLANNING_ENABLED=true  # decompõe→observa→replaneja (F2); default OFF
 TRUTHS_FORGE_MODELING_PLAN_SANITIZER_ENABLED=true      # sanitizer pós-LLM (F6); DEFAULT ON, desligue p/ depurar planner cru
 TRUTHS_FORGE_MODELING_LIVE_GEOMETRY_RECONCILIATION_ENABLED=true  # lê geometria ao vivo na edição (F5); default OFF
+TRUTHS_FORGE_MODELING_VISUAL_VERIFICATION_ENABLED=true  # render→visão→replaneja (motor genérico, passo 3); default OFF
+TRUTHS_FORGE_MODELING_VISUAL_MAX_ROUNDS=2              # teto de rodadas de correção visual
 TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE=true             # inclui prompt/resposta no trace
 TRUTHS_FORGE_MCP_TRANSPORT=mcp_http                    # roteia fusion.* pelo servidor standalone
 ```

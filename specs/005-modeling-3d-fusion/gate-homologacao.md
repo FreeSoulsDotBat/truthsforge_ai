@@ -263,6 +263,29 @@ por causa disso. Sanitizer já vem ON por padrão.
 
 ---
 
+## Gate Visual — motor genérico (render → visão → replaneja) ⭐ o destravador
+
+Precisa de `TRUTHS_FORGE_MODELING_VISUAL_VERIFICATION_ENABLED=true` (+ loop ON) e
+um modelo com capability `vision` habilitado. Use um caso onde a composição
+costuma errar a geometria (ex.: a caixa com dobradiça):
+```
+Modele uma caixa de 60x40x30 mm com uma tampa ligada por uma dobradiça de nós
+(knuckles) na borda de cima de 60 mm, de modo que a tampa abra e feche.
+```
+**Observar (logs — pré-voo §5, filtre por `visual.`):**
+1. Após a execução, aparece um `capture_viewport` (render) e um evento
+   `visual.critique` com o veredito.
+2. Se a geometria saiu errada (knuckles no lado errado / tampa solta), o veredito
+   vem `matches=false` com as divergências e o loop **replaneja uma edição
+   corretiva** (novo plano `kind=edit`) — depois re-renderiza e re-critica.
+3. O modelo final deve estar **mais próximo da intenção** do que sem a flag.
+   Compare com a flag OFF (sem auto-correção visual).
+
+> É o passo que faz a composição genérica (sem macros de produto) se
+> auto-corrigir. O dono valida olhando o modelo + os eventos `visual.critique`.
+
+---
+
 ## Plano literal via API (fallback — quando nem natural nem dirigido funcionam)
 
 Isola 100% o adapter do planner (tira o LLM da equação). Útil pros casos
