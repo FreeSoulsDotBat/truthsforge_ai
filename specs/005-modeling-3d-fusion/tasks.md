@@ -32,18 +32,27 @@ Além do gate do dono, nenhuma fase fecha sem cumprir as **Regras transversais**
 | 6 | Sheet metal | [`micro/fase-6-sheet-metal.md`](./micro/fase-6-sheet-metal.md) | `[!]` | ⛔ **CONGELADA — bloqueada por API** (DT-011): Fusion Python só expõe `flangeFeatures` read-only. Tools removidas. Reabrir só se a Autodesk expor a API |
 | 7 | Sculpt / T-Spline | [`micro/fase-7-sculpt.md`](./micro/fase-7-sculpt.md) | `[!]` | ⛔ **CONGELADA — bloqueada por API** (DT-012): Form/Sculpt exige direct-mode (sem timeline) e a API não cria T-Spline parametricamente. Fora do foco (sólidos). Forma orgânica = NURBS (Fase 5) |
 
-## Frentes de capacidade (REPLAN 2026-05-29 — substituem cobertura 8/9)
+## Frentes de capacidade (REPLAN 2026-05-29 — substituem cobertura 6/7/8)
 
 > Reorientação de "cobertura de workspaces" para **capacidades de sólidos mecânicos** (ver [`plan.md`](./plan.md) › Frentes de capacidade). Objetivo: P1 peças mecânicas funcionais, P2 planejamento minucioso + estado rico entre etapas, P3 image-to-model, P4 edição robusta. Gates oficiais = caixa+tampa knuckle, parafuso, suporte de monitor.
+
+> ⏸️ **PAUSA ESTRATÉGICA (2026-06-02).** O motor genérico (composição + loop
+> visual) foi **validado no Fusion real** (render→crítica→replan funcionam). Mas
+> o **posicionamento relativo de bodies** é arquitetural e **não fecha com fixes
+> incrementais** — vai numa **refatoração grande dedicada** (a planejar pelo
+> dono). Todo o resíduo está congelado como débito em
+> [`tech-debt-posicionamento.md`](./tech-debt-posicionamento.md). Os fixes
+> incrementais das frentes F3–F6/MG ficam **pausados** até essa refatoração.
 
 | Frente | Tema | Micro-plano | Status | Gate (dono valida no Fusion real) |
 |---|---|---|---|---|
 | F1 | Estado rico do modelo (entityToken face/edge + ModelState entre etapas) | [`micro/fase-F1-estado-rico.md`](./micro/fase-F1-estado-rico.md) | `[x]` | ✅ **Gate Fusion real APROVADO (2026-05-29)**: fillet por edge_token (query→uso), token de corpo intocado sobrevive, stale→erro claro. 426 testes. Aprendizado: re-query após features que recriam geometria |
 | F2 | Planejamento agêntico/hierárquico (decompõe→executa→observa→replaneja) | [`micro/fase-F2-planejamento-agentico.md`](./micro/fase-F2-planejamento-agentico.md) | `[x]` | ✅ **Gate Fusion+LLM APROVADO (2026-05-29)**: decompôs em 4 sub-objetivos; furo Ø10 e pino Ø10 com MESMO raio (encaixe via ModelState entre blocos). 429 testes |
-| F3 | Mecanismos funcionais (thread/joint/componentes + macros knuckle/screw/snap_fit) | [`micro/fase-F3-mecanismos.md`](./micro/fase-F3-mecanismos.md) | `[~]` | **Código + testes mock ✅** (thread modelada, make_component, joint, macros knuckle_hinge/metric_screw; 7 testes F3 + 221 modeling verdes, 0 lint novo). **Aguardando os 3 gates oficiais do dono no Fusion real**: dobradiça abre · parafuso encaixa · suporte paramétrico |
+| F3 | Mecanismos funcionais (thread/joint/make_component + composição genérica) | [`micro/fase-F3-mecanismos.md`](./micro/fase-F3-mecanismos.md) | `[~]` | **Código + testes mock ✅** (thread modelada, make_component, joint; o planner **compõe** mecanismos de primitivas + features genéricas — **ADR-020**). **Pivot:** as macros `knuckle_hinge`/`metric_screw` foram **deprecadas do planner** (`DEPRECATED_PLANNER_TOOLS`; handlers só p/ backward-compat/smoke); `snap_fit` nunca existiu. **Aguardando os 3 gates oficiais do dono no Fusion real**: dobradiça abre · parafuso encaixa · suporte paramétrico |
 | F4 | Image-to-model (gateway multimodal + vision real) | [`micro/fase-F4-image-to-model.md`](./micro/fase-F4-image-to-model.md) | `[~]` | **Código + testes mock ✅** (gateway multimodal backward-compat; `_call_vision` real; builders por provedor; 14 testes F4 + 99 consumidores verdes). **Aguardando gate do dono**: foto → peça fiel no Fusion+LLM real |
 | F5 | Edição robusta com contexto (evolui Fase 3 sobre ModelState) | [`micro/fase-F5-edicao-robusta.md`](./micro/fase-F5-edicao-robusta.md) | `[~]` | **Código + testes mock ✅** (reconciliação por geometria AO VIVO: `_read_live_geometry` + `_build_live_state_block` injetam ModelState atual na edição, flag default OFF; 8 testes F5 + 71 consumidores verdes). **Aguardando gate do dono**: editar peça após mudança manual no Fusion real |
 | F6 | Determinismo do LLM (ex-Fase 9; Structured Outputs + sanitizer + retry) | [`micro/fase-9-llm-determinism.md`](./micro/fase-9-llm-determinism.md) | `[~]` | **9.2 (sanitizer determinístico) entregue + testado** (`plan_sanitizer.py`: strip de campos-fantasma/refs geométricas, remap de alias, flag default ON, telemetria por aviso; 11 testes + 94 consumidores verdes). 9.1 (Structured Outputs) já no planner; 9.3 (retry) no agent_loop. **Aguardando gate do dono**: cenários A/B/C reproduzíveis sem ajuste manual de prompt (ADR-020) |
+| MG | Motor genérico — loop de verificação visual (render → crítica de visão → replan corretivo) | [`gate-homologacao.md`](./gate-homologacao.md) (Gate Visual) | `[~]` | **Código + gate-doc prontos e loop validado no Fusion real** (`visual_critique.py` + `fusion.capture_viewport`; render→crítica→replan funcionam; flag `modeling_visual_verification_enabled` default OFF; teto `modeling_visual_max_rounds`=2; **ADR-020**). Suporta a composição genérica (sem macros de produto) a se auto-corrigir. ⏸️ **PAUSADO**: o resíduo é o **posicionamento relativo de bodies** (arquitetural → refatoração grande; ver pausa estratégica acima + `tech-debt-posicionamento.md`) |
 | F | QA, docs e handoff finais | [`micro/fase-final-qa-docs.md`](./micro/fase-final-qa-docs.md) | `[ ]` | Checklist de entrega completo |
 
 ## Fase 0 — itens (detalhe em `micro/fase-0-specs-auditoria.md`)
@@ -82,4 +91,4 @@ Além do gate do dono, nenhuma fase fecha sem cumprir as **Regras transversais**
 - Plano de UI: o dono vai mergear `homolog-new-ui` na `master`; depois, passada de refactor de UI (T0.11) para alinhar `apps/web/src/features/modeling-3d/` (RNF-009). **Nota**: o merge feito pelo dono não chega a este container efêmero (sem remote); requer sessão nova / clone fresco.
 - Reconciliação de planos (2026-05-23): **v4 absorve o fidelity-roadmap v3**; em conflito de escopo vence o v4 (cobertura ampla). High-risk corretivo durante o loop: **coberto pela aprovação do plano** (loop não pausa) → ajustar `agent_loop.py` (DT-010).
 - Convergência de branches pendente: assets do fidelity estão não-commitados no worktree `master` (outra sessão ativa). Escolher uma fonte de verdade; evitar edição simultânea.
-- Branch: `feat/modeling-3d-v4`.
+- Branch: `feat/3d-modelling-updates`.
