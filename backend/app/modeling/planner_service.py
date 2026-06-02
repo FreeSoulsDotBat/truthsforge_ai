@@ -34,6 +34,7 @@ Além disso, ``logger.warning`` em falhas críticas foi promovido para
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -99,6 +100,51 @@ def _llm_error_event_type(exc: LLMProviderError) -> str:
     return "planner.llm_provider_error"
 
 
+def build_attachments_context(
+    store: Any,
+    file_ids: list[str],
+    *,
+    gateway: LLMGateway | None = None,
+) -> str | None:
+    """F4 (image-to-model): analisa os anexos e devolve o bloco de contexto.
+
+    Reusado pela DESCOBERTA (rota do chat 3D) **e** pelo PLANEJAMENTO, para que
+    ambos vejam a imagem — antes, a descoberta perguntava "às cegas" e o plano
+    ignorava o anexo. Cada arquivo é analisado (vision LLM p/ imagem, Blender
+    headless p/ malha) e o ``to_context_text`` vira um bloco
+    ``<anexos-analisados>``. Best-effort: devolve ``None`` em qualquer falha (o
+    chat nunca quebra por causa de um anexo).
+    """
+    ids = [f for f in (file_ids or []) if f]
+    if not ids:
+        return None
+    try:
+        from app.modeling.attachment_analyzer import ModelingAttachmentAnalyzer
+
+        analyzer = ModelingAttachmentAnalyzer(store=store, gateway=gateway)
+    except Exception:  # noqa: BLE001 - análise é best-effort
+        return None
+    blocks: list[str] = []
+    for file_id in ids:
+        try:
+            analysis = analyzer.analyze(file_id)
+        except Exception:  # noqa: BLE001 - um anexo ruim não derruba o resto
+            continue
+        if analysis is not None and analysis.summary:
+            blocks.append(analysis.to_context_text())
+    if not blocks:
+        return None
+    joined = "\n\n---\n".join(blocks)
+    return (
+        "<anexos-analisados>\n"
+        "Análise dos anexos enviados pelo usuário (imagens/3D de referência). "
+        "Use a forma, as features e as proporções descritas ao planejar a peça; "
+        "confirme dimensões absolutas se faltarem.\n"
+        + joined
+        + "\n</anexos-analisados>"
+    )
+
+
 class ModelingPlannerService:
     """Builds, validates and persists modeling plans.
 
@@ -131,6 +177,7 @@ class ModelingPlannerService:
         state, not stale history.
         """
 
+        payload = self._with_attachment_context(payload)
         plan, source, fallback_reason = self._build_plan(payload, live_state_block=live_state_block)
         plan = plan.model_copy(
             update={"planner_source": source, "fallback_reason": fallback_reason}
@@ -140,6 +187,8 @@ class ModelingPlannerService:
     async def create_plan_async(self, payload: ModelingPlanCreate) -> ModelingPlan:
         """Async plan creation. Mirrors ``ModelingService.create_plan_async``."""
 
+        # F4: análise dos anexos roda em thread p/ não travar o event loop.
+        payload = await asyncio.to_thread(self._with_attachment_context, payload)
         plan, source, fallback_reason = await self._build_plan_async(payload)
         plan = plan.model_copy(
             update={"planner_source": source, "fallback_reason": fallback_reason}
@@ -538,6 +587,32 @@ class ModelingPlannerService:
         return model.model_copy(
             update={"max_output_tokens": self._PLANNING_OUTPUT_TOKEN_FLOOR}
         )
+
+    def _with_attachment_context(
+        self, payload: ModelingPlanCreate
+    ) -> ModelingPlanCreate:
+        """F4 (image-to-model): analisa os anexos do pedido e injeta a descrição.
+
+        O frontend envia ``attached_file_ids`` (imagens/3D); cada um é analisado
+        (vision LLM p/ imagem, Blender headless p/ malha) e o ``to_context_text``
+        vira um bloco ``<anexos-analisados>`` no prompt — para o planner modelar
+        a partir do que a imagem mostra, não só do texto. Best-effort: qualquer
+        falha devolve o payload original (o chat nunca quebra por um anexo).
+        """
+        if not payload.attached_file_ids:
+            return payload
+        block = build_attachments_context(
+            self.store, list(payload.attached_file_ids), gateway=self.gateway
+        )
+        if not block:
+            return payload
+        self._tracer.record(
+            "planner.attachments_analyzed",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.info,
+            message="Anexo(s) analisado(s) e injetado(s) no contexto do plano.",
+        )
+        return payload.model_copy(update={"prompt": payload.prompt + "\n\n" + block})
 
     def _classify_and_record_llm_error(
         self, exc: BaseException, model: ModelConfig

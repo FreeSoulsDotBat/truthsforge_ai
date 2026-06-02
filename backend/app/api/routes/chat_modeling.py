@@ -36,6 +36,7 @@ from app.core.contracts import (
 from app.cost_governor.service import estimate_tokens
 from app.modeling.chat_orchestrator import get_modeling_orchestrator
 from app.modeling.observability import current_trace_id, get_tracer
+from app.modeling.planner_service import build_attachments_context
 from app.modeling.service import get_modeling_service
 
 
@@ -335,10 +336,20 @@ def build_modeling_3d_stream_response(
             ChatModelingStage.editing,
             ChatModelingStage.failed,
         )
+        # F4 (image-to-model): analisa os anexos UMA vez e injeta no prompt —
+        # usado tanto pela DESCOBERTA quanto pelo PLANEJAMENTO. Antes a imagem
+        # "se perdia": a descoberta perguntava às cegas e o plano a ignorava.
+        # Roda em thread p/ não travar o event loop do streaming.
+        if payload.attached_file_ids:
+            attachments_block = await asyncio.to_thread(
+                build_attachments_context, store, list(payload.attached_file_ids)
+            )
+            if attachments_block:
+                plan_prompt = payload.message + "\n\n" + attachments_block
         if settings.modeling_discovery_enabled:
             history = _modeling_chat_history(store, session.id, exclude_message=payload.message)
             assessment = await modeling_service.assess_request_async(
-                payload.message,
+                plan_prompt,
                 history=history,
                 software_override=payload.modeling_3d.software_override,
                 has_existing_model=has_existing_model,
@@ -423,6 +434,9 @@ def build_modeling_3d_stream_response(
             mode=payload.modeling_3d.mode,
             software_override=payload.modeling_3d.software_override,
             knowledge_base_ids=effective_knowledge_base_ids,
+            # F4: o prompt já vem com a análise dos anexos injetada (acima), via
+            # ``build_attachments_context`` — não repassa attached_file_ids aqui
+            # para não re-analisar a imagem no planner_service.
         )
         try:
             if plan_kind == ModelingPlanKind.edit:

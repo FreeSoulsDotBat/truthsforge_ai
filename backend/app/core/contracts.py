@@ -980,12 +980,16 @@ class ModelingPlanCreate(BaseModel):
     parent_plan_id: str | None = None
     software_override: ModelingSoftware | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=12)
+    # F4: imagens/arquivos anexados pelo usuário (image-to-model). O planner
+    # analisa cada um (vision/Blender) e injeta a descrição no contexto.
+    attached_file_ids: list[str] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def normalize_software_override(self) -> ModelingPlanCreate:
         if self.software_override == ModelingSoftware.auto:
             self.software_override = None
         self.knowledge_base_ids = list(dict.fromkeys(self.knowledge_base_ids))
+        self.attached_file_ids = list(dict.fromkeys(self.attached_file_ids))
         return self
 
 

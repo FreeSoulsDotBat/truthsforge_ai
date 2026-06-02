@@ -17,6 +17,7 @@ from typing import Any
 from app.core.contracts import (
     ModelCapability,
     ModelConfig,
+    ModelingPlanCreate,
     PlatformFile,
     ProviderName,
 )
@@ -211,6 +212,51 @@ def test_call_vision_swallows_gateway_error(tmp_path: Path) -> None:
 
     # Falha do provider não vaza: vira None (caller usa metadata-only).
     assert analyzer._call_vision(PNG_BYTES, _image_file(tmp_path)) is None
+
+
+def test_build_attachments_context_renders_block(tmp_path: Path) -> None:
+    """F4 wiring: o bloco <anexos-analisados> é montado a partir da análise —
+    é o que a descoberta E o planejamento passam a injetar no prompt."""
+    from app.modeling.planner_service import build_attachments_context
+
+    pf = _image_file(tmp_path)
+    store = _FakeStore(files={pf.id: pf}, models=[_vision_model()])
+    gateway = _FakeVisionGateway("Caixa com tampa por knuckles e furos M4.")
+
+    block = build_attachments_context(store, [pf.id], gateway=gateway)  # type: ignore[arg-type]
+
+    assert block is not None
+    assert "<anexos-analisados>" in block and "</anexos-analisados>" in block
+    assert "Caixa com tampa por knuckles" in block
+
+
+def test_build_attachments_context_none_without_files() -> None:
+    from app.modeling.planner_service import build_attachments_context
+
+    assert build_attachments_context(_FakeStore(), []) is None
+    assert build_attachments_context(_FakeStore(), [""]) is None
+
+
+def test_planner_service_injects_attachment_context(tmp_path: Path) -> None:
+    """O planner passa a "ver" a imagem: _with_attachment_context analisa o
+    anexo e injeta a descrição no prompt (gate F4 — antes a imagem sumia)."""
+    from app.modeling.planner_service import ModelingPlannerService
+
+    pf = _image_file(tmp_path)
+    store = _FakeStore(files={pf.id: pf}, models=[_vision_model()])
+    gateway = _FakeVisionGateway("Peça em L com 4 furos M4.")
+    svc = ModelingPlannerService(store=store, gateway=gateway)  # type: ignore[arg-type]
+
+    payload = ModelingPlanCreate(prompt="modele isso", attached_file_ids=[pf.id])
+    out = svc._with_attachment_context(payload)
+
+    assert out.prompt.startswith("modele isso")
+    assert "<anexos-analisados>" in out.prompt
+    assert "Peça em L com 4 furos M4." in out.prompt
+
+    # Sem anexo, o payload passa intacto (mesma instância).
+    plain = ModelingPlanCreate(prompt="oi")
+    assert svc._with_attachment_context(plain) is plain
 
 
 def test_explicit_vision_model_overrides_store(tmp_path: Path) -> None:
