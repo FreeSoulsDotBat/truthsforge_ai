@@ -262,7 +262,12 @@ def build_modeling_3d_stream_response(
                 "software_override": payload.modeling_3d.software_override.value
                 if payload.modeling_3d.software_override
                 else None,
-            }
+            },
+            # F4 bug: a imagem sumia ao recarregar porque os anexos não eram
+            # persistidos na mensagem do usuário. O bubble (app-chat.tsx) resolve
+            # a imagem por attached_file_ids + platformFilesById.
+            "attached_file_ids": list(payload.attached_file_ids or []),
+            "attached_document_ids": list(payload.attached_document_ids or []),
         },
     )
     store.add_message(user_message)
