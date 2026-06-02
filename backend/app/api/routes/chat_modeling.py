@@ -336,7 +336,6 @@ def build_modeling_3d_stream_response(
         # ready=true, intent=edit). Ver chat-flow-redesign.md (P2/P3).
         plan_prompt = payload.message
         plan_kind = ModelingPlanKind.primary
-        reset_document = False
         has_existing_model = session.modeling_stage in (
             ChatModelingStage.editing,
             ChatModelingStage.failed,
@@ -420,8 +419,6 @@ def build_modeling_3d_stream_response(
             # Decide kind do plano: edição do modelo atual vs modelo novo.
             if has_existing_model and assessment.intent == "edit":
                 plan_kind = ModelingPlanKind.edit
-            elif has_existing_model and assessment.intent == "new_model":
-                reset_document = True  # modelo do zero: documento limpo
         elif has_existing_model:
             # Discovery off: ainda assim trata follow-up como edição segura.
             plan_kind = ModelingPlanKind.edit
@@ -470,10 +467,13 @@ def build_modeling_3d_stream_response(
                     payload=plan_create,
                     manage_trace=False,
                 )
-                # P3: "modelo do zero" num chat que já tinha modelo força o
-                # primeiro open_design a criar documento NOVO (default é reusar).
-                if reset_document:
-                    plan = _force_plan_new_document(store, plan)
+                # P3 (fix gate 56d44c77): TODO plano primário = modelo NOVO →
+                # documento NOVO. O doc do Fusion é COMPARTILHADO entre chats,
+                # então um chat novo precisa de doc LIMPO; senão constrói sobre o
+                # modelo do chat anterior e colide (foi o que quebrou o shell).
+                # Antes só resetava "novo modelo no MESMO chat"
+                # (has_existing_model) — o chat novo reusava o doc velho.
+                plan = _force_plan_new_document(store, plan)
                 # P1 (gate): o plano primário SEMPRE para para aprovação (mesmo
                 # safe_auto sem high-risk); a execução só vem do card.
                 if plan.status not in (
