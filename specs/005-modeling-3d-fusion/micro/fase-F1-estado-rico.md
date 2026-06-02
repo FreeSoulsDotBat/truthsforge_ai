@@ -2,7 +2,7 @@
 
 **Frente**: F1 | **Spec**: [`../spec.md`](../spec.md) | **Macro**: [`../plan.md`](../plan.md) › Frentes de capacidade | **Índice**: [`../tasks.md`](../tasks.md)
 
-> **Replan 2026-05-29**: de "cobertura de workspaces" para **capacidades de sólidos mecânicos**. F1 é a fundação que destrava P1 (peças mecânicas), P2 (planejamento), P4 (edição). Detalhe do replan em [`../../../C:/Users/Jonatan/.claude/plans/optimized-gliding-iverson.md`] (plano efêmero) — consolidado aqui.
+> **Replan 2026-05-29**: de "cobertura de workspaces" para **capacidades de sólidos mecânicos**. F1 é a fundação que destrava P1 (peças mecânicas), P2 (planejamento), P4 (edição). O detalhe do replan está consolidado neste arquivo (e em `../plan.md` › Frentes de capacidade).
 
 ## Objetivo
 

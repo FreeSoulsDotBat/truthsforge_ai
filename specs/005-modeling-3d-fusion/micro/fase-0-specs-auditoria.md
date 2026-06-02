@@ -67,8 +67,8 @@ Estabelecer a base do v4: specs reescritas no modelo macro/micro (só-3D) e um *
 
 ## Definição de pronto (Fase 0)
 
-- [ ] Inventário de auditoria escrito com veredito por peça.
-- [ ] Status real-Fusion das tools mapeado.
-- [ ] ADR-017, ADR-018 e ADR-019 rascunhados.
-- [ ] Inconsistências de doc catalogadas para a Fase final.
-- [ ] Dono aprovou (gate) → libera Fase 1.
+- [x] Inventário de auditoria escrito com veredito por peça.
+- [x] Status real-Fusion das tools mapeado.
+- [x] ADR-017, ADR-018 e ADR-019 rascunhados.
+- [x] Inconsistências de doc catalogadas para a Fase final.
+- [x] Dono aprovou (gate) → libera Fase 1 (2026-05-24).

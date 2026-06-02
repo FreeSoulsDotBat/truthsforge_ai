@@ -66,3 +66,14 @@
 - Empacotamento do backend.
 - Backups locais.
 - Migrações e testes integrados.
+
+## Modelagem 3D (bounded context separado, spec 005)
+
+O 3D não segue a numeração M0–M8: evolui na própria spec
+`005-modeling-3d-fusion`. Estado atual (v4): chat-first integral (ADR-013),
+motor genérico (ADR-020) que compõe peças de primitivas + features genéricas em
+vez de macros de produto, loop agêntico de auto-correção, verificação geométrica
+e visual, image-to-model (F4), estado rico do modelo (ADR-021), reconciliação ao
+vivo e servidor MCP standalone (ADR-017). As capacidades novas ficam atrás de
+flags, a maioria default OFF até o gate do dono no Fusion real. Tetos de
+plataforma: sheet metal (DT-011) e sculpt (DT-012) congelados.

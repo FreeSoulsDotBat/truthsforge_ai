@@ -14,7 +14,7 @@ Construir o cérebro do produto: após o usuário aprovar o plano, o motor **exe
 - `discovery.py` — clarificação; `planner.py`/`planner_service.py` — geração de plano; `policy.py` — risco/aprovação.
 - `executor.py` — executa passos (base do loop).
 - `observability.py` — traces; `snapshot_service.py` — snapshots/rollback.
-- **Absorvido do fidelity-roadmap** (a integrar na branch — ver `plan.md` › Pendências): `agent_loop.py` (`ModelingAgentLoop`, teto duro 5), `tool_schemas.py` (a LLM vê args/unidades/exemplos) e `planner.build_correction_context` (edit-context + falhas). O loop **existe em andaime**, mas: (a) não está ligado ao stream; (b) só corrige em `status=failed`, sem verificação geométrica; (c) bloqueia corretivo high-risk (contra a decisão do dono).
+- **Integrado nesta branch** (commit `06b2d2e`): `agent_loop.py` (`ModelingAgentLoop`, teto duro 5), `tool_schemas.py` (a LLM vê args/unidades/exemplos) e `planner.build_correction_context` (edit-context + falhas). O loop está **ligado ao stream** após a aprovação (flag `modeling_agentic_loop_enabled`), dispara correção em `status=failed` **e** em divergência geométrica (verifier injetável), e **não pausa** para corretivo high-risk (decisão do dono — DT-010). **Validado end-to-end no Fusion real** (Gate 4, commit `9b4fd4b`, 2026-05-29: cubo+fillet 16mm impossível → corretor LLM reduziu → completed). _Resíduo aberto:_ snapshot nativo do Fusion (DT-005, hoje `rollback_skipped`) e read-back geométrico fiado no loop em peça real.
 
 ## Recorte do trabalho (decidido com o dono, 2026-05-24)
 
@@ -90,10 +90,10 @@ Adicionar `ChatModelingStage.failed` (e evento `EXECUTION_FAILED` passando a apo
 
 ## Definição de pronto (Fase 2)
 
-- [ ] Loop agêntico com teto 5, término explícito e rollback.
-- [ ] Verificação geométrica esperado × medido por passo.
-- [ ] Execução fim-a-fim sem pausa; aprovação única cobre high-risk.
-- [ ] Persistência de chat + histórico de modelagem (Postgres/JSON).
-- [ ] Observabilidade legível + doc de scripts de debug.
-- [ ] Rota fina + fluxo consolidado no orchestrator (DT-006); snapshot nativo (DT-005); persistência explícita (DT-007); estado de falha no `chat_state` (DT-008).
-- [ ] Testes verdes; gate do dono (Nível 1) aprovado.
+- [x] Loop agêntico com teto 5, término explícito e rollback (`agent_loop.py`, validado Gate 4 — 2026-05-29).
+- [x] Verificação geométrica esperado × medido por passo (verifier injetável + `_needs_correction` dispara em divergência).
+- [x] Execução fim-a-fim sem pausa; aprovação única cobre high-risk (loop não pausa em corretivo high-risk — DT-010).
+- [x] Persistência de chat + histórico de modelagem (Postgres/JSON; exercitada no end-to-end).
+- [x] Observabilidade legível + doc de scripts de debug (`docs/3d-modeling-debug.md`).
+- [~] Rota fina + fluxo consolidado no orchestrator (DT-006 ✅); **snapshot nativo do Fusion (DT-005) ainda aberto** (hoje `rollback_skipped`); persistência explícita (DT-007 ✅); estado de falha no `chat_state` (DT-008 ✅ — `ChatModelingStage.failed`).
+- [x] Testes verdes; **gate do dono (Nível 1 / Gate 4) aprovado** end-to-end no Fusion real (2026-05-29). _Pendente:_ read-back geométrico fiado no loop em peça real + snapshot nativo (DT-005).

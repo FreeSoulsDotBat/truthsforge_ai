@@ -199,7 +199,8 @@ Para preparar o Git hook local:
 
 Isso configura `core.hooksPath=.githooks`; o hook `.githooks/pre-commit` chama `scripts/quality.ps1` antes de cada commit.
 
-Ou manualmente:
+Ou manualmente (este bloco inclui os builds `build:web`/`build:docs`, que rodam
+no `test-container.ps1`, **não** no `quality.ps1`):
 
 ```powershell
 docker compose --env-file infra\.env -f infra\docker-compose.yml -f infra\docker-compose.dev.yml exec -T backend python -m pytest

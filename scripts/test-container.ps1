@@ -36,7 +36,7 @@ $TestDataDir = "/tmp/truths_forge_test_$([Guid]::NewGuid().ToString('N'))"
 Invoke-Compose @(
   "exec",
   "-T",
-  "-e", "TRUTHS_FORGE_STORAGE_BACKEND=dev",
+  "-e", "TRUTHS_FORGE_STORAGE_BACKEND=json",
   "-e", "TRUTHS_FORGE_ENV=test",
   "-e", "TRUTHS_FORGE_DATA_DIR=$TestDataDir",
   "backend",

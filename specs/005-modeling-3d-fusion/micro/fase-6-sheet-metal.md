@@ -22,11 +22,17 @@ Cobrir o workspace **Sheet Metal** do Fusion: regras de chapa (espessura, raio d
 
 ## Tarefas atômicas
 
-- **T6.1** ✅ — `fusion.convert_to_sheet_metal` (`ConvertToSheetMetalFeatures.createInput(bodies)`) com `thickness_mm` opcional (usa SheetMetalRule default se omitido). Marca `is_sheet_metal: true` no output.
-- **T6.2** ✅ — `fusion.flange_edge` (`FlangeFeatures.createInput(edges)` + `inp.height`/`inp.angle`). Aceita `edge_ids` (de query_geometry) OU `edge_selector` semântico. Height/angle paramétricos (G1.1).
-- **T6.3** ✅ — `fusion.bend_edge` (`BendFeatures.createInput(edges, angle, radius)`) — aplica bend em aresta interior; complementa flange (que cria material novo).
-- **T6.4** ✅ — `fusion.unbend` (`UnbendFeatures.createInput(faces, isRoot=true)`) — achata para flat pattern. Sem `face_ids` o handler escolhe a primeira face planar do body.
-- **T6.5** ✅ — `fusion.rebend` (`RebendFeatures.createInput(faces)`) — restaura geometria 3D após unbend.
+> ⛔ **T6.1–T6.5: implementadas então REMOVIDAS (DT-011, commit `877ac23`).** A
+> API Python do Fusion **não expõe** sheet metal (ver "ACHADO DE GATE" abaixo):
+> os métodos invocados não existem. As tools saíram da allowlist/dispatch/schemas;
+> `test_sheet_metal_tools_are_removed` impede reintrodução. **Não estão mais
+> registradas.** Detalhe histórico mantido para rastreabilidade.
+
+- **T6.1** ⛔ (removida) — `fusion.convert_to_sheet_metal` (`ConvertToSheetMetalFeatures.createInput(bodies)`) com `thickness_mm` opcional. *Método inexistente na API.*
+- **T6.2** ⛔ (removida) — `fusion.flange_edge` (`FlangeFeatures.createInput(edges)` + `inp.height`/`inp.angle`). *`FlangeFeatures` é coleção read-only (sem `createInput`/`add`).*
+- **T6.3** ⛔ (removida) — `fusion.bend_edge` (`BendFeatures.createInput(...)`). *`bendFeatures` inexistente.*
+- **T6.4** ⛔ (removida) — `fusion.unbend` (`UnbendFeatures.createInput(...)`). *`unbendFeatures` inexistente.*
+- **T6.5** ⛔ (removida) — `fusion.rebend` (`RebendFeatures.createInput(...)`). *`rebendFeatures` inexistente.*
 - **T6.6** (pendente) — Flat pattern + export DXF como artifact (RF-026). Não bloqueia o gate base; entra como follow-up se o gate exigir.
 
 ## Contratos / invariantes
@@ -83,8 +89,8 @@ Recomendação: (1) + documentar; reescopo (2) só se o dono tiver caso real.
 impede reintrodução acidental. Fase 6 fica **bloqueada por plataforma** até a
 Autodesk expor a API de sheet metal no Python. Roadmap segue para Fase 7/8.
 
-## Definição de pronto (Fase 6)
+## Definição de pronto (Fase 6) — ⛔ FASE CONGELADA (DT-011)
 
-- [x] **T6.1–T6.5** — 5 tools de sheet metal (convert_to_sheet_metal, flange_edge, bend_edge, unbend, rebend) registradas, schemas, dispatch, e teste `test_sheet_metal_tools_registered_and_compile` verde.
-- [ ] **T6.6** — Flat pattern + export DXF (follow-up demanda-dirigido).
-- [~] **Gate do dono (Fusion real)** — chapa dobrada Nível 3 (pendente — código+testes mock prontos).
+- [⛔] **T6.1–T6.5** — 5 tools de sheet metal **implementadas então REMOVIDAS** (commit `877ac23`): a API Python do Fusion não as suporta. `test_sheet_metal_tools_are_removed` guarda contra reintrodução. **Não estão mais registradas.**
+- [⛔] **T6.6** — Flat pattern + export DXF — **sem efeito** (sem base de sheet metal na API).
+- [⛔] **Gate do dono (Fusion real)** — **não aplicável**: fase bloqueada por teto de plataforma (DT-011) até a Autodesk expor a API.

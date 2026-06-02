@@ -118,6 +118,14 @@ obrigatória**). Ver AGENTS.md / ADR.
 | `validate_dimensions` | read_only | `boundingBox` + `physicalProperties` | ✅ |
 | `validate_printability` | read_only | checks B-Rep | ✅ |
 | `run_script` | high_risk | — | 🚫 **nunca exposto** (ADR-019) |
+| `thread` | mutative | `ThreadFeatures.createInput` + `isModeled=True` (`ThreadDataQuery` p/ designação métrica) | ✅ F3 (mock; gate pendente) |
+| `make_component` | mutative | `Occurrences.addNewComponent(Matrix3D)` (ocorrência/componente) | ✅ F3 (mock; gate pendente) |
+| `joint` | mutative | `Joints.createInput(JointGeometry, JointGeometry)` + tipo (`setAsRevoluteJointMotion`/`rigid`/`slider`/`cylindrical`) | ✅ F3 (mock; gate pendente) |
+| `knuckle_hinge` | mutative | **macro** — compõe `add_box`/`add_cylinder`/`combine`/`joint` | ⚠️ **deprecada do planner** (`DEPRECATED_PLANNER_TOOLS`; handler só backward-compat/smoke) |
+| `metric_screw` | mutative | **macro** — compõe `add_cylinder` (haste) + perfil sextavado + `thread` | ⚠️ **deprecada do planner** (`DEPRECATED_PLANNER_TOOLS`; handler só backward-compat/smoke) |
+| `capture_viewport` | read_only | render do viewport → PNG base64 (`Viewport.saveAsImageFile`/captura) | ✅ **probe do loop visual** — **não visível ao planner** |
+| `query_timeline` | read_only | `Design.timeline` + `userParameters` (lê features/params) | ✅ reconciliação — **não visível ao planner** (uso interno do orchestrator) |
+| `rollback_timeline` | **destructive** | apaga features após um marcador (`timeline.markerPosition` / `deleteMe`) | ✅ undo de edição — **não visível ao planner**; **destrutivo** |
 | `extrude_profile` `as_surface=true` | mutative | `ExtrudeFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b — **validado Fusion real** |
 | `revolve_profile` `as_surface=true` | mutative | `RevolveFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b — **validado Fusion real** |
 | `sweep_profile` `as_surface=true` | mutative | `SweepFeatures.createInput` + `input.isSolid=False` | ✅ T5.1a/b (open profile via `createOpenProfile`) |
@@ -204,7 +212,12 @@ Formato por op: **API Fusion** · **args** (canônicos; aliases entre parêntese
   (ou `dimensions_mm=[w,d,h]` / `size_mm`), `center_mm` (centraliza) **ou**
   `origin_mm` (canto inferior), `name`.
 - **`fusion.add_cylinder`** — sketch círculo + extrude. Args: `diameter_mm`
-  (`radius_mm`), `height_mm`, `center_mm`, `name`.
+  (`radius_mm`), `height_mm`, `center_mm` (`origin_mm` é alias de posição XY),
+  `name`; **`axis`** (`x|y|z`, default `z`; aceita também vetor `[1,0,0]` — usa o
+  componente dominante) p/ **cilindro horizontal** (ex.: knuckles de dobradiça ao
+  longo de uma aresta); **modo batch**: lista `cylinders` **ou** `knuckles=[{…}]`
+  cria vários cilindros num único step (cada item aceita os mesmos args) →
+  retorna `body_names`/`items`.
 - **`fusion.add_sphere`** — semicírculo + revolve 360°. Args: `diameter_mm`
   (`radius_mm`), `center_mm`, `name`. **Divergência:** não usa
   `TemporaryBRepManager.createSphere` (escolha: corpo editável na timeline).
@@ -293,11 +306,14 @@ Formato por op: **API Fusion** · **args** (canônicos; aliases entre parêntese
   Args: `result_name`/`output_name`. **Guarda:** exige ≥1 body sólido (senão
   `InternalValidationError` — Fix #5).
 
-### 3.10 Superfícies (NURBS) — pré-implementação (Fase 5)
+### 3.10 Superfícies (NURBS) — implementado (Fase 5)
 
-> **Status:** mapeamento pré-implementação (T5.0). Cada item é um contrato-alvo;
-> a implementação real entra com testes mock (T5.1–T5.4) e fecha no gate da
-> carenagem (Nível 2). Hoje **0/11 itens** existem em `fusion_mcp_scripts.py`.
+> **Status:** **implementado** (T5.1–T5.4 concluídas; 7 surface tools no registry
+> — `create_surface_patch`, `thicken_surface`, `stitch_surfaces`, `trim_surface`,
+> `extend_surface`, `offset_surface`, `unstitch_surface` — + as 4 expansões
+> `as_surface` e os selectors/read-back). Validado autônomo no Fusion real (probe;
+> ver §3.10.11). Aprovação visual final do dono na UI pendente. `trim_surface` =
+> known-issue (seleção de cells). O mapeamento abaixo é o contrato as-built.
 
 #### 3.10.1 Criação de superfície (expansão das tools existentes)
 
@@ -490,6 +506,46 @@ sem UI/LLM — `_gate_probe.py`):
   (`bRepCells`/`isRemoved`) ainda dá `No cells selected`. **Known-issue**:
   refinar a API de cells + caso geométrico (ferramenta deve atravessar a
   superfície). Não bloqueia o gate da carenagem (não usa trim).
+
+### 3.11 Mecanismos (F3) e tools de uso interno (não visíveis ao planner)
+
+> Estas tools sustentam o **motor genérico** (ADR-020): o planner **compõe**
+> mecanismos a partir de primitivas + features genéricas, em vez de macros de
+> produto. As macros e os probes internos **não** são oferecidos ao planner.
+
+- **`fusion.thread`** — `rootComp.features.threadFeatures` →
+  `threadFeatures.createInput(face, threadDataQuery)` + `input.isModeled = True`
+  → `add(input)`. Rosca **geometria real** (helicoidal modelada), não cosmética.
+  Args: `body_ref`/`face_*`, designação métrica (ex.: `M6`), `length_mm`,
+  `is_internal`. Mock ✅; gate F3 pendente.
+- **`fusion.make_component`** — `rootComp.occurrences.addNewComponent(Matrix3D)`
+  cria componente/ocorrência (sai do mundo single-body sob demanda). Args:
+  `name`, `bodies` (corpos a mover para o componente). Mock ✅; gate F3 pendente.
+- **`fusion.joint`** — `rootComp.joints.createInput(geo1, geo2)` (`JointGeometry`
+  por face/edge/ponto) + tipo: `setAsRevoluteJointMotion(axis)` |
+  `setAsRigidJointMotion` | `setAsSliderJointMotion` | `setAsCylindricalJointMotion`.
+  Args: refs das duas geometrias, `type` (`revolute|rigid|slider|cylindrical`),
+  limites opcionais. Mock ✅; gate F3 pendente.
+- **`fusion.knuckle_hinge`** (macro) — compõe `add_box`/`add_cylinder` (knuckles
+  coaxiais alternados + pino) + `combine_bodies` + `joint` revolute. ⚠️
+  **deprecada do planner** (`DEPRECATED_PLANNER_TOOLS`): o caminho atual é a
+  composição genérica + Gate Visual para o mesmo exemplo da caixa+dobradiça.
+  Handler mantido só para backward-compat/smoke.
+- **`fusion.metric_screw`** (macro) — compõe haste (`add_cylinder`) + cabeça
+  sextavada + `thread`. ⚠️ **deprecada do planner** (mesma nota do knuckle_hinge).
+- **`fusion.capture_viewport`** (read_only) — render do viewport ativo → PNG
+  base64. **Probe do loop de verificação visual** (`visual_critique.py`: render →
+  crítica de visão → replan corretivo, atrás de `modeling_visual_verification_enabled`,
+  teto `modeling_visual_max_rounds`). **Não exposto ao planner** (uso do loop).
+- **`fusion.query_timeline`** (read_only) — lê `design.timeline` + `userParameters`
+  para reconciliação de edição manual. **Não exposto ao planner** (uso interno do
+  orchestrator).
+- **`fusion.rollback_timeline`** (**destructive**) — apaga features após um ponto
+  da timeline (undo de edição / "desfazer última edição"). **Não exposto ao
+  planner**; **destrutivo** (aprovação/escopo de edição). Ver `tool_registry.py`
+  (`_planner_visible()` exclui `*.run_script`/`*.rollback_timeline`/
+  `*.query_timeline`/`*.capture_viewport` + `DEPRECATED_PLANNER_TOOLS` do toolset
+  do planner).
 
 ## 4. Divergências intencionais vs. API canônica (consolidado)
 

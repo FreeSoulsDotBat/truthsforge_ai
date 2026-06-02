@@ -76,6 +76,4 @@ Cobrir o workspace **Surface** do Fusion: criação e edição de superfícies N
 - [x] **T5.2** — Edição de superfície (T5.2a/b/c/d/e/f todas ✅).
 - [x] **T5.3** — `query_geometry`/selectors/verifier adaptados a superfície (T5.3a/b/c ✅).
 - [x] **T5.4** — Testes mock + adapter-gaps-roadmap atualizado + docs/3d-mcp-modeling.md atualizado.
-- [ ] **T5.3** — `query_geometry`/selectors/verifier adaptados a superfície.
-- [ ] **T5.4** — Testes verdes; `adapter-gaps-roadmap.md` atualizado; documentação dupla (Docusaurus + SDD).
 - [~] **Gate do dono** — carenagem Nível 2 no Fusion real. **Validação autônoma 2026-05-28** (probe direto no adapter, `_gate_probe.py`): caminho crítico revolve_surface→patch→stitch→thicken **PASSOU** (casca fechada → sólido). 3 bugs achados+corrigidos no Fusion real: (1) `openProfiles` → `createOpenProfile`; (2) `unstitch` createInput→`.add` direto; (3) `is_closed` falso-negativo em sólido com seam. offset/extend também ✅. **Pendente:** `trim_surface` (seleção de cells — known-issue) + validação visual/aprovação final do dono na UI.

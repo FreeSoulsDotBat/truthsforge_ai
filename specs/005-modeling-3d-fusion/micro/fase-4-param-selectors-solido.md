@@ -58,7 +58,7 @@ Pendente (precisa do gate / é demanda-dirigido):
 
 ## Definição de pronto (Fase 4)
 
-- [ ] Parametrização real (DT-002 encerrada).
-- [ ] Selectors estáveis aplicados.
-- [ ] Features de sólido restantes (G3) implementadas e verificadas.
-- [ ] Testes verdes; gate do dono (Nível 1 aprofundado) aprovado.
+- [x] Parametrização real (**DT-002 FECHADO** — validado no Fusion real 2026-05-29: placa recomputou 120→160). _Resíduo:_ posição de furo paramétrica (G1.2 estendido).
+- [x] Selectors estáveis aplicados (body-level: `stable_id` via attributes + `_find_body`/`query_geometry`). _Follow-up:_ T4.2b faces/edges (estratégia diferente).
+- [~] Features de sólido restantes (G3) implementadas e verificadas (entregue: ellipse/slot/split_body/move-rotação; **demais — draft/rib/chamfer 2-dist/planos por ângulo/text/hole v2 — sob demanda + smoke**).
+- [x] Testes verdes; **gate do dono (Nível 1 aprofundado) aprovado** (2026-05-29).

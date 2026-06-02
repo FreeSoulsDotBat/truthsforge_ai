@@ -2,7 +2,7 @@
 
 **Fase**: 9 | **Spec**: [`../spec.md`](../spec.md) | **Macro**: [`../plan.md`](../plan.md) | **Índice**: [`../tasks.md`](../tasks.md)
 
-> **Depende de**: Fase 8 fechada (cobertura "todo o Design" estável). Frente nasceu do gate da Fase 4 (Cenário A), onde se confirmou que o nudge é a camada mais fraca contra variabilidade do planner. O detalhe abaixo é um **stub** — o micro-plano é reescrito just-in-time antes de iniciar a fase. Mantido aqui para preservar cross-links e a decisão de roadmap.
+> **Depende de**: ~~Fase 8 fechada~~ — **moot** (replan ADR-021: a Fase 8 foi absorvida pela F3 e o sanitizer determinístico da F6/9.2 já foi entregue, não dependia da cobertura "todo o Design"). A frente é **transversal** e pode permear F2/F3. Nasceu do gate da Fase 4 (Cenário A), onde se confirmou que o nudge é a camada mais fraca contra variabilidade do planner. **A decisão de determinismo está registrada no ADR-020** (motor genérico: sanitizer determinístico + verificação). Parte do conteúdo abaixo era um stub do plano original; ver "Status (replan v4 — F6)" para o que foi entregue.
 
 ## Status (replan v4 — F6)
 
@@ -66,16 +66,16 @@ Para planos críticos (> N steps configurável), um segundo prompt revisa o plan
 
 Pós-telemetria: identificar padrões recorrentes (ex.: "placa com N furos", "caixa com tampa", "flange com parafusos") e oferecer macro template parametrizado. LLM preenche slots, não inventa estrutura. Tradeoff: reduz criatividade pra casos novos → manter como **opt-in pelo planner**, não default.
 
-## ADR-020 — Structured Outputs + sanitizer + retry agêntico (a rascunhar)
+## ADR-020 — motor genérico: composição + sanitizer determinístico + verificação (✅ criado e aceito)
 
-A fase deve nascer com um ADR-020 cobrindo:
+ADR-020 já existe em `docs/decisions.md` (título: "Motor genérico 3D: composição + verificação (visual/geométrica) em vez de macros de produto") e **cobre a decisão de determinismo** desta frente (o sanitizer determinístico, F6) além do motor genérico e da verificação visual/geométrica. Cobre:
 - Decisão de adotar Structured Outputs como contrato (vs JSON livre + parser tolerante).
 - Sanitizer como camada arquitetural (vs continuar normalizando dentro de cada handler).
 - Política de retries com guidance (limites, observabilidade, custo).
 
 ## Tarefas atômicas (esboço, detalhe just-in-time)
 
-- **T9.0** — ADR-020 rascunhado + aprovado pelo dono.
+- **T9.0** ✅ — ADR-020 criado e aceito (`docs/decisions.md`).
 - **T9.1** — Structured Outputs ligados a partir de `tool_schemas.py`; testes de contrato (LLM mock) garantem que campo fantasma é rejeitado na origem.
 - **T9.2** — Sanitizer determinístico + telemetria; cobertura por unit tests dos drifts conhecidos do replan v3/v4.
 - **T9.3** — Retry agêntico com guidance no fluxo de pós-execução (reuso `agent_loop.py`).
@@ -107,7 +107,7 @@ Medir, com a observabilidade da Fase 2, antes vs depois:
 
 ## Definição de pronto (Fase 9)
 
-- [ ] ADR-020 aprovado.
+- [x] ADR-020 aprovado (criado e aceito em `docs/decisions.md`).
 - [ ] Structured Outputs no provedor primário (com fallback gracioso para provedores sem suporte).
 - [ ] Sanitizer determinístico em produção, com telemetria.
 - [ ] Retry com guidance ligado e validado em pelo menos 1 cenário real.

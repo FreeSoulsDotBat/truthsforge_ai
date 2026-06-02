@@ -1,6 +1,6 @@
 # Especificação: Modelagem 3D chat-first autônoma no Fusion 360 (v4)
 
-**Pasta da spec**: `specs/005-modeling-3d-fusion/` | **Criada em**: 2026-05-23 | **Status**: Rascunho (aguardando aprovação do dono)
+**Pasta da spec**: `specs/005-modeling-3d-fusion/` | **Criada em**: 2026-05-23 | **Status**: Aprovada e em execução (gate Fase 0 aprovado 2026-05-24; replan v4 "motor genérico" — ADR-020/021)
 
 **Entrada**: Descrição do dono do produto: "Autonomia de criação de modelos 3D via chat: através de um chat, ser capaz de modelar o que eu quiser, da forma que eu quiser, no Fusion 360 — com planejamento dirigido, execução autônoma do início ao fim e fidelidade ao que foi pedido."
 
@@ -144,6 +144,7 @@ Forma EARS com ID rastreável.
 
 **Cobertura de operações**
 - **RF-016**: O SISTEMA DEVE, como alvo de produto, cobrir todas as operações do workspace **Design** do Fusion 360: sólido (todas as features), superfície (NURBS), sheet metal, sculpt/T-Spline e assemblies (componentes, ocorrências, juntas, materiais físicos). _(Sequenciado em fases no `plan.md`.)_
+  > **REPLAN 2026-05-29 (ADR-021) — superada parcialmente:** o programa reorientou de "cobertura de workspaces" para **capacidades de sólidos mecânicos**. **Sheet metal (DT-011)** e **sculpt/T-Spline (DT-012)** são **tetos de plataforma** (a API Python do Fusion não os expõe) e ficam **CONGELADOS**; assemblies (componentes/ocorrências/juntas) foram **absorvidos pela frente F3** (`make_component`/`joint` já entregues), não mais por uma onda dedicada. Sólido + superfície (NURBS) seguem cobertos. Texto histórico mantido para rastreabilidade.
 - **RF-017**: O SISTEMA NÃO DEVE, nesta frente, cobrir outros workspaces do Fusion (CAM/usinagem, simulação/FEA, generative design, drawings 2D, render).
 - **RF-018**: QUANDO o usuário solicitar uma operação ainda não suportada pela fase corrente, O SISTEMA DEVE falhar de forma explícita, sem improviso via script livre.
 
@@ -171,7 +172,7 @@ Forma EARS com ID rastreável.
 - **RNF-002 (P5)**: O store transacional de produção é Postgres; JSON é apenas dev/test. Tocar storage explicita impacto em `postgres`, `json` e `auto`.
 - **RNF-003 (P8)**: Allowlist de tools de fonte única; auditoria, snapshot e rollback obrigatórios em ações de alteração/deleção/high-risk.
 - **RNF-004 (P9)**: Gates de qualidade (`ruff format --check`, `ruff check`, `pytest`; web `format:check`, `lint`, `test:unit`, `typecheck`, `build`) verdes nas áreas tocadas; artefatos em PT-BR.
-- **RNF-005**: A reabertura da cobertura para assemblies/componentes (mudança no data model do plano) DEVE ser registrada em ADR antes de virar código. _(Reverte a decisão "single-body" do v3.)_
+- **RNF-005**: A reabertura da cobertura para assemblies/componentes (mudança no data model do plano) DEVE ser registrada em ADR antes de virar código. _(Reverte a decisão "single-body" do v3.)_ _(Replan ADR-021: a cobertura de assemblies foi **absorvida pela frente F3** — `make_component`/`joint` entregues sob demanda dos gates de capacidade, sem onda dedicada nem migração big-bang do data model.)_
 - **RNF-006 (P3/P9 — Clean Architecture)**: O código DEVE seguir clean architecture — camadas separadas (domínio / casos de uso / adapters / interface), sem regra de negócio em rotas e sem acoplamento que impeça teste. Qualidade de código é **não-negociável**.
 - **RNF-007 (P4/P9 — Documentação dupla)**: Toda capacidade implementada DEVE ser documentada tanto no site **Docusaurus** (`apps/docs`, que serve `docs/`) quanto no **SDD** (`specs/005-...`), mantidos coerentes entre si e com o código.
 - **RNF-008 (P9 — Testes)**: Toda capacidade implementada DEVE ter **testes unitários** cobrindo o comportamento, verdes nos gates de qualidade.
@@ -195,9 +196,10 @@ Forma EARS com ID rastreável.
 - **CS-002**: Para cada nível de capacidade entregue, existe **uma peça-exemplo** modelada por chat cujo resultado o dono valida como fiel ao pedido no Fusion real (gate por fase):
   - **Nível 1 — Sólido paramétrico** (ex.: suporte/“bracket” parametrizado com furos e fillets).
   - **Nível 2 — Superfície** (ex.: carenagem/“shell” com superfície NURBS espessada).
-  - **Nível 3 — Sheet metal** (ex.: chapa dobrada com flanges e alívios).
-  - **Nível 4 — Sculpt** (ex.: forma orgânica via T-Spline).
-  - **Nível 5 — Assemblies** (ex.: caixa + tampa + parafusos como componentes com junta).
+  - ~~**Nível 3 — Sheet metal** (ex.: chapa dobrada com flanges e alívios).~~ **CONGELADO (DT-011)** — API do Fusion não expõe sheet metal.
+  - ~~**Nível 4 — Sculpt** (ex.: forma orgânica via T-Spline).~~ **CONGELADO (DT-012)** — sem criação de T-Spline paramétrica via API; forma orgânica vai por superfície NURBS (Nível 2).
+  - ~~**Nível 5 — Assemblies** (ex.: caixa + tampa + parafusos como componentes com junta).~~ **ABSORVIDO PELA F3** — vira gate de capacidade (caixa+tampa knuckle / parafuso / suporte) via `make_component`/`joint`, não onda dedicada.
+  > **REPLAN (ADR-021):** os níveis viram **capacidades** (peças mecânicas funcionais); os gates oficiais passam a ser caixa+tampa knuckle, parafuso e suporte de monitor (ver `plan.md` › Frentes de capacidade).
 - **CS-003**: Em pontos de falha recuperáveis, o loop de auto-correção resolve sem intervenção em uma fração mensurável dos casos de teste, e **sempre** termina de forma explícita (sucesso ou falha reportada) em ≤ 5 iterações.
 - **CS-004**: Toda execução produz trace por passo e relatório de verificação legíveis pelo dono.
 - **CS-005**: Um cliente externo autenticado consegue listar e invocar tools 3D pelo servidor MCP, independente do backend do produto.
@@ -209,14 +211,14 @@ Forma EARS com ID rastreável.
 - As peças-exemplo de `CS-002` são propostas e podem ser trocadas pelo dono por casos reais equivalentes.
 - Blender permanece congelado-mas-mantido nesta frente (paridade fica para depois do v4).
 - O **v4 é o guarda-chuva** e absorve o fidelity-roadmap v3 como workstream do motor de fidelidade (decisão do dono, 2026-05-23). Onde houver conflito de escopo, **vence o v4** (cobertura "todo o Design"); a lista "fora de escopo" do fidelity-roadmap (surfaces/sheet metal/sculpt) fica **superada** para as ondas de cobertura.
-- Os assets `agent_loop.py`, `tool_schemas.py` e `build_correction_context` hoje vivem **não-commitados em outro worktree** (`master`); sua integração na branch v4 depende da convergência das branches (ver `plan.md` › Pendências de ambiente).
+- Os assets de fidelidade `agent_loop.py`, `tool_schemas.py` e `planner.build_correction_context` já estão **commitados e integrados** nesta branch (`feat/3d-modelling-updates`, commit `06b2d2e`) e o loop agêntico foi **validado end-to-end no Fusion real** (Gate 4, commit `9b4fd4b`, 2026-05-29). A convergência de branches deixou de ser pendência.
 
 ## Fontes *(obrigatória neste repo)*
 
 - Constituição: `.specify/memory/constitution.md` (P1, P5, P6, P8, P9)
-- Docs: `docs/3d-mcp-modeling.md`, `docs/architecture.md`, `docs/decisions.md` (ADR-012/013/014; novos ADR-017/018/019 a criar), `docs/infra-observability.md`, `docs/delivery-checklist.md`; site Docusaurus em `apps/docs/` (serve `docs/` cru via `path: "../../docs"`)
-- Código (bounded context): `backend/app/modeling/` (`tool_registry.py`, `planner.py`, `planner_service.py`, `executor.py`, `chat_orchestrator.py`, `chat_state.py`, `fusion_adapter.py`, `fusion_mcp_scripts.py`, `mcp_servers/`, `attachment_analyzer.py`, `observability.py`, `snapshot_service.py`, `printability.py`; **absorvidos do fidelity-roadmap**: `agent_loop.py`, `tool_schemas.py`, `planner.build_correction_context`), `apps/web/src/features/modeling-3d/`, `apps/fusion-addin/`
-- Plano absorvido (fidelity v3): `fidelity-roadmap.md` — **atualmente no worktree `master`, ainda não nesta branch** (a convergir); vira insumo dos micro-planos (Fases 2/4/8) sob o guarda-chuva v4
+- Docs: `docs/3d-mcp-modeling.md`, `docs/architecture.md`, `docs/decisions.md` (ADR-012/013/014; ADR-017/018/019/020/021 criados — 017/019/020/021 aceitos; 018 rascunho), `docs/infra-observability.md`, `docs/delivery-checklist.md`; site Docusaurus em `apps/docs/` (serve `docs/` cru via `path: "../../docs"`)
+- Código (bounded context): `backend/app/modeling/` (`tool_registry.py`, `planner.py`, `planner_service.py`, `executor.py`, `chat_orchestrator.py`, `chat_state.py`, `fusion_adapter.py`, `fusion_mcp_scripts.py`, `mcp_servers/`, `attachment_analyzer.py`, `observability.py`, `snapshot_service.py`, `printability.py`; **integrados** (commit `06b2d2e`): `agent_loop.py`, `tool_schemas.py`, `planner.build_correction_context`; **motor genérico** (ADR-020): `visual_critique.py`, `plan_sanitizer.py`, `model_state.py`), `apps/web/src/features/modeling-3d/`, `apps/fusion-addin/`
+- Plano absorvido (fidelity v3): `fidelity-roadmap.md` — **integrado nesta branch** (assets já commitados, ver acima); permanece como insumo histórico dos micro-planos (Fases 2/4 e frentes F1–F6) sob o guarda-chuva v4
 - Specs relacionadas: `specs/000-repo-foundation/`, e os insumos desta pasta (`adapter-gaps-roadmap.md`, `adapter-tools-mvp.md`, `chat-flow-redesign.md`, `observability-plan.md`, `g4-assemblies-decision.md` — a reabrir, `handoff.md`)
 - Plano macro: `specs/005-modeling-3d-fusion/plan.md` | Micro-planos: `specs/005-modeling-3d-fusion/micro/`
 

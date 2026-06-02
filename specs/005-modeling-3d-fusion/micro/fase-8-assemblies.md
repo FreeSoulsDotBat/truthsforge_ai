@@ -2,7 +2,17 @@
 
 **Fase**: 8 | **Spec**: [`../spec.md`](../spec.md) (RF-016 assemblies, RNF-005; DT-003) | **Macro**: [`../plan.md`](../plan.md) | **Índice**: [`../tasks.md`](../tasks.md)
 
-> **Depende de**: Fases 4–7 + **ADR-018 aceito**. Reverte a decisão "single-body" (`g4-assemblies-decision.md`). É a onda de **maior impacto no data model**.
+> ⛔ **SUPERADA COMO VEÍCULO DE ENTREGA (replan 2026-05-29, ADR-021).** A
+> cobertura de assemblies foi **absorvida pela frente F3**: `make_component`
+> (ocorrências/componentes) e `joint` (revolute/rigid/slider/cylindrical) já
+> foram **entregues** sob demanda dos gates de capacidade (caixa+tampa knuckle,
+> parafuso, suporte), **sem** a migração big-bang do data model que esta fase
+> previa. **ADR-018 permanece RASCUNHO** (não aceito). Este micro-plano fica como
+> registro histórico do escopo original; o trabalho vivo está em
+> [`fase-F3-mecanismos.md`](./fase-F3-mecanismos.md).
+>
+> **Depende de**: ~~Fases 4–7 + ADR-018 aceito~~ (obsoleto). Revertia a decisão
+> "single-body" (`g4-assemblies-decision.md`).
 
 ## Objetivo
 

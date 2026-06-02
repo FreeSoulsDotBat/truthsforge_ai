@@ -90,5 +90,5 @@ Além do gate do dono, nenhuma fase fecha sem cumprir as **Regras transversais**
 - Varredura de consistência (2026-05-23) feita; achados viraram DT-005..009 e tarefas nas Fases 0/2/final. Docusaurus serve `docs/` cru (`apps/docs` → `path: ../../docs`).
 - Plano de UI: o dono vai mergear `homolog-new-ui` na `master`; depois, passada de refactor de UI (T0.11) para alinhar `apps/web/src/features/modeling-3d/` (RNF-009). **Nota**: o merge feito pelo dono não chega a este container efêmero (sem remote); requer sessão nova / clone fresco.
 - Reconciliação de planos (2026-05-23): **v4 absorve o fidelity-roadmap v3**; em conflito de escopo vence o v4 (cobertura ampla). High-risk corretivo durante o loop: **coberto pela aprovação do plano** (loop não pausa) → ajustar `agent_loop.py` (DT-010).
-- Convergência de branches pendente: assets do fidelity estão não-commitados no worktree `master` (outra sessão ativa). Escolher uma fonte de verdade; evitar edição simultânea.
+- Convergência de branches: ✅ **resolvida** — os assets do fidelity (`agent_loop.py`/`tool_schemas.py`/`build_correction_context`) já estão **commitados e integrados** nesta branch (`06b2d2e`); loop validado no Fusion real (Gate 4, `9b4fd4b`). Não há mais worktree divergente.
 - Branch: `feat/3d-modelling-updates`.

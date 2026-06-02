@@ -72,9 +72,14 @@ created (title obrigatório) → discovery → planning → approved → executi
                                               └────── (rejeição) ──────────────┘
 ```
 
+> DT-008 (posterior) adicionou um estágio `failed` distinto: uma execução que
+> falha vai para `failed` (não `editing`), para o loop agêntico e a UI
+> distinguirem um run quebrado; a recuperação usa os mesmos eventos de
+> edição/retry. Ver `backend/app/modeling/chat_state.py`.
+
 A flag `is_modeling_3d` é por chat, persistida e imutável após criação. Ativar 3D em um chat com histórico não-vazio abre modal que oferece criar um novo chat 3D vazio; não há cópia de mensagens entre chats.
 
-Os modos legados `plan_only`, `approval_required` e `safe_auto` são **removidos** e o backend deixa de aceitá-los. Sempre que o agente julgar que tem contexto suficiente, ele chama a tool `3d.propose_plan` e o backend transiciona o chat para `planning`. O plano aparece no chat como `ModelingPlanCard` com prosa, etapas, badges de risco, banner de aviso para etapas high-risk e dois botões: "Aprovar" e "Rejeitar" (com campo opcional de motivo). Texto livre **não** aciona execução.
+A UI **não expõe mais o seletor de modos** (`plan_only`/`approval_required`/`safe_auto`): o chat sempre usa o fluxo fluido (`safe_auto`). O enum `ModelingExecutionMode` **permanece** no contrato interno (`backend/app/core/contracts.py`; `plan_only` ainda força rascunho) — apenas não há mais escolha na interface. Sempre que o agente julgar que tem contexto suficiente, propõe o plano e o backend transiciona o chat para `planning`. O plano aparece no chat como `ModelingPlanCard` com prosa, etapas, badges de risco, banner de aviso para etapas high-risk e dois botões: "Aprovar" e "Rejeitar" (com campo opcional de motivo). Texto livre **não** aciona execução.
 
 A aprovação global do plano cobre todas as etapas, incluindo high-risk (`apply_boolean`, `repair_non_manifold`, `restore_snapshot`, `run_script`). Não há mais aprovação step-a-step após o plano primário aprovado. Edições posteriores (estado `editing`) geram mini-planos auto-aprovados quando só contêm tools allowlistadas não-high_risk; ao tocar em high-risk, o card volta a pedir aprovação inline. Snapshots manuais, rollback explícito, allowlist e auditoria permanecem como guardrails obrigatórios.
 
@@ -82,7 +87,7 @@ A descoberta de contexto aceita anexos com análise profunda: imagens via vision
 
 A allowlist de tools deixa de viver em três arquivos espalhados (`planner.py`, `policy.py`, adapters) e passa a derivar de uma única fonte (`backend/app/modeling/tool_registry.py`) para eliminar divergência silenciosa.
 
-A trajetória de implementação está descrita em `specs/005-modeling-3d-fusion/plan.md` (6 ondas: docs/ADRs → backend foundations → backend chat orchestration → frontend feature module → frontend cards/aprovação → título obrigatório → QA/handoff).
+A trajetória de implementação está descrita em `specs/005-modeling-3d-fusion/plan.md`. O replan v4 (ADR-021) reorganizou as ondas originais em frentes de capacidade **F1–F6** (estado rico → planejamento agêntico → mecanismos → image-to-model → edição robusta → determinismo); a virada para o motor genérico está em **ADR-020**.
 
 ## ADR-014 - Título de chat obrigatório; remoção da auto-titulação OpenAI
 
@@ -96,6 +101,11 @@ Renomeação posterior do chat continua permitida via UI. A obrigatoriedade vale
 
 ## ADR-015 - Abstração de storage (interface Store)
 
+**Status: Aceita (spec 070 ratificada); implementação pendente.** Hoje
+`get_store()` (`storage/store.py`) ainda retorna `Any` e **não existe** um
+`Protocol Store` em `backend/app/storage/` — a decisão foi aprovada mas o código
+ainda não a reflete.
+
 A camada de storage passa a ter uma **interface única** descrita por um `typing.Protocol` `Store` em `backend/app/storage/`, derivada da superfície atual já compartilhada por `PostgresStore` (`postgres_store.py`) e pelo dev-store JSON (`dev_store.py`). `get_store()` (`storage/store.py`) passa a ser tipado como `Store`.
 
 Motivação: hoje os dois stores duplicam ~46 métodos sem contrato comum (~3390 linhas), o que gera risco de divergência silenciosa quando uma assinatura muda em apenas um deles.
@@ -105,6 +115,10 @@ A decisão **não troca a stack** (P5/ADR-004 permanecem: Postgres é produção
 Spec e plano: `specs/070-storage-persistence/` (ver `research.md`).
 
 ## ADR-016 - Geração de tipos do contrato a partir do OpenAPI
+
+**Status: Proposta (dívida DT-003 em aberto; spec 140 em rascunho).** Ainda não
+implementada: `apps/web/src/types/api.ts` segue mantido à mão (~750 linhas) e não
+há `openapi-typescript` (nem script de geração) no toolchain.
 
 Os tipos do contrato consumidos pelo frontend deixam de ser mantidos à mão em `apps/web/src/types/api.ts` (740 linhas) e passam a ser **gerados a partir do OpenAPI do backend** (`apps/web/src/types/openapi.json`, hoje já exportado mas não usado), via `openapi-typescript` (ou equivalente leve).
 
@@ -131,7 +145,14 @@ Spec e plano: `specs/090-frontend-web-shell/` (dívida DT-003).
 
 ## ADR-018 - Reabrir "single-body" → cobertura "todo o Design" (assemblies)
 
-**Status: Rascunho (Fase 0; precede a Fase 8).** Referências: P8; RNF-005; **supera `specs/005-modeling-3d-fusion/g4-assemblies-decision.md`** (decisão "single-body" de 2026-05-20).
+**Status: Rascunho — parcialmente revogado por ADR-021 + DT-011/DT-012.** A tese
+central deste ADR (cobrir **todo o Design**, incluindo sheet metal e sculpt) foi
+abandonada: **sheet metal** (DT-011) e **sculpt** (DT-012) são tetos da
+plataforma e ficaram **congelados**; o programa virou de "cobertura de
+workspaces" para "capacidades de sólidos mecânicos" (ADR-021). A parte de
+**assemblies** sobrevive, mas foi **absorvida pela frente F3** (já entregue
+`fusion.make_component` e `fusion.joint`), não mais como "Fase 8 por último".
+Referências: P8; RNF-005; **supera `specs/005-modeling-3d-fusion/g4-assemblies-decision.md`** (decisão "single-body" de 2026-05-20).
 
 **Contexto.** Em 2026-05-20, o dono escolheu **manter single-body** (Opção A) porque o caso dominante era peça única imprimível e assemblies eram over-kill (`g4-assemblies-decision.md`). O v4 redefine a cobertura-alvo como **todo o workspace Design** (sólido, superfície, sheet metal, sculpt **e** assemblies/componentes/juntas/materiais), o que reabre aquela decisão. Mudança no data model do plano exige ADR antes de virar código (RNF-005, P8).
 
@@ -152,14 +173,27 @@ As APIs de junta do Fusion são complexas e **version-sensitive** (risco G5). Po
 **Contexto.** O adapter Fusion executa cada operação **enviando um script Python completo** ao Fusion via a tool de execução da Autodesk com `featureType:"script"` (`fusion_adapter.py:475-479`; script gerado por `fusion_mcp_scripts.build_autodesk_fusion_script`, `:470`). Isso é, na prática, **execução de Python no processo do Fusion** — a maior superfície de ataque do bounded context, hoje agravada por o caminho HTTP 27182 não ter auth (ver ADR-017).
 
 **Decisão.** Formalizar que o caminho `featureType:"script"` é permitido **exclusivamente** para scripts **backend-owned, determinísticos e derivados da allowlist** — **nunca** para script fornecido pelo modelo ou pelo usuário. Controles que sustentam a decisão (já presentes, aqui tornados invariante):
-- O LLM escolhe **apenas** `tool_name` + args; o **script é gerado pelo backend** de forma determinística (`fusion_mcp_scripts.py`).
-- `fusion.run_script` fica **fora** da allowlist do adapter (`fusion_adapter.py:53-55`) e da visão do planner (`tool_registry.py:487-502`) — existe só para policy/auditoria.
-- Args entram como **JSON desserializado em runtime** (`fusion_mcp_scripts.py:73-79`), nunca interpolados como literal Python (defesa de injeção).
+- O LLM escolhe **apenas** `tool_name` + args; o **script é gerado pelo backend** de forma determinística (`fusion_mcp_scripts.build_autodesk_fusion_script`).
+- `fusion.run_script` fica **fora** da allowlist do adapter (`fusion_adapter.FUSION_TOOLS` exclui `*.run_script`) e da visão do planner (`tool_registry._planner_visible()` exclui `*.run_script`) — existe só para policy/auditoria.
+- Args entram como **JSON desserializado em runtime** (`json.loads` em `fusion_mcp_scripts.py`), nunca interpolados como literal Python (defesa de injeção).
 - **Auditoria por tool-call** + **auth no transporte** que carrega o script (vínculo direto com ADR-017).
 
 Isso respeita **RF-023** (sem script livre/shell/destrutivo no caminho feliz) na letra e no espírito.
 
 **Consequências.** O gerador `fusion_mcp_scripts.py` permanece uma **fronteira controlada** (veredito `evoluir`: refatorar a forma — f-string de ~2,5k linhas — sem afrouxar a fronteira). Qualquer mudança que permita conteúdo **não-backend** chegar ao `featureType:"script"` é violação de nível constitucional (P6/P8). O **gap de auth do loopback** (DT-009) é defeito a corrigir na Fase 1 junto com ADR-017.
+
+## ADR-020 - Motor genérico 3D: composição + verificação (visual/geométrica) em vez de macros de produto
+
+**Status: Aceito (2026-06-02).** Referências: P3, P6, P8; spec 005 (frentes F3/F6). Origem: a virada de "macros de produto" para "motor genérico" (commits `a211826`, `146fe8f`, `1e68ab4`).
+
+**Contexto.** A Fase 3 entregou macros paramétricas de PRODUTO (`fusion.knuckle_hinge`, `fusion.metric_screw`) como tools de alto nível. Ao expandir para mais mecanismos ficou claro que **uma macro por produto não escala** (são milhares de produtos) e concentra a inteligência no lugar errado: o difícil não é ter a feature, é **posicionar/dimensionar pela geometria real** e **saber se o resultado corresponde à intenção**.
+
+**Decisão.**
+1. **Composição genérica.** O planner compõe peças funcionais a partir de **primitivas** + **features genéricas reutilizáveis** (`thread`, `joint`, `pattern_rectangular`/`pattern_circular`, `mirror_feature`, `make_component`, `combine_bodies`), posicionando tudo pela geometria REAL consultada (`query_geometry`/F1). Os macros de produto são **deprecados do planner** — `tool_registry.DEPRECATED_PLANNER_TOOLS = {fusion.knuckle_hinge, fusion.metric_screw}` (handlers permanecem só para backward-compat/smoke; o system prompt ensina a compor: "Não existem tools de produto pronto — a peça é sempre COMPOSTA").
+2. **Sanitizer determinístico pós-LLM (F6).** Camada entre planner e executor (`plan_sanitizer.py`, flag `modeling_plan_sanitizer_enabled`, **default ON**) que remove campos-fantasma e referências geométricas inventadas (`face:"X.top_face"`, `bounding_box.max_x`) que os nudges do prompt não eliminam 100%. Conservador: só descarta o que nenhum handler aceita; planos válidos passam intactos, com telemetria por aviso. (É a peça de "determinismo do LLM" reservada como ADR-020 no plan/tasks/`micro/fase-9-llm-determinism.md`.)
+3. **Verificação dupla no loop.** (a) **Geométrica** — read-back de dimensões/área medidas × esperadas (`build_dimension_verifier`/`build_surface_verifier` em `agent_loop.py`); (b) **Visual** — render do viewport (`fusion.capture_viewport`) → crítica por LLM de visão (gateway multimodal F4) → replan corretivo (`visual_critique.py`, flag `modeling_visual_verification_enabled`, default OFF, teto `modeling_visual_max_rounds`). É o que faz a composição se auto-corrigir em qualquer produto, sem código por caso.
+
+**Consequências.** Backward-compat (handlers dos macros seguem; flags de verificação OFF = comportamento atual). A robustez passa a vir de **composição + estado rico (ADR-021) + verificação**, não de catálogo de macros. `capture_viewport`/`query_timeline`/`query_geometry` ficam **fora** do `PLANNER_TOOLSET` (probes internos do loop/reconciliação). Implementação nas frentes **F3** (mecanismos genéricos) e **F6** (determinismo/sanitizer) + passo 3 do motor (verificação visual em `micro/fase-F3-mecanismos.md`).
 
 ## ADR-021 - Estado rico do modelo + planejamento agêntico/hierárquico (replan v4)
 

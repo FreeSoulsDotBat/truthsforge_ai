@@ -43,7 +43,7 @@ Tornar o módulo 3D um produto de **autonomia de criação por chat** no Fusion 
 1. **Qualidade / Clean Architecture (não-negociável)** — código limpo, camadas separadas (domínio / casos de uso / adapters / interface), sem regra de negócio em rotas, sem acoplamento que impeça teste. Gates `scripts/quality.ps1` verdes. (RNF-006; corrige DT-006.)
 2. **Documentação dupla** — toda capacidade documentada no **Docusaurus** (`apps/docs`, que serve `docs/`) **e** no **SDD** (`specs/005-...`), coerentes entre si e com o código. (RNF-007.)
 3. **Testes unitários** — toda capacidade com unit tests cobrindo o comportamento, verdes nos gates. (RNF-008.)
-4. **Nova UI (`homolog-new-ui`)** — toda UI 3D conforme a nova UI em homologação. (RNF-009; **bloqueado** até a branch estar acessível — ver "Pendências de ambiente".)
+4. **Nova UI (`homolog-new-ui`)** — toda UI 3D conforme a nova UI em homologação. (RNF-009; **desbloqueado** — re-skin v4 mergeado na `master` via PR #42 / `tasks.md` T0.11; a passada de refactor de UI vive nas fases 2+ — ver "Pendências de ambiente".)
 
 ## Estrutura
 
@@ -95,7 +95,7 @@ Cada fase = um ou mais PRs com testes CI verdes + docs atualizadas, encerrada po
   Antes de planejar edição, ler timeline+geometria atuais e reconciliar. _Gate:_ dono altera à mão e o motor continua corretamente.
 
 - **Fase 4 — Parametrização real + selectors + features de sólido** ✅ validado (DT-002 fechado no Fusion real; G1/G2/G3 + stable_id de body).
-- **Fase 5 — Superfícies (NURBS)** ✅ validado autônomo no Fusion real (revolve/patch/stitch/thicken/offset/extend/unstitch; `trim` known-issue).
+- **Fase 5 — Superfícies (NURBS)** — validado autônomo (probe direto no adapter) no Fusion real (revolve/patch/stitch/thicken/offset/extend/unstitch; `trim` known-issue); **aprovação visual do dono na UI pendente**. 7 surface tools implementadas no registry.
 
 > **REPLAN (2026-05-29) — de "cobertura de workspaces" para "capacidades".** Os gates mostraram que (a) o núcleo de criação de sólidos + superfícies está robusto, e (b) **sheet metal e sculpt são bloqueados pela API do Fusion** (UI-only; ver DT-011/DT-012). O dono reorientou o objetivo: **gerar sólidos mecânicos complexos por chat** (peças com mecanismos), medido por 4 capacidades, não por cobertura de workspaces. As fases de cobertura 6/7/8 são substituídas por **frentes de capacidade F1–F6**. Detalhe vivo nos micro-planos.
 
@@ -108,7 +108,7 @@ Cada frente = micro-plano just-in-time + gate no Fusion real. Capacidades-alvo: 
 
 - **F1 — Estado rico do modelo** _(fundação; começa aqui)_: `entityToken` de face/edge no `query_geometry` + topologia (adjacências, raio/eixo), selectors por token estável, e um `ModelState` estruturado capturado pós-execução e injetado no contexto do planner entre etapas. Destrava P1/P2/P4. _Gate:_ body→fillet→re-query: token de face não-tocada sobrevive; fillet por `face_tokens` acerta a face.
 - **F2 — Planejamento agêntico/hierárquico** _(com F1)_: decompor o pedido em sub-objetivos e rodar loop planejar→executar→observar(ModelState)→replanejar, em vez de one-shot flat. Reusa o `ModelingAgentLoop`. Atrás de flag `modeling_hierarchical_planning_enabled`. _Gate:_ parafuso que ENCAIXA (furo da fêmea planejado com diâmetro real medido do macho).
-- **F3 — Mecanismos funcionais** _(P1)_: tools `thread` (`ThreadFeatures` Modeled), `joint` (revolute/rigid/slider), componentes/ocorrências; **biblioteca de macros paramétricas** (`knuckle_hinge`, `metric_screw`, `snap_fit`) como tools de alto nível determinísticas. _Gates:_ caixa+tampa knuckle que abre, parafuso, suporte de monitor.
+- **F3 — Mecanismos funcionais** _(P1)_: o planner **compõe** mecanismos a partir de **primitivas + features genéricas** — `thread` (`ThreadFeatures` Modeled), `joint` (revolute/rigid/slider), `make_component` (componentes/ocorrências), `pattern_*`, `combine_bodies` — em vez de macros de produto. **Decisão (ADR-020):** as macros `knuckle_hinge`/`metric_screw` foram **deprecadas do planner** (`DEPRECATED_PLANNER_TOOLS`; handlers mantidos só para backward-compat/smoke); `snap_fit` **nunca foi implementado**. O motor genérico ganha um **loop de verificação visual** (render → crítica de visão → replan corretivo: `visual_critique.py` + `fusion.capture_viewport`, atrás de `modeling_visual_verification_enabled`, teto `modeling_visual_max_rounds`) e o **sanitizer determinístico** (F6) como apoios da composição. _Gates:_ caixa+tampa knuckle que abre, parafuso, suporte de monitor.
 - **F4 — Image-to-model** _(P3)_: estender o gateway LLM para multimodal, implementar `attachment_analyzer._call_vision` real, pipeline imagem→entendimento→plano (reusa F2). _Gate:_ foto → peça fiel.
 - **F5 — Edição robusta com contexto** _(P4)_: evolui a Fase 3 sobre o `ModelState` (F1) + reconciliação estruturada. _Gate:_ editar peça pronta via contexto.
 - **F6 — Determinismo do LLM** _(ex-Fase 9; suporte transversal)_: Structured Outputs + sanitizer determinístico + retry agêntico com guidance + verifier opcional + templates. Permeia F2/F3. Pode entrar cedo. _Gate:_ cenários reproduzíveis sem ajuste manual de prompt. (ADR-020.)
@@ -122,7 +122,7 @@ Cada frente = micro-plano just-in-time + gate no Fusion real. Capacidades-alvo: 
 - 0 → 1 → 2 → 3 sequenciais (feitas; Fase 1 gate adiado). 4, 5 ✅ validadas.
 - 6, 7 ⛔ congeladas (API). 8 (assemblies) absorvida pela F3 (mecanismos/joints/componentes sob demanda dos gates).
 - **F1 → F2** (fundação) primeiro; F3/F4/F5 dependem de F1+F2; F6 permeia.
-- ADRs: ADR-017 (Fase 1, feito), ADR-019 (script boundary, feito); **ADR-021** (estado rico + planejamento hierárquico, F1/F2) e **ADR-020** (determinismo, F6) a rascunhar nos micro-planos.
+- ADRs: ADR-017 (Fase 1, feito), ADR-019 (script boundary, feito); **ADR-021** (estado rico + planejamento hierárquico + replan "capacidades", F1/F2) e **ADR-020** (motor genérico: composição + sanitizer determinístico + verificação visual/geométrica, F3/F6) já **criados e aceitos** em `docs/decisions.md`. ADR-018 (assemblies) permanece **rascunho** (escopo absorvido pela F3).
 
 ## Validação
 
@@ -154,6 +154,6 @@ Comandos reais (ver `scripts/quality.ps1` e `docs/delivery-checklist.md`):
 
 ## Pendências de ambiente
 
-- **Nova UI (`homolog-new-ui`)** — RNF-009 exige que a UI 3D siga a nova UI em homologação. **Estado**: a branch não está acessível neste container (sem remotes; apenas `master` e `feat/modeling-3d-v4`). **Plano combinado com o dono (2026-05-23)**: o dono vai **mergear `homolog-new-ui` na `master`**; depois disso, este plano recebe uma **passada de refactor de UI** para alinhar `apps/web/src/features/modeling-3d/` (componentes, padrões visuais, navegação) à nova UI. Até lá, todas as fases com entrega de UI ficam com a parte de UI **provisória/pendente** desse alinhamento.
+- **Nova UI (`homolog-new-ui`)** — RNF-009 exige que a UI 3D siga a nova UI em homologação. **Estado (atualizado)**: **desbloqueado** — o re-skin v4 já foi **mergeado na `master` via PR #42** (`tasks.md` T0.11), de modo que a base já inclui a nova UI. A passada de refactor de `apps/web/src/features/modeling-3d/` (componentes, padrões visuais, navegação) foi movida para as fases que tocam UI (2+). _(Nota: um container efêmero sem remote pode não enxergar o merge; nesse caso, usar sessão nova / clone fresco.)_
 - **Sem Fusion no container** — execução real só no ambiente do dono (gate por fase). O CI cobre contrato/compile/unit; o real é validado pelo dono.
-- **Convergência de branches (fidelity)** — `agent_loop.py`, `tool_schemas.py` e as mudanças no `planner` estão **não-commitadas no worktree `master`** (outra sessão), não nesta branch v4. Absorvê-los exige convergir as branches (merge/clone fresco). Risco: **duas sessões editando o mesmo módulo** (inclui um `tasks.md` divergente) → escolher **uma fonte de verdade** e evitar edição simultânea. Até convergir, a Fase 0/2 referencia esses assets como alvo de auditoria/integração, sem assumi-los já presentes aqui.
+- **Convergência de branches (fidelity)** — ✅ **resolvida.** `agent_loop.py`, `tool_schemas.py` e as mudanças no `planner` (`build_correction_context`) já estão **commitados e integrados** nesta branch (`feat/3d-modelling-updates`, commit `06b2d2e`); o loop foi validado end-to-end no Fusion real (Gate 4, commit `9b4fd4b`). Não há mais worktree divergente nem fonte de verdade dupla para esses assets.

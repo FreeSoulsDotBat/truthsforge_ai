@@ -87,8 +87,8 @@ def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
         "parent_plan_id": plan.parent_plan_id,
         "rollback_marker": plan.rollback_marker,
         # ``trace_id`` permite que o frontend chame
-        # ``GET /api/modeling/plans/{id}/trace`` ou
-        # ``GET /api/modeling/traces/{trace_id}`` ao abrir o modal de
+        # ``GET /api/3d/plans/{id}/trace`` ou
+        # ``GET /api/3d/traces/{trace_id}`` ao abrir o modal de
         # diagnóstico. Lido do contextvar — None se observability
         # estiver desligada ou se o handler não passou pelo orchestrator.
         "trace_id": current_trace_id(),
@@ -204,11 +204,14 @@ def _modeling_plan_chat_summary(plan: ModelingPlan) -> str:
     )
     planner = "IA" if plan.planner_source and plan.planner_source.value == "llm" else "heurístico"
     if plan.status.value == "completed":
-        next_step = "Execução concluída. Use o painel 3D para detalhes, snapshots e printability."
+        next_step = (
+            "Execução concluída. Abra o diagnóstico (ícone no cabeçalho do chat 3D) "
+            "para detalhes, snapshots e printability."
+        )
     elif plan.status.value == "failed":
-        next_step = "Houve falha na execução. Revise os erros no painel 3D."
+        next_step = "Houve falha na execução. Revise os erros no diagnóstico do chat 3D."
     elif plan.mode == ModelingExecutionMode.plan_only:
-        next_step = "Revise o card do plano e execute pelo painel 3D quando quiser continuar."
+        next_step = "Revise o card do plano e aprove para executar quando quiser continuar."
     elif plan.approval_required:
         next_step = (
             "Revise o card e clique em Aprovar para executar (há etapas "

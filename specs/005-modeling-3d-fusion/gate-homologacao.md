@@ -97,7 +97,15 @@ Desenhe um arco aberto e extrude como superfície (as_surface=true) por
 
 ---
 
-## Gate 2 — Fase 6: Sheet metal (chapa dobrada)
+## Gate 2 — Fase 6: Sheet metal (chapa dobrada) ⛔ REMOVIDO — sheet metal congelado (DT-011)
+
+> **NÃO é mais um passo de homologação.** As 5 tools deste gate
+> (`convert_to_sheet_metal`/`flange_edge`/`bend_edge`/`unbend`/`rebend`) foram
+> **REMOVIDAS** (commit `877ac23`) porque a API Python do Fusion não expõe sheet
+> metal (DT-011; só `flangeFeatures` read-only). Rodar os prompts abaixo falha
+> deterministicamente — o planner nem enxerga essas tools. Cabeçalho mantido só
+> para histórico; **pule para o Gate 3**. (Forma de chapa p/ impressão = sólido
+> comum; forma orgânica = superfície NURBS, Gate 1.)
 
 **Prompt natural:**
 ```
@@ -171,15 +179,22 @@ executor.step_ok
 
 ---
 
-## Gate F3 — Mecanismos funcionais (thread/joint/macros) ⭐ maior risco (API blind)
+## Gate F3 — Mecanismos funcionais (thread/joint/composição) ⭐ maior risco (API blind)
 
 `thread`/`joint` foram escritos contra a API documentada **sem Fusion à mão** —
-é onde o teu olho vale mais. Os macros (`knuckle_hinge`/`metric_screw`) compõem
-primitivas já validadas, então têm menos risco.
+é onde o teu olho vale mais.
+
+> **Macros LEGADAS (ADR-020).** As macros `knuckle_hinge`/`metric_screw` foram
+> **deprecadas do planner** (`DEPRECATED_PLANNER_TOOLS`; handlers só p/
+> backward-compat/smoke). O **caminho atual** para o mesmo exemplo da
+> caixa+dobradiça é o **motor genérico** (composição de primitivas + features) com
+> o **Gate Visual** (render → crítica de visão → replan). Os prompts "dirigido"
+> abaixo que citam o macro servem só para **smoke do handler legado**; o gate de
+> produto é o **prompt natural** (planner compondo) + o **Gate Visual**.
 
 ### F3.1 — Dobradiça de nós que ABRE
 
-**Dirigido** (prova o macro `knuckle_hinge`):
+**Dirigido** (smoke do macro legado `knuckle_hinge` — fora do caminho do planner):
 ```
 Crie uma dobradiça de nós (knuckle hinge) com 5 nós, abas de 40 mm de
 comprimento por 20 mm de largura, 4 mm de espessura, pino de 4 mm, e já
@@ -195,7 +210,7 @@ os nós são coaxiais e alternados; o pino atravessa todos.
 
 ### F3.2 — Parafuso que ENCAIXA (rosca modelada)
 
-**Dirigido** (prova `metric_screw` + `thread`):
+**Dirigido** (smoke do macro legado `metric_screw` + `thread` — fora do planner):
 ```
 Crie um parafuso métrico M6 de 24 mm com rosca modelada.
 ```
