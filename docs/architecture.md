@@ -46,17 +46,17 @@ O backend esta organizado por dominios:
 
 - `llm_gateway`: providers OpenAI, Anthropic e Google atras de `LLMProvider`.
 - `judite`: orquestracao em portugues BR, roteamento, politicas e memoria.
-- `agents`: runtime inicial com LangGraph/LangChain quando disponivel, selecao multiagente e checkpoints humanos futuros.
+- `agents`: pacote reservado para runtime agentico (LangGraph/LangChain) com checkpoints humanos — ainda stub; a selecao multiagente vive hoje em `api/routes/chat.py`.
 - `rag`: contrato `VectorStore`, embeddings locais de infraestrutura, filtros e Qdrant como indice principal.
 - `files`: biblioteca de arquivos, chunking, parsing de PDF/Markdown/TXT/CSV/DOCX/HTML e OCR opcional para imagens.
 - `prompts`: biblioteca e renderizacao de templates.
-- `artifacts`: canvas e exportacoes futuras.
+- `artifacts`: canvas e exportacoes (reservado; ainda sem modulo implementado).
 - `tools`: catalogo de ferramentas internas, avaliacao de permissoes e runtime seguro inicial. `rag.search` conclui validacao segura; `python.run` e `filesystem.write` ainda exigem aprovacao e retornam erro ate existir sandbox real.
 - `security`: permissoes por agente/ferramenta.
 - `audit`: trilha de envio a provedores e execucao de ferramentas.
 - `cost_governor`: orcamento, estimativa e bloqueios.
-- `workers`: filas em memoria para importacao do ChatGPT e indexacao de arquivos, com recuperacao/backfill de pendencias. Redis/Valkey permanece pronto para cache/fila distribuida futura.
-- `modeling`: bounded context chat-first para Blender/Fusion via MCP local, com state machine de chat 3D (`discovery → planning → approved → executing → editing`), allowlist unificada (`tool_registry`), planner LLM + heuristico, executor, snapshots manuais, rollback explicito, printability e artefatos 3D versionados. Refatoracao v2 (ADR-013) substitui os modos legados e remove o painel 3D do dashboard.
+- `workers`: filas para importacao do ChatGPT e indexacao de arquivos, com recuperacao/backfill de pendencias. Default em memoria; Redis/Valkey opt-in via `TRUTHS_FORGE_QUEUE_BACKEND=redis|valkey` (`job_queue.RedisJobQueue`) para compartilhar a fila entre replicas.
+- `modeling`: bounded context chat-first para Blender/Fusion via MCP local, com state machine de chat 3D (`discovery → planning → approved → executing → editing`, mais `failed`), allowlist unificada (`tool_registry`), planner LLM + heuristico, loop agentico de auto-correcao, verificacao geometrica/visual, observabilidade/trace, executor, snapshots manuais, rollback explicito, printability e artefatos 3D versionados. O replan v4 (ADR-021) reorientou de "cobertura de workspaces" para "capacidades de solidos mecanicos" e a virada para o motor generico (composicao em vez de macros de produto) esta em ADR-020; o chat-first e a remocao do painel 3D vem do ADR-013.
 
 O store principal do modo containerizado e Postgres. Para o desenvolvimento principal e validacao do produto completo, Postgres + Qdrant + Valkey sao obrigatorios. O JSON-backed store permanece como fallback local para testes ou quando o banco nao estiver disponivel; ele nao e caminho de producao, sync ou backup.
 

@@ -49,7 +49,7 @@ O ranqueamento inicial e interno e nao usa uma segunda chamada de LLM.
 3. O backend filtra os resultados pelas bases habilitadas do agente/projeto e pelos limites do request.
 4. Se o usuario citou uma pasta, o backend usa essa pasta como filtro opcional de escopo.
 5. O backend aplica pequenos boosts baratos: prioridade da base, prioridade do documento e documentos fixados.
-6. Se o Qdrant falhar ou retornar pouco, ha fallback por metadados/palavras-chave para documentos elegiveis.
+6. Se o Qdrant falhar, a busca de contexto de bases naquela mensagem e omitida com seguranca (retorna vazio) em vez de cair em busca lexica — um fallback por metadados/palavras-chave pode ser adicionado depois.
 7. O prompt final recebe apenas os snippets melhor ranqueados dentro dos limites da base.
 
 A inteligencia contextual vem da combinacao de embeddings + metadados + regras de escopo. Uma LLM reranker pode ser adicionada depois, mas ficara opt-in porque gera custo adicional.

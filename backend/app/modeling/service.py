@@ -33,6 +33,7 @@ from app.core.contracts import (
     ModelingPlan,
     ModelingPlanCreate,
     ModelingPlanEdit,
+    ModelingPlanKind,
     ModelingPlanStatus,
     ModelingPlanStep,
     ModelingPrintabilityReport,
@@ -49,6 +50,7 @@ from app.core.contracts import (
     now_utc,
 )
 from app.llm_gateway.gateway import LLMGateway
+from app.modeling.agent_loop import run_plan_with_optional_loop
 from app.modeling.artifacts import ARTIFACT_CONTENT_TYPES, ModelingArtifactService
 from app.modeling.executor import (
     ModelingExecutorService,
@@ -60,8 +62,9 @@ from app.modeling.executor import (
     envelope_into_output as _envelope_into_output,
 )
 from app.modeling.mcp_client import LocalMCPClient
+from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner_service import ModelingPlannerService
-from app.modeling.policy import apply_modeling_policy
+from app.modeling.policy import apply_modeling_policy, apply_plan_approval
 from app.modeling.printability import ModelingPrintabilityService
 from app.modeling.snapshot_service import ModelingSnapshotService
 from app.modeling.tool_registry import PLANNER_TOOLSET
@@ -71,9 +74,7 @@ class ModelingPlanNotEditable(Exception):
     """Plano não pode ser editado no estado atual (já aprovado/executado)."""
 
     def __init__(self, plan_id: str, status: ModelingPlanStatus) -> None:
-        super().__init__(
-            f"Plano {plan_id!r} não é editável no estado {status.value!r}."
-        )
+        super().__init__(f"Plano {plan_id!r} não é editável no estado {status.value!r}.")
         self.plan_id = plan_id
         self.status = status
 
@@ -84,6 +85,23 @@ class ModelingInvalidEditTool(Exception):
     def __init__(self, tool_name: str) -> None:
         super().__init__(f"Ferramenta não permitida na edição: {tool_name!r}.")
         self.tool_name = tool_name
+
+
+class ModelingRollbackUnavailable(Exception):
+    """Plano de edição sem ponto de rollback (timeline pré-edição não capturada).
+
+    Lançada por :meth:`ModelingService.rollback_last_edit` quando
+    ``plan.rollback_marker is None`` — a leitura best-effort da timeline
+    falhou (Fusion offline no momento da edição) ou o software não tem
+    timeline. A rota mapeia para 409.
+    """
+
+    def __init__(self, plan_id: str) -> None:
+        super().__init__(
+            f"Edição {plan_id!r} não tem ponto de rollback registrado "
+            "(timeline pré-edição não capturada)."
+        )
+        self.plan_id = plan_id
 
 
 class ModelingService:
@@ -113,9 +131,7 @@ class ModelingService:
             snapshots=self.snapshots,
             artifacts=self.artifacts,
         )
-        self.printability = ModelingPrintabilityService(
-            store=store, mcp_client=self.mcp_client
-        )
+        self.printability = ModelingPrintabilityService(store=store, mcp_client=self.mcp_client)
 
     # ------------------------------------------------------------------
     # capabilities & sessions
@@ -202,43 +218,20 @@ class ModelingService:
     # approval & step decisions (kept inline; mutate only the persisted plan)
     # ------------------------------------------------------------------
 
-    def approve_plan(
-        self, plan_id: str, payload: ModelingApprovalRequest
-    ) -> ModelingPlan:
+    def approve_plan(self, plan_id: str, payload: ModelingApprovalRequest) -> ModelingPlan:
+        # DT-006: mutação de aprovação centralizada em ``policy.apply_plan_approval``
+        # (fonte única compartilhada com o ModelingChatOrchestrator).
         plan = self._get_plan_or_raise(plan_id)
-        if payload.decision == ModelingApprovalDecision.reject:
-            rejected = plan.model_copy(
-                update={"status": ModelingPlanStatus.rejected, "updated_at": now_utc()}
+        result = apply_plan_approval(plan, payload)
+        self.store.upsert_modeling_plan(result)
+        if payload.decision != ModelingApprovalDecision.reject:
+            self.store.add_audit_event(
+                AuditEvent(
+                    event_type="modeling.plan_approved",
+                    metadata={"plan_id": result.id, "reason": payload.reason},
+                ),
             )
-            self.store.upsert_modeling_plan(rejected)
-            return rejected
-
-        steps = [
-            step.model_copy(
-                update={
-                    "status": ModelingStepStatus.approved
-                    if step.approval_required
-                    else step.status,
-                    "approved_at": now_utc() if step.approval_required else step.approved_at,
-                }
-            )
-            for step in plan.steps
-        ]
-        approved = plan.model_copy(
-            update={
-                "status": ModelingPlanStatus.approved,
-                "steps": steps,
-                "updated_at": now_utc(),
-            }
-        )
-        self.store.upsert_modeling_plan(approved)
-        self.store.add_audit_event(
-            AuditEvent(
-                event_type="modeling.plan_approved",
-                metadata={"plan_id": approved.id, "reason": payload.reason},
-            ),
-        )
-        return approved
+        return result
 
     def edit_plan(self, plan_id: str, payload: ModelingPlanEdit) -> ModelingPlan:
         """P4: edita um plano ANTES da aprovação (etapas e/ou rationale).
@@ -301,9 +294,7 @@ class ModelingService:
         # Mantém o gate da P1: a policy pode ter promovido para ``approved``
         # (sem high-risk); forçamos waiting_approval para o card continuar.
         if edited.status == ModelingPlanStatus.approved:
-            edited = edited.model_copy(
-                update={"status": ModelingPlanStatus.waiting_approval}
-            )
+            edited = edited.model_copy(update={"status": ModelingPlanStatus.waiting_approval})
         self.store.upsert_modeling_plan(edited)
         self.store.add_audit_event(
             AuditEvent(
@@ -313,9 +304,7 @@ class ModelingService:
         )
         return edited
 
-    def decide_step(
-        self, step_id: str, payload: ModelingApprovalRequest
-    ) -> ModelingPlan:
+    def decide_step(self, step_id: str, payload: ModelingApprovalRequest) -> ModelingPlan:
         plan = self.store.get_modeling_plan_by_step(step_id)
         if plan is None:
             raise KeyError(step_id)
@@ -359,7 +348,94 @@ class ModelingService:
 
     def execute_plan(self, plan_id: str) -> ModelingExecutionResult:
         plan = self._get_plan_or_raise(plan_id)
-        return self.executor.execute_plan(plan)
+        # O card (routes/modeling.py → /plans/{id}/execute) executa FORA de um
+        # trace aberto. Sem isto, todo ``self._tracer.record(...)`` do executor
+        # e do loop vira no-op (observability.record: ``tid is None`` → None) e o
+        # diagnóstico do plano fica vazio mesmo com os tool calls persistidos.
+        # Abrimos um trace ligado ao plano quando não há um ativo; se já houver
+        # (fluxo de chat), só ligamos o plano e deixamos o dono fechá-lo.
+        owns_trace = current_trace_id() is None
+        tracer = get_tracer(self.store if hasattr(self.store, "record_trace_events_bulk") else None)
+        if owns_trace:
+            tracer.start_trace(plan_id=plan.id)
+        else:
+            tracer.bind_plan(plan.id)
+        try:
+            # Loop agêntico quando a flag está ligada, senão executor linear
+            # (mesma fonte única do orchestrator — o card não pode ficar de fora).
+            return run_plan_with_optional_loop(self.executor, self.planner, plan)
+        finally:
+            if owns_trace:
+                tracer.close_trace()
+
+    def rollback_last_edit(self, plan_id: str) -> ModelingExecutionResult:
+        """T3.6: reverte uma edição revertendo a timeline do Fusion.
+
+        Lê ``plan.rollback_marker`` (contagem da timeline ANTES da edição,
+        capturada best-effort pelo orchestrator em ``propose_edit_plan``) e
+        executa um plano de UM passo ``fusion.rollback_timeline``. Sem
+        marcador → :class:`ModelingRollbackUnavailable`.
+
+        O clique no botão "Desfazer última edição" é a aprovação humana (P6)
+        desta deleção; por isso o passo nasce ``approved``. O loop agêntico é
+        DELIBERADAMENTE evitado (executor linear direto): rollback é
+        destrutivo e não deve ser "corrigido" automaticamente.
+        """
+
+        plan = self._get_plan_or_raise(plan_id)
+        if plan.rollback_marker is None:
+            raise ModelingRollbackUnavailable(plan_id)
+
+        rollback_plan = self._build_rollback_plan(plan)
+        self.store.upsert_modeling_plan(rollback_plan)
+        self.store.add_audit_event(
+            AuditEvent(
+                event_type="modeling.plan_rollback_requested",
+                metadata={
+                    "plan_id": rollback_plan.id,
+                    "reverts_plan_id": plan.id,
+                    "target_count": plan.rollback_marker,
+                },
+            ),
+        )
+        # Mesmo cuidado de trace do execute_plan: o endpoint roda fora de um
+        # trace aberto, então abrimos um ligado ao plano de rollback.
+        owns_trace = current_trace_id() is None
+        tracer = get_tracer(self.store if hasattr(self.store, "record_trace_events_bulk") else None)
+        if owns_trace:
+            tracer.start_trace(plan_id=rollback_plan.id)
+        else:
+            tracer.bind_plan(rollback_plan.id)
+        try:
+            return self.executor.execute_plan(rollback_plan)
+        finally:
+            if owns_trace:
+                tracer.close_trace()
+
+    def _build_rollback_plan(self, edit_plan: ModelingPlan) -> ModelingPlan:
+        """Monta o plano de 1 passo que reverte ``edit_plan`` via timeline."""
+
+        step = ModelingPlanStep(
+            seq=1,
+            title="Reverter última edição",
+            software=edit_plan.software_choice,
+            tool_name="fusion.rollback_timeline",
+            risk_level=ModelingRiskLevel.high,
+            approval_required=False,  # aprovação = clique no botão (ver rollback_last_edit)
+            status=ModelingStepStatus.approved,
+            input_json={"target_count": edit_plan.rollback_marker},
+        )
+        return ModelingPlan(
+            project_id=edit_plan.project_id,
+            conversation_id=edit_plan.conversation_id,
+            prompt=f"Reverter edição {edit_plan.id}",
+            software_choice=edit_plan.software_choice,
+            kind=ModelingPlanKind.edit,
+            parent_plan_id=edit_plan.parent_plan_id or edit_plan.id,
+            status=ModelingPlanStatus.approved,
+            rationale="Rollback da última edição (timeline → contagem pré-edição).",
+            steps=[step],
+        )
 
     # ------------------------------------------------------------------
     # snapshots (delegated)
@@ -388,17 +464,13 @@ class ModelingService:
     ) -> list[ModelingToolCall]:
         if not hasattr(self.store, "list_modeling_tool_calls"):
             return []
-        return self.store.list_modeling_tool_calls(
-            plan_id=plan_id, step_id=step_id, limit=limit
-        )
+        return self.store.list_modeling_tool_calls(plan_id=plan_id, step_id=step_id, limit=limit)
 
     # ------------------------------------------------------------------
     # printability (delegated)
     # ------------------------------------------------------------------
 
-    def run_printability(
-        self, payload: ModelingPrintabilityRequest
-    ) -> ModelingPrintabilityReport:
+    def run_printability(self, payload: ModelingPrintabilityRequest) -> ModelingPrintabilityReport:
         return self.printability.run(payload)
 
     def list_printability_reports(

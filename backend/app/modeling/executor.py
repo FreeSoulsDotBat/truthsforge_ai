@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from app.core.contracts import (
@@ -106,6 +107,43 @@ def _unwrap_inner_fusion_result(output: dict[str, Any]) -> dict[str, Any]:
     return promoted
 
 
+def inner_fusion_payload(output: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Extrai o payload real de um tool fusion do envelope do adapter HTTP.
+
+    Tools fusion **bem-sucedidas** devolvem o dict do script como JSON
+    *stringificado* em ``output["message"]`` (duplicado em
+    ``output["result"]["message"]``); :func:`_unwrap_inner_fusion_result` só
+    promove campos ao topo em FALHA. Para ler campos estruturados de um
+    SUCESSO (``dimensions_mm``, ``timeline_count``, ``timeline``...) é preciso
+    parsear aqui. O formato direto (mock/in_process/fakes — dict já plano)
+    volta inalterado; entrada não-dict vira ``None``.
+
+    Fonte única usada pelo verifier geométrico (item C, ``agent_loop``) e pela
+    reconciliação/rollback (``chat_orchestrator``). Sem isto o read-back ficava
+    mudo no Fusion real (gate 2026-05-26): o envelope mascarava as dimensões.
+    """
+
+    if not isinstance(output, dict):
+        return None
+    candidates = [output.get("message")]
+    result = output.get("result")
+    if isinstance(result, dict):
+        candidates.append(result.get("message"))
+    for cand in candidates:
+        if not isinstance(cand, str):
+            continue
+        stripped = cand.strip()
+        if not (stripped.startswith("{") and stripped.endswith("}")):
+            continue
+        try:
+            inner = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(inner, dict):
+            return inner
+    return output
+
+
 def envelope_into_output(
     envelope: ModelingErrorEnvelope, *, base: dict[str, Any]
 ) -> dict[str, Any]:
@@ -140,6 +178,17 @@ def envelope_from_output(output: dict[str, Any]) -> ModelingErrorEnvelope | None
         )
     except Exception:  # pragma: no cover - defensive against malformed output
         return None
+
+
+@dataclass
+class _StepOutcome:
+    """Outcome of executing a single plan step (see ``_execute_single_step``)."""
+
+    step: ModelingPlanStep
+    output: dict[str, Any]
+    tool_call_id: str | None
+    event: str
+    ok: bool
 
 
 class ModelingExecutorService:
@@ -208,83 +257,14 @@ class ModelingExecutorService:
                 )
                 continue
 
-            self._tracer.record(
-                "executor.step_started",
-                source=ModelingTraceSource.backend,
-                level=ModelingTraceLevel.info,
-                message=f"Step {step.seq}: {step.tool_name}",
-                payload={
-                    "step_id": step.id,
-                    "seq": step.seq,
-                    "tool_name": step.tool_name,
-                    "input": step.input_json,
-                },
-                plan_id=plan.id,
-            )
-
-            started_at = time.perf_counter()
-            output = self._dispatch_step(step, plan=plan)
-            duration_ms = int((time.perf_counter() - started_at) * 1000)
-            # Fix #0: desempacota inner ``ok: false`` do fusion_adapter HTTP
-            # antes da decisão de sucesso, senão falhas chegam como verdes.
-            output = _unwrap_inner_fusion_result(output)
-            output = self.artifacts.register_outputs(output, plan=plan, step=step)
-
-            tool_call = self._record_tool_call(
-                plan=plan, step=step, output=output, duration_ms=duration_ms
-            )
-            if tool_call is not None:
-                tool_call_ids.append(tool_call.id)
-
+            outcome = self._execute_single_step(step, plan=plan)
             executed_step_ids.append(step.id)
-            event_verb = "executado" if output.get("transport") != "mock" else "preparado"
-            events.append(f"{step.seq}. {step.tool_name} {event_verb} via {output['mcp_server']}")
-
-            step_ok = output.get("ok") is not False
-            self._tracer.record(
-                "executor.step_ok" if step_ok else "executor.step_error",
-                source=ModelingTraceSource.backend,
-                level=ModelingTraceLevel.info if step_ok else ModelingTraceLevel.error,
-                message=(
-                    f"Step {step.seq} OK"
-                    if step_ok
-                    else f"Step {step.seq} falhou: {output.get('message') or output.get('error')}"
-                ),
-                payload={
-                    "step_id": step.id,
-                    "tool_name": step.tool_name,
-                    "transport": output.get("transport"),
-                    "mcp_server": output.get("mcp_server"),
-                    "error_code": output.get("error_code"),
-                    "error_message": output.get("message") or output.get("error"),
-                    "retryable": output.get("retryable"),
-                },
-                duration_ms=duration_ms,
-                plan_id=plan.id,
-            )
-
-            if output.get("ok") is False:
+            events.append(outcome.event)
+            if outcome.tool_call_id is not None:
+                tool_call_ids.append(outcome.tool_call_id)
+            if not outcome.ok:
                 blocked_step_ids.append(step.id)
-                next_steps.append(
-                    step.model_copy(
-                        update={
-                            "status": ModelingStepStatus.failed,
-                            "output_json": output,
-                            "error": str(output.get("message") or output.get("error") or ""),
-                            "completed_at": now_utc(),
-                        }
-                    )
-                )
-                continue
-            next_steps.append(
-                step.model_copy(
-                    update={
-                        "status": ModelingStepStatus.completed,
-                        "output_json": output,
-                        "completed_at": now_utc(),
-                    }
-                )
-            )
+            next_steps.append(outcome.step)
 
         has_failed_step = any(step.status == ModelingStepStatus.failed for step in next_steps)
         if has_failed_step:
@@ -326,6 +306,103 @@ class ModelingExecutorService:
             blocked_step_ids=blocked_step_ids,
             events=events,
             tool_call_ids=tool_call_ids,
+        )
+
+    # ------------------------------------------------------------------
+    # single-step execution (extension seam for the Fase 2 agentic loop)
+    # ------------------------------------------------------------------
+
+    def _execute_single_step(self, step: ModelingPlanStep, *, plan: ModelingPlan) -> _StepOutcome:
+        """Run one runnable step end-to-end and return its outcome.
+
+        Dispatch → unwrap inner Fusion failures → register artifacts →
+        persist the tool call → emit per-step trace, then return the updated
+        step (completed/failed) plus the event/tool-call/ok aggregates the
+        caller collects.
+
+        This is the **extension seam** for the Fase 2 agentic loop (replan
+        v4, ADR-017+): the loop will call this per step, read back geometry
+        and — on failure or geometric divergence — retry with a correction
+        context (teto 5). Today it runs exactly once per step, so behavior is
+        identical to the inline v1 loop.
+        """
+
+        self._tracer.record(
+            "executor.step_started",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.info,
+            message=f"Step {step.seq}: {step.tool_name}",
+            payload={
+                "step_id": step.id,
+                "seq": step.seq,
+                "tool_name": step.tool_name,
+                "input": step.input_json,
+            },
+            plan_id=plan.id,
+        )
+
+        started_at = time.perf_counter()
+        output = self._dispatch_step(step, plan=plan)
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        # Fix #0: desempacota inner ``ok: false`` do fusion_adapter HTTP
+        # antes da decisão de sucesso, senão falhas chegam como verdes.
+        output = _unwrap_inner_fusion_result(output)
+        output = self.artifacts.register_outputs(output, plan=plan, step=step)
+
+        tool_call = self._record_tool_call(
+            plan=plan, step=step, output=output, duration_ms=duration_ms
+        )
+
+        event_verb = "executado" if output.get("transport") != "mock" else "preparado"
+        event = f"{step.seq}. {step.tool_name} {event_verb} via {output['mcp_server']}"
+
+        step_ok = output.get("ok") is not False
+        self._tracer.record(
+            "executor.step_ok" if step_ok else "executor.step_error",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.info if step_ok else ModelingTraceLevel.error,
+            message=(
+                f"Step {step.seq} OK"
+                if step_ok
+                else f"Step {step.seq} falhou: {output.get('message') or output.get('error')}"
+            ),
+            payload={
+                "step_id": step.id,
+                "tool_name": step.tool_name,
+                "transport": output.get("transport"),
+                "mcp_server": output.get("mcp_server"),
+                "error_code": output.get("error_code"),
+                "error_message": output.get("message") or output.get("error"),
+                "retryable": output.get("retryable"),
+            },
+            duration_ms=duration_ms,
+            plan_id=plan.id,
+        )
+
+        if not step_ok:
+            updated_step = step.model_copy(
+                update={
+                    "status": ModelingStepStatus.failed,
+                    "output_json": output,
+                    "error": str(output.get("message") or output.get("error") or ""),
+                    "completed_at": now_utc(),
+                }
+            )
+        else:
+            updated_step = step.model_copy(
+                update={
+                    "status": ModelingStepStatus.completed,
+                    "output_json": output,
+                    "completed_at": now_utc(),
+                }
+            )
+
+        return _StepOutcome(
+            step=updated_step,
+            output=output,
+            tool_call_id=tool_call.id if tool_call is not None else None,
+            event=event,
+            ok=step_ok,
         )
 
     # ------------------------------------------------------------------

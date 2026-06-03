@@ -80,6 +80,15 @@ export const modeling3dApi = {
       method: "POST"
     }),
   /**
+   * T3.6: desfaz a última edição revertendo a timeline do Fusion ao ponto
+   * pré-edição (``plan.rollback_marker``). 409 quando o plano não tem
+   * marcador (captura falhou / software sem timeline).
+   */
+  rollbackPlan: (planId: string) =>
+    apiRequest<ModelingExecutionResult>(`/api/3d/plans/${planId}/rollback`, {
+      method: "POST"
+    }),
+  /**
    * Observabilidade (ver backend/app/modeling/observability.py).
    */
   planTrace: (

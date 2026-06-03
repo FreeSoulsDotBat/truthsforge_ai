@@ -18,11 +18,14 @@ dropped entirely.
 from __future__ import annotations
 
 from app.core.contracts import (
+    ModelingApprovalDecision,
+    ModelingApprovalRequest,
     ModelingExecutionMode,
     ModelingPlan,
     ModelingPlanStatus,
     ModelingRiskLevel,
     ModelingStepStatus,
+    now_utc,
 )
 from app.modeling.tool_registry import (
     BLOCKED_TOOL_PREFIXES,
@@ -44,7 +47,43 @@ __all__ = [
     "HIGH_RISK_TOOL_NAMES",
     "READ_ONLY_TOOL_NAMES",
     "apply_modeling_policy",
+    "apply_plan_approval",
 ]
+
+
+def apply_plan_approval(plan: ModelingPlan, payload: ModelingApprovalRequest) -> ModelingPlan:
+    """Aplica a decisão de aprovação a um plano — mutação pura (sem persistir/auditar).
+
+    Fonte única (DT-006) usada por ``ModelingService.approve_plan`` e
+    ``ModelingChatOrchestrator``. Rejeição → ``rejected``. Aprovação → promove
+    os steps ``approval_required`` de ``waiting_approval`` para ``approved``
+    (marcando ``approved_at``) e o plano vira ``approved``. Os steps que não
+    exigem aprovação ficam intactos. Idempotente no caso normal.
+    """
+
+    if payload.decision == ModelingApprovalDecision.reject:
+        return plan.model_copy(
+            update={"status": ModelingPlanStatus.rejected, "updated_at": now_utc()}
+        )
+
+    steps = []
+    for step in plan.steps:
+        if step.approval_required:
+            next_status = (
+                ModelingStepStatus.approved
+                if step.status == ModelingStepStatus.waiting_approval
+                else step.status
+            )
+            steps.append(step.model_copy(update={"status": next_status, "approved_at": now_utc()}))
+        else:
+            steps.append(step)
+    return plan.model_copy(
+        update={
+            "status": ModelingPlanStatus.approved,
+            "steps": steps,
+            "updated_at": now_utc(),
+        }
+    )
 
 
 def apply_modeling_policy(plan: ModelingPlan) -> ModelingPlan:
@@ -60,9 +99,7 @@ def apply_modeling_policy(plan: ModelingPlan) -> ModelingPlan:
     for step in plan.steps:
         blocked = _is_blocked(step.tool_name)
         is_read_only = _is_read_only(step.tool_name)
-        is_high_risk = (
-            step.risk_level == ModelingRiskLevel.high or _is_high_risk(step.tool_name)
-        )
+        is_high_risk = step.risk_level == ModelingRiskLevel.high or _is_high_risk(step.tool_name)
         requires_approval = not is_read_only and is_high_risk
         next_status = step.status
         if requires_approval and step.status == ModelingStepStatus.pending:

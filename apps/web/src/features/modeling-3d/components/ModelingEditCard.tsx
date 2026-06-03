@@ -1,4 +1,5 @@
-import { CheckCircle2, Pencil, XCircle } from "lucide-react";
+import { CheckCircle2, Pencil, Undo2, XCircle } from "lucide-react";
+import { useState } from "react";
 
 import { Badge } from "../../../components/ui/Badge";
 import type { ModelingPlan } from "../types";
@@ -15,9 +16,17 @@ import type { ModelingPlan } from "../types";
  * surfaces it through :class:`ModelingPlanCard` instead (which keeps
  * the inline approval UI). This component intentionally has no
  * approval/reject paths.
+ *
+ * T3.6: completed *fusion* edits that captured a pre-edit timeline
+ * (``plan.rollback_marker != null``) expose a "Desfazer última edição"
+ * button that reverts the model via ``POST /api/3d/plans/{id}/rollback``.
  */
 export interface ModelingEditCardProps {
   plan: ModelingPlan;
+  /** Disables the rollback button while another plan action is in flight. */
+  isBusy?: boolean;
+  /** T3.6: desfaz esta edição. Resolve ``true`` no sucesso (card mostra "desfeito"). */
+  onRollback?: (planId: string) => Promise<boolean> | void;
 }
 
 function summaryText(plan: ModelingPlan): string {
@@ -36,10 +45,32 @@ function iconFor(plan: ModelingPlan) {
   return <Pencil size={13} className="text-forge-amber" aria-hidden />;
 }
 
-export function ModelingEditCard({ plan }: ModelingEditCardProps) {
+export function ModelingEditCard({ plan, isBusy, onRollback }: ModelingEditCardProps) {
   const summary = summaryText(plan);
   const executedCount = plan.steps.filter((step) => step.status === "completed").length;
   const failedCount = plan.steps.filter((step) => step.status === "failed").length;
+
+  const [pending, setPending] = useState(false);
+  const [rolledBack, setRolledBack] = useState(false);
+  // Edições concluídas E falhas podem ser desfeitas: uma edição que falhou no
+  // meio já aplicou passos parciais (ex.: o 1º fillet entrou antes do 2º falhar),
+  // então o rollback ao ponto pré-edição é justamente o que se quer.
+  const canRollback =
+    Boolean(onRollback) &&
+    plan.kind === "edit" &&
+    (plan.status === "completed" || plan.status === "failed") &&
+    plan.rollback_marker != null;
+
+  const handleRollback = async () => {
+    if (!onRollback) return;
+    setPending(true);
+    try {
+      const ok = await onRollback(plan.id);
+      if (ok !== false) setRolledBack(true);
+    } finally {
+      setPending(false);
+    }
+  };
 
   return (
     <section
@@ -63,6 +94,24 @@ export function ModelingEditCard({ plan }: ModelingEditCardProps) {
         {executedCount} etapa(s) executada(s)
         {failedCount > 0 ? ` · ${failedCount} com falha` : ""} · sem aprovação adicional (allowlist segura).
       </p>
+      {rolledBack ? (
+        <p className="mt-1.5 flex items-center gap-1 text-forge-muted" data-testid="modeling-edit-rolled-back">
+          <Undo2 size={12} aria-hidden /> Edição desfeita.
+        </p>
+      ) : canRollback ? (
+        <div className="mt-1.5">
+          <button
+            type="button"
+            data-testid="modeling-edit-rollback"
+            onClick={handleRollback}
+            disabled={pending || isBusy}
+            className="inline-flex h-6 items-center gap-1 rounded-sm border border-forge-line-soft bg-forge-panel px-2 text-[11px] text-forge-text transition-colors hover:bg-forge-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Undo2 size={12} aria-hidden />
+            {pending ? "Desfazendo…" : "Desfazer última edição"}
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }

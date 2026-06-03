@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ModelingPlan, ModelingPlanStep, ModelingPlanStatus } from "../types";
 import { ModelingEditCard } from "./ModelingEditCard";
@@ -29,7 +29,7 @@ function plan(overrides: Partial<ModelingPlan> = {}): ModelingPlan {
     conversation_id: "chat_1",
     prompt: overrides.prompt ?? "Aumentar parede para 6mm",
     mode: "safe_auto",
-    software_choice: "blender",
+    software_choice: overrides.software_choice ?? "blender",
     confidence: 0.7,
     approval_required: false,
     status: (overrides.status ?? "completed") as ModelingPlanStatus,
@@ -42,6 +42,7 @@ function plan(overrides: Partial<ModelingPlan> = {}): ModelingPlan {
     fallback_reason: null,
     kind: "edit",
     parent_plan_id: overrides.parent_plan_id ?? "m3d_plan_primary",
+    rollback_marker: overrides.rollback_marker ?? null,
     created_at: new Date(0).toISOString(),
     updated_at: new Date(0).toISOString()
   };
@@ -80,5 +81,60 @@ describe("ModelingEditCard", () => {
     render(<ModelingEditCard plan={plan()} />);
     expect(screen.queryByText(/Aprovar/i)).toBeNull();
     expect(screen.queryByText(/Rejeitar/i)).toBeNull();
+  });
+});
+
+describe("ModelingEditCard — rollback (T3.6)", () => {
+  it("shows the undo button for a completed edit with a rollback marker", () => {
+    render(
+      <ModelingEditCard
+        plan={plan({ software_choice: "fusion", rollback_marker: 5 } as Partial<ModelingPlan>)}
+        onRollback={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("modeling-edit-rollback")).toBeTruthy();
+    expect(screen.getByText(/Desfazer última edição/i)).toBeTruthy();
+  });
+
+  it("shows the undo button for a FAILED edit with a marker (partial changes)", () => {
+    render(
+      <ModelingEditCard
+        plan={plan({ status: "failed", rollback_marker: 2 } as Partial<ModelingPlan>)}
+        onRollback={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("modeling-edit-rollback")).toBeTruthy();
+  });
+
+  it("hides the undo button when there is no rollback marker", () => {
+    render(<ModelingEditCard plan={plan()} onRollback={vi.fn()} />);
+    expect(screen.queryByTestId("modeling-edit-rollback")).toBeNull();
+  });
+
+  it("hides the undo button when no onRollback handler is provided", () => {
+    render(<ModelingEditCard plan={plan({ rollback_marker: 5 } as Partial<ModelingPlan>)} />);
+    expect(screen.queryByTestId("modeling-edit-rollback")).toBeNull();
+  });
+
+  it("calls onRollback with the plan id and shows 'desfeita' after success", async () => {
+    const onRollback = vi.fn().mockResolvedValue(true);
+    render(<ModelingEditCard plan={plan({ rollback_marker: 5 } as Partial<ModelingPlan>)} onRollback={onRollback} />);
+
+    fireEvent.click(screen.getByTestId("modeling-edit-rollback"));
+
+    expect(onRollback).toHaveBeenCalledWith("m3d_plan_edit");
+    expect(await screen.findByTestId("modeling-edit-rolled-back")).toBeTruthy();
+    expect(screen.queryByTestId("modeling-edit-rollback")).toBeNull();
+  });
+
+  it("keeps the button when rollback fails (resolves false)", async () => {
+    const onRollback = vi.fn().mockResolvedValue(false);
+    render(<ModelingEditCard plan={plan({ rollback_marker: 5 } as Partial<ModelingPlan>)} onRollback={onRollback} />);
+
+    fireEvent.click(screen.getByTestId("modeling-edit-rollback"));
+
+    await waitFor(() => expect(onRollback).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("modeling-edit-rolled-back")).toBeNull();
+    expect(screen.getByTestId("modeling-edit-rollback")).toBeTruthy();
   });
 });

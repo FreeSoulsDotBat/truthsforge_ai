@@ -28,8 +28,20 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.pattern_circular",
     "fusion.mirror_feature",
     "fusion.combine_bodies",
+    "fusion.thread",
+    "fusion.make_component",
+    "fusion.joint",
+    "fusion.knuckle_hinge",
+    "fusion.metric_screw",
     "fusion.loft_profiles",
     "fusion.sweep_profile",
+    "fusion.create_surface_patch",
+    "fusion.thicken_surface",
+    "fusion.stitch_surfaces",
+    "fusion.trim_surface",
+    "fusion.extend_surface",
+    "fusion.offset_surface",
+    "fusion.unstitch_surface",
     "fusion.add_construction_plane",
     "fusion.add_spline",
     "fusion.move_body",
@@ -37,6 +49,9 @@ FUSION_SCRIPT_TOOLS: tuple[str, ...] = (
     "fusion.delete_body",
     "fusion.split_body",
     "fusion.query_geometry",
+    "fusion.capture_viewport",
+    "fusion.query_timeline",
+    "fusion.rollback_timeline",
     "fusion.set_parameter",
     "fusion.export_step",
     "fusion.export_stl",
@@ -120,6 +135,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # reais, fora do escopo desta iteracao. Para evitar cascata,
             # fazemos fallback para XY com aviso e emitimos o nome
             # original no message do tool call (visivel via trace).
+            # Fix T4 gate: planos construidos via add_construction_plane
+            # devem ser reconhecidos por nome (sem isso, create_sketch
+            # silenciosamente cai em XY apesar do plano existir).
             root = _root(design)
             mapping = {{
                 "xy": root.xYConstructionPlane,
@@ -131,11 +149,15 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
             normalized = str(plane_ref or "xy").lower()
             plane = mapping.get(normalized)
-            if plane is None:
-                # Fallback para XY com warning no message — preferivel a
-                # cascade de sketch_not_found em add_rectangle/extrude.
-                return root.xYConstructionPlane
-            return plane
+            if plane is not None:
+                return plane
+            # Tenta resolver como plano construido pelo nome.
+            target = str(plane_ref or "").strip()
+            if target:
+                for cp in root.constructionPlanes:
+                    if cp.name == target:
+                        return cp
+            return root.xYConstructionPlane
 
 
         def _eval_param(value, design, default=None):
@@ -220,6 +242,25 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return adsk.core.ValueInput.createByReal(mm / 10.0)
 
 
+        def _param_angle_input(arg, design):
+            # G1.1: ValueInput para um ANGULO. Se ``arg`` referencia um
+            # userParameter existente (nome/expressao), createByString -> vinculo
+            # parametrico; senao numero em GRAUS -> radianos via createByReal.
+            # None se nao resolver.
+            if isinstance(arg, str):
+                expr = arg.strip()
+                if expr.startswith("="):
+                    expr = expr[1:].strip()
+                token = expr.lstrip("-+").strip()
+                if token and all(c.isalnum() or c == "_" for c in token):
+                    if design.userParameters.itemByName(token) is not None:
+                        return adsk.core.ValueInput.createByString(expr)
+            deg = _eval_param(arg, design)
+            if deg is None:
+                return None
+            return adsk.core.ValueInput.createByReal(float(deg) * math.pi / 180.0)
+
+
         def _param_name_or_none(arg, design):
             # G1.2: retorna o nome do parametro se ``arg`` e uma referencia
             # pura a um userParameter existente; senao None. Usado para
@@ -249,13 +290,22 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _find_body(design, body_ref=None):
-            # Onda C: resolve body por nome, indice (int/str) ou ultimo criado.
+            # Onda C + T4.2 (Fase 4): resolve body por:
+            #   1. stable_id (TF.stable_id attribute) — sobrevive a rename.
+            #   2. nome do body.
+            #   3. indice (int/str) — volatil a reorder.
+            #   4. ultimo criado quando ref vazio.
             bodies = _root(design).bRepBodies
             if bodies.count == 0:
                 raise ToolError("fusion.no_body", "Nenhum corpo solido na cena.")
             if body_ref is None or body_ref == "":
                 return bodies.item(bodies.count - 1)
             ref = str(body_ref)
+            # T4.2: stable_id primeiro — sobrevive a rename do usuario e a
+            # recompute, ao contrario de nome/indice.
+            for i in range(bodies.count):
+                if _stable_id_of(bodies.item(i)) == ref:
+                    return bodies.item(i)
             for i in range(bodies.count):
                 if bodies.item(i).name == ref:
                     return bodies.item(i)
@@ -265,7 +315,11 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     return bodies.item(idx)
             except (TypeError, ValueError):
                 pass
-            raise ToolError("fusion.body_not_found", "Corpo nao encontrado: " + ref)
+            _avail = [bodies.item(i).name for i in range(bodies.count)]
+            raise ToolError(
+                "fusion.body_not_found",
+                "Corpo nao encontrado: " + ref + ". Corpos disponiveis: " + str(_avail),
+            )
 
 
         def _edge_z_range(edge):
@@ -278,36 +332,6 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             except Exception:
                 ebb = edge.boundingBox
                 return (ebb.minPoint.z, ebb.maxPoint.z)
-
-
-        def _select_edges(body, selector):
-            # Onda C: selectors SEMANTICOS (o LLM nao conhece edge tokens do
-            # Fusion). Suportados: all, top, bottom, vertical, horizontal.
-            selector = str(selector or "all").lower()
-            coll = adsk.core.ObjectCollection.create()
-            bbox = body.boundingBox
-            zmin = bbox.minPoint.z
-            zmax = bbox.maxPoint.z
-            tol = max(1e-4, (zmax - zmin) * 0.01)
-            for i in range(body.edges.count):
-                edge = body.edges.item(i)
-                if selector == "all":
-                    coll.add(edge)
-                    continue
-                ez_min, ez_max = _edge_z_range(edge)
-                if selector == "top" and abs(ez_min - zmax) <= tol and abs(ez_max - zmax) <= tol:
-                    coll.add(edge)
-                elif (
-                    selector == "bottom"
-                    and abs(ez_min - zmin) <= tol
-                    and abs(ez_max - zmin) <= tol
-                ):
-                    coll.add(edge)
-                elif selector == "vertical" and (ez_max - ez_min) > tol:
-                    coll.add(edge)
-                elif selector == "horizontal" and (ez_max - ez_min) <= tol:
-                    coll.add(edge)
-            return coll
 
 
         def _select_edges_extra(body, selector, coll):
@@ -337,12 +361,24 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _select_edges(body, selector):
-            # Onda C + G2.1: selectors SEMANTICOS (o LLM nao conhece edge
+            # Onda C + G2.1 + T5.3a: selectors SEMANTICOS (o LLM nao conhece edge
             # tokens do Fusion). Suportados:
             #   all / top / bottom / vertical / horizontal (Onda C)
             #   longest / shortest (G2.1, por comprimento)
+            #   free_edges (T5.3a, arestas com <2 faces — bordas livres de
+            #   SurfaceBody; entrada tipica de extend_surface).
             selector = str(selector or "all").lower()
             coll = adsk.core.ObjectCollection.create()
+            if selector == "free_edges":
+                for i in range(body.edges.count):
+                    edge = body.edges.item(i)
+                    try:
+                        face_count = edge.faces.count
+                    except Exception:
+                        face_count = 0
+                    if face_count <= 1:
+                        coll.add(edge)
+                return coll
             if _select_edges_extra(body, selector, coll):
                 return coll
             bbox = body.boundingBox
@@ -491,6 +527,45 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return coll
 
 
+        def _entities_by_tokens(design, tokens, kind):
+            # F1 (T1.3): resolve entityToken ESTAVEL (de query_geometry) em
+            # BRepEdge/BRepFace. Sobrevive a recompute, ao contrario do indice
+            # posicional. Token invalido (ex.: aresta/face consumida por uma
+            # feature) -> ToolError claro, NUNCA cai mudo em "all" (regressao
+            # do gate da placa: selector mudo arredondou arestas erradas).
+            coll = adsk.core.ObjectCollection.create()
+            missing = []
+            for tok in tokens:
+                found = None
+                try:
+                    ents = design.findEntityByToken(str(tok))
+                    for ent in (ents or []):
+                        if isinstance(ent, kind):
+                            found = ent
+                            break
+                except Exception:
+                    found = None
+                if found is None:
+                    missing.append(str(tok)[:20])
+                else:
+                    coll.add(found)
+            if missing:
+                raise ToolError(
+                    "fusion.edge_token_stale",
+                    "token(s) invalido(s)/consumido(s): {{}}. Rode query_geometry "
+                    "de novo para obter tokens atuais.".format(missing),
+                )
+            return coll
+
+
+        def _edges_by_tokens(design, tokens):
+            return _entities_by_tokens(design, tokens, adsk.fusion.BRepEdge)
+
+
+        def _faces_by_tokens(design, tokens):
+            return _entities_by_tokens(design, tokens, adsk.fusion.BRepFace)
+
+
         def _open_design(args):
             # P3 (edicao nao pode quebrar o modelo): por padrao REUSA o design
             # ativo em vez de criar um 'Untitled' novo a cada execucao — antes,
@@ -551,7 +626,13 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 or "TF_Sketch"
             )
             _KNOWN_PLANES = ("xy", "yz", "xz", "top", "front", "right")
-            fallback_applied = plane_ref.lower() not in _KNOWN_PLANES
+            # Fix T4 gate: plano construido (criado via add_construction_plane)
+            # tambem conta como resolvido — _plane_from_ref agora o reconhece.
+            construction_names = {{cp.name for cp in _root(design).constructionPlanes}}
+            fallback_applied = (
+                plane_ref.lower() not in _KNOWN_PLANES
+                and plane_ref not in construction_names
+            )
             sketch = _root(design).sketches.add(_plane_from_ref(design, plane_ref))
             sketch.name = name
             warn_suffix = (
@@ -713,6 +794,49 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Drift do trace placa-parametrizada: chaves sem sufixo
             # (radius/diameter) com sintaxe de expressao ("=hole_diameter/2").
             args = dict(args)
+
+            # Fix T4 gate: o planner as vezes empacota multiplas chamadas em
+            # 1 step (ex.: 4 furos num unico add_circle). O normalizador
+            # embrulha a lista em {{"_raw": [...]}}; aqui desempacotamos e
+            # iteramos. Mantemos so itens dict para evitar recursao maligna.
+            raw_batch = args.get("_raw")
+            if raw_batch is None:
+                # Drift do gate F6 (placa-2 e8cc2734): o LLM manda os furos numa
+                # chave circles/holes em vez de _raw. Roteia p/ o mesmo batch.
+                for _bk in ("circles", "holes"):
+                    if isinstance(args.get(_bk), list):
+                        raw_batch = args.get(_bk)
+                        break
+            if isinstance(raw_batch, list):
+                parent_sketch = args.get("sketch")
+                batch_results = []
+                batch_messages = []
+                for item in raw_batch:
+                    if not isinstance(item, dict):
+                        continue
+                    # Os itens do batch herdam o sketch do nível superior.
+                    if parent_sketch is not None and item.get("sketch") is None:
+                        item = dict(item)
+                        item["sketch"] = parent_sketch
+                    inner = _add_circle(item)
+                    batch_results.append(inner)
+                    inner_msg = inner.get("message") if isinstance(inner, dict) else None
+                    if inner_msg:
+                        batch_messages.append(inner_msg)
+                if not batch_results:
+                    raise ToolError(
+                        "fusion.invalid_dimensions",
+                        "add_circle batch vazio: forneca pelo menos um item valido.",
+                    )
+                summary = "{{}} circulos adicionados em batch.".format(len(batch_results))
+                return {{
+                    "message": summary,
+                    "batch": True,
+                    "count": len(batch_results),
+                    "items": batch_results,
+                    "messages": batch_messages,
+                }}
+
             for _canon, _alias in (("diameter_mm", "diameter"), ("radius_mm", "radius")):
                 if args.get(_canon) is None and args.get(_alias) is not None:
                     args[_canon] = args[_alias]
@@ -816,23 +940,83 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
                 operation = fallback_op
             sketch = _find_sketch(design, args.get("sketch"))
-            if sketch.profiles.count == 0:
+            # T5.1a/T5.1b (Fase 5): as_surface=true permite (1) produzir
+            # SurfaceBody (isSolid=False) e (2) usar openProfile quando o
+            # sketch nao tem profile fechado. Sem o flag, mantem checagem
+            # legada que exige profile fechado.
+            as_surface = bool(args.get("as_surface"))
+            if not as_surface and sketch.profiles.count == 0:
                 raise ToolError(
                     "fusion.no_profile",
                     "Sketch não tem profile fechado para extrudar.",
                 )
+            # Fix (trace m3d_plan_2f7aeff0): nao extrudar cegamente profiles[0].
+            # Seletor explicito quando informado; aviso visivel no trace quando
+            # um cut ambiguo (varios profiles, sem seletor) cai no profiles[0] —
+            # foi exatamente isso que consumiu a placa no gate.
+            profile = _profile_or_open(sketch, args, design, as_surface)
+            _has_selector = (
+                args.get("profile_index") is not None
+                or args.get("profile_diameter_mm") is not None
+            )
+            if operation == "cut" and sketch.profiles.count > 1 and not _has_selector:
+                operation_warning += (
+                    " [WARN: cut em sketch com "
+                    + str(sketch.profiles.count)
+                    + " profiles sem seletor; usei profiles[0] - verifique se nao"
+                    + " consumiu a peca (use profile_index/profile_diameter_mm)]"
+                )
             extrudes = _root(design).features.extrudeFeatures
-            input_obj = extrudes.createInput(sketch.profiles.item(0), operation_map[operation])
+            input_obj = extrudes.createInput(profile, operation_map[operation])
+            if as_surface:
+                input_obj.isSolid = False
+            # Fix gate F3/F6 ("3 : No target body found to cut or intersect!"):
+            # cut/intersect EXIGEM participantBodies explícitos — a API do Fusion
+            # NÃO escolhe os corpos sozinha quando há sólidos na cena. Inclui
+            # todos os corpos sólidos; o Fusion só remove onde o perfil cruza.
+            if operation in ("cut", "intersect") and not as_surface:
+                _bodies = _root(design).bRepBodies
+                _solids = []
+                for _i in range(_bodies.count):
+                    _b = _bodies.item(_i)
+                    try:
+                        if _b.isSolid:
+                            _solids.append(_b)
+                    except Exception:
+                        _solids.append(_b)
+                if _solids:
+                    try:
+                        input_obj.participantBodies = _solids
+                    except Exception:
+                        pass
             input_obj.setDistanceExtent(
                 False,
                 _param_value_input(args.get("distance_mm"), design),
             )
-            extrudes.add(input_obj)
+            ext = extrudes.add(input_obj)
+            body_name = None
+            stable_id = None
+            if ext.bodies.count > 0:
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or sketch.name))
+                ext.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(ext.bodies.item(0))
+            dims = _body_dims_mm(ext.bodies.item(0)) if ext.bodies.count > 0 else [0.0, 0.0, 0.0]
+            kind_label = "Superficie extrudada" if as_surface else "Extrusao"
             return {{
-                "message": "Extrusão de {{}} mm aplicada (operation={{}}).{{}}".format(
-                    distance_mm, operation, operation_warning
+                "message": "{{}} de {{}} mm aplicada (operation={{}}).{{}}".format(
+                    kind_label, distance_mm, operation, operation_warning
                 ),
                 "sketch_name": sketch.name,
+                "body_name": body_name,
+                "stable_id": stable_id,
+                "dimensions_mm": dims,
+                "is_surface": as_surface,
             }}
 
 
@@ -930,11 +1114,17 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Aceitamos os dois: se start_mm faltar mas radius+start_angle
             # vierem, derivamos o ponto inicial; se sweep_deg faltar mas
             # end_angle vier, derivamos sweep = end - start.
+            # Fix T4 gate: 3a sinatura natural — start_mm + end_mm + center_mm
+            # (LLM emite isso ao descrever "arco de A para B em torno de C").
+            # Compute sweep via atan2; default = arco curto (sweep normalizado
+            # em (-180, 180]). Se o usuario quer o arco longo, deve passar
+            # sweep_deg ou angles explicitos.
             design = _design()
             center_pair = _eval_pair(args.get("center_mm"), design)
             if center_pair is None:
                 raise ToolError("fusion.invalid_dimensions", "center_mm e obrigatorio.")
             start_pair = _eval_pair(args.get("start_mm"), design)
+            end_pair = _eval_pair(args.get("end_mm"), design)
             sweep_deg = _eval_param(args.get("sweep_deg"), design, 0.0) or 0.0
             radius_mm = _eval_param(args.get("radius_mm"), design, 0.0) or 0.0
             start_angle = _eval_param(args.get("start_angle_deg"), design, 0.0) or 0.0
@@ -946,10 +1136,24 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
             if sweep_deg == 0 and end_angle is not None:
                 sweep_deg = float(end_angle) - start_angle
+            if sweep_deg == 0 and start_pair is not None and end_pair is not None:
+                sa = math.atan2(
+                    start_pair[1] - center_pair[1], start_pair[0] - center_pair[0]
+                )
+                ea = math.atan2(
+                    end_pair[1] - center_pair[1], end_pair[0] - center_pair[0]
+                )
+                sweep_rad = ea - sa
+                while sweep_rad <= -math.pi:
+                    sweep_rad += 2 * math.pi
+                while sweep_rad > math.pi:
+                    sweep_rad -= 2 * math.pi
+                if abs(sweep_rad) > 1e-9:
+                    sweep_deg = sweep_rad * 180.0 / math.pi
             if start_pair is None or sweep_deg == 0:
                 raise ToolError(
                     "fusion.invalid_dimensions",
-                    "informe start_mm+sweep_deg OU radius_mm+start_angle_deg+end_angle_deg.",
+                    "informe start_mm+sweep_deg OU start_mm+end_mm+center_mm OU radius_mm+start_angle_deg+end_angle_deg.",
                 )
             center = adsk.core.Point3D.create(
                 center_pair[0] / 10.0, center_pair[1] / 10.0, 0
@@ -1050,7 +1254,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Destrava esferas (semicirculo revolvido), cones, vasos.
             design = _design()
             sketch = _find_sketch(design, args.get("sketch"))
-            if sketch.profiles.count == 0:
+            # T5.1b: as_surface=true aceita meio-perfil aberto (openProfile);
+            # sem o flag, mantem a exigencia legada de profile fechado.
+            _as_surface_early = bool(args.get("as_surface"))
+            if not _as_surface_early and sketch.profiles.count == 0:
                 raise ToolError(
                     "fusion.no_profile",
                     "Sketch nao tem profile fechado para revolver.",
@@ -1070,7 +1277,37 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 "intersect": adsk.fusion.FeatureOperations.IntersectFeatureOperation,
             }}
             op = operation_map.get(operation, operation_map["new_body"])
-            axis_name = str(args.get("axis") or "y").lower()
+            # Fix T4 gate: o LLM as vezes emite ``axis_line`` (formato
+            # geometrico: 2 pontos 3D definindo a reta) em vez de ``axis``
+            # ("x"/"y"/"z"). O handler antigo ignorava axis_line e caia no
+            # default "y", causando ASM_PATH_TANGENT quando o eixo Y cruzava
+            # o perfil. Derivamos o axis nativo pelo maior componente do
+            # vetor end-start; se for arbitrario (nao alinhado a x/y/z) cai
+            # no default antigo para evitar regressao.
+            axis_name = str(args.get("axis") or "").lower().strip()
+            if axis_name not in ("x", "y", "z"):
+                axis_line = args.get("axis_line")
+                if (
+                    isinstance(axis_line, (list, tuple))
+                    and len(axis_line) == 2
+                    and isinstance(axis_line[0], (list, tuple))
+                    and isinstance(axis_line[1], (list, tuple))
+                    and len(axis_line[0]) >= 3
+                    and len(axis_line[1]) >= 3
+                ):
+                    dx = float(axis_line[1][0]) - float(axis_line[0][0])
+                    dy = float(axis_line[1][1]) - float(axis_line[0][1])
+                    dz = float(axis_line[1][2]) - float(axis_line[0][2])
+                    mag = max(abs(dx), abs(dy), abs(dz))
+                    if mag > 1e-9:
+                        if abs(dx) == mag:
+                            axis_name = "x"
+                        elif abs(dy) == mag:
+                            axis_name = "y"
+                        elif abs(dz) == mag:
+                            axis_name = "z"
+            if axis_name not in ("x", "y", "z"):
+                axis_name = "y"
             root = _root(design)
             axis_map = {{
                 "x": root.xConstructionAxis,
@@ -1079,15 +1316,52 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
             axis = axis_map.get(axis_name, root.yConstructionAxis)
             revolves = root.features.revolveFeatures
-            input_obj = revolves.createInput(sketch.profiles.item(0), axis, op)
-            angle_rad = float(angle_deg) * math.pi / 180.0
-            input_obj.setAngleExtent(False, adsk.core.ValueInput.createByReal(angle_rad))
-            revolves.add(input_obj)
+            # T5.1a/T5.1b: as_surface=true forca SurfaceBody (isSolid=False)
+            # antes do setAngleExtent e aceita meio-perfil aberto (no modo
+            # solido o perfil precisa cruzar o eixo; em surface nao).
+            as_surface = _as_surface_early
+            input_obj = revolves.createInput(
+                _profile_or_open(sketch, args, design, as_surface), axis, op
+            )
+            if as_surface:
+                input_obj.isSolid = False
+            # G1.1: liga o angulo a um parametro quando ``angle_deg`` referencia
+            # um userParameter (createByString); senao usa o numero resolvido.
+            angle_vi = _param_angle_input(args.get("angle_deg"), design)
+            if angle_vi is None:
+                angle_vi = adsk.core.ValueInput.createByReal(float(angle_deg) * math.pi / 180.0)
+            input_obj.setAngleExtent(False, angle_vi)
+            feat = revolves.add(input_obj)
+            # Fix T4 gate: nomeia o body criado para que edits subsequentes
+            # consigam referenciar por nome (vide _extrude_profile).
+            body_name = None
+            stable_id = None
+            if feat.bodies.count > 0:
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or sketch.name))
+                feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
+            dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
+            raw_angle = args.get("angle_deg")
+            if isinstance(raw_angle, str):
+                angle_label = "'{{}}'".format(raw_angle)
+            else:
+                angle_label = "{{:g}} graus".format(angle_deg)
+            kind_label = "Superficie revolvida" if as_surface else "Revolucao"
             return {{
-                "message": "Revolucao de {{}} graus (eixo {{}}) aplicada a '{{}}'.".format(
-                    angle_deg, axis_name, sketch.name
+                "message": "{{}} de {{}} (eixo {{}}) aplicada a '{{}}'.".format(
+                    kind_label, angle_label, axis_name, sketch.name
                 ),
                 "sketch_name": sketch.name,
+                "body_name": body_name,
+                "stable_id": stable_id,
+                "dimensions_mm": dims,
+                "is_surface": as_surface,
             }}
 
 
@@ -1103,6 +1377,119 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             while "{{}} ({{}})".format(base, n) in existing:
                 n += 1
             return "{{}} ({{}})".format(base, n)
+
+
+        def _unique_body_name(design, base):
+            # Gera um nome de CORPO livre (base, base (1), ...). As primitivas
+            # passam a nomear o BODY (nao so o sketch) para que shell/fillet/
+            # pattern/etc. consigam referenciar por nome — bug do gate caixa+
+            # tampa: 'name' nomeava so o sketch, o body ficava Body1/Body2 e a
+            # referencia por nome dava fusion.body_not_found.
+            existing = set()
+            bodies = _root(design).bRepBodies
+            for i in range(bodies.count):
+                existing.add(bodies.item(i).name)
+            if base not in existing:
+                return base
+            n = 1
+            while "{{}} ({{}})".format(base, n) in existing:
+                n += 1
+            return "{{}} ({{}})".format(base, n)
+
+
+        def _attach_stable_id(entity, value=None):
+            # T4.2 (Fase 4): anexa um attribute TF.stable_id no body criado.
+            # Sobrevive a recompute paramétrico E a rename pelo usuário —
+            # o LLM pode referenciar o body por stable_id mesmo que o nome
+            # mude entre edições. Retorna o UUID curto gerado, ou None se
+            # a API rejeitar (best-effort).
+            try:
+                import uuid as _uuid
+                sid = str(value) if value else _uuid.uuid4().hex[:12]
+                entity.attributes.add("TF", "stable_id", sid)
+                return sid
+            except Exception:
+                return None
+
+
+        def _stable_id_of(entity):
+            # T4.2: lê o attribute TF.stable_id de um body/feature. None se
+            # ausente ou se a API não expor attributes (ex.: SurfaceBody em
+            # versões antigas do Fusion).
+            try:
+                attr = entity.attributes.itemByName("TF", "stable_id")
+                if attr is not None:
+                    return attr.value
+            except Exception:
+                pass
+            return None
+
+
+        def _xyz_mm(value, design):
+            # Extrai (x, y, z) em mm de uma lista origin_mm/center_mm; faltantes=0.
+            if not isinstance(value, (list, tuple)):
+                return (0.0, 0.0, 0.0)
+
+            def _g(i):
+                if len(value) <= i:
+                    return 0.0
+                return _eval_param(value[i], design, 0.0) or 0.0
+
+            return (_g(0), _g(1), _g(2))
+
+
+        def _translate_body(design, body, dx_cm, dy_cm, dz_cm):
+            # Move um corpo por um vetor (cm). No-op se vetor zero — mantem
+            # compat: primitiva sem origin/z NAO gera feature de move (zero
+            # impacto nos planos existentes e nos corpos que devem ficar no lugar).
+            if dx_cm == 0.0 and dy_cm == 0.0 and dz_cm == 0.0:
+                return
+            root = _root(design)
+            coll = adsk.core.ObjectCollection.create()
+            coll.add(body)
+            transform = adsk.core.Matrix3D.create()
+            transform.translation = adsk.core.Vector3D.create(dx_cm, dy_cm, dz_cm)
+            moves = root.features.moveFeatures
+            try:
+                inp = moves.createInput(coll, transform)
+                moves.add(inp)
+            except (AttributeError, RuntimeError):
+                inp = moves.createInput2(coll)
+                inp.defineAsFreeMove(transform)
+                moves.add(inp)
+
+
+        def _rotate_body(design, body, angle_rad, axis_vec, origin_pt):
+            # Rotaciona um corpo em torno de um eixo (vetor) por um ponto, via
+            # Matrix3D.setToRotation (mesma fiação do move). No-op se angulo zero.
+            # Usado p/ orientar cilindros (knuckles horizontais de dobradica).
+            if angle_rad == 0.0:
+                return
+            root = _root(design)
+            coll = adsk.core.ObjectCollection.create()
+            coll.add(body)
+            transform = adsk.core.Matrix3D.create()
+            transform.setToRotation(angle_rad, axis_vec, origin_pt)
+            moves = root.features.moveFeatures
+            try:
+                inp = moves.createInput(coll, transform)
+                moves.add(inp)
+            except (AttributeError, RuntimeError):
+                inp = moves.createInput2(coll)
+                inp.defineAsFreeMove(transform)
+                moves.add(inp)
+
+
+        def _body_dims_mm(body):
+            # Read-back: dimensoes (bbox) do corpo em mm [x, y, z]. Alimenta o
+            # verifier do loop (expected_dimensions_mm x medido). bbox ~0 sinaliza
+            # corpo consumido (ex.: cut que comeu a peca).
+            bb = body.boundingBox
+            return [
+                round((bb.maxPoint.x - bb.minPoint.x) * 10.0, 3),
+                round((bb.maxPoint.y - bb.minPoint.y) * 10.0, 3),
+                round((bb.maxPoint.z - bb.minPoint.z) * 10.0, 3),
+            ]
 
 
         def _add_box(args):
@@ -1160,18 +1547,63 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
             )
             inp.setDistanceExtent(False, adsk.core.ValueInput.createByReal(h / 10.0))
-            extrudes.add(inp)
+            feat = extrudes.add(inp)
+            body_name = sketch.name
+            stable_id = None
+            dims = [0.0, 0.0, 0.0]
+            if feat.bodies.count > 0:
+                body_name = _unique_body_name(design, str(args.get("name") or "Box"))
+                feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
+                _oz = _xyz_mm(args.get("origin_mm") or args.get("center_mm"), design)[2]
+                _translate_body(design, feat.bodies.item(0), 0.0, 0.0, _oz / 10.0)
+                dims = _body_dims_mm(feat.bodies.item(0))
             return {{
-                "message": "Caixa {{}}x{{}}x{{}} mm criada ('{{}}').".format(
-                    w, d, h, sketch.name
+                "message": "Caixa {{}}x{{}}x{{}} mm criada (corpo '{{}}').".format(
+                    w, d, h, body_name
                 ),
                 "sketch_name": sketch.name,
+                "body_name": body_name,
+                "stable_id": stable_id,
+                "dimensions_mm": dims,
             }}
 
 
         def _add_cylinder(args):
             # Onda B: cilindro = circulo + extrude.
             design = _design()
+            # Batch (gate motor-genérico m3d_plan_5d42b34f): o LLM manda VÁRIOS
+            # cilindros numa lista (knuckles/cylinders) num único step — igual ao
+            # add_circle. Sem isto o step falhava e os corpos referenciados
+            # depois (combine) não existiam. Desempacota e itera.
+            raw_batch = args.get("_raw")
+            if raw_batch is None:
+                for _bk in ("cylinders", "knuckles"):
+                    if isinstance(args.get(_bk), list):
+                        raw_batch = args.get(_bk)
+                        break
+            if isinstance(raw_batch, list):
+                results = []
+                names = []
+                for item in raw_batch:
+                    if not isinstance(item, dict):
+                        continue
+                    inner = _add_cylinder(item)
+                    results.append(inner)
+                    if isinstance(inner, dict) and inner.get("body_name"):
+                        names.append(inner.get("body_name"))
+                if not results:
+                    raise ToolError(
+                        "fusion.invalid_dimensions",
+                        "batch de cilindros vazio: forneça ao menos um item válido.",
+                    )
+                return {{
+                    "message": "{{}} cilindro(s) criado(s) em batch.".format(len(results)),
+                    "batch": True,
+                    "count": len(results),
+                    "body_names": names,
+                    "items": results,
+                }}
             diameter_mm = _eval_param(args.get("diameter_mm"), design, 0.0) or 0.0
             if diameter_mm <= 0:
                 radius_mm = _eval_param(args.get("radius_mm"), design, 0.0) or 0.0
@@ -1183,28 +1615,80 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     "fusion.invalid_dimensions",
                     "diameter_mm (ou radius_mm) e height_mm precisam ser positivos.",
                 )
-            center = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
+            # Aceita origin_mm como alias de center_mm p/ a posição XY (o LLM
+            # varia entre os dois; antes só center_mm valia → cilindros em batch
+            # caíam todos em (0,0)).
+            center = _eval_pair(args.get("center_mm") or args.get("origin_mm"), design) or (
+                0.0,
+                0.0,
+            )
+            # Eixo do cilindro: 'z' (default) OU 'x'/'y' p/ cilindros HORIZONTAIS
+            # (knuckles de dobradiça ao longo de uma aresta). Aceita string
+            # ('x'/'y'/'z') OU vetor ([1,0,0]) — usa o componente dominante.
+            axis_arg = args.get("axis")
+            if isinstance(axis_arg, (list, tuple)) and len(axis_arg) >= 3:
+                try:
+                    comps = [abs(float(v)) for v in axis_arg[:3]]
+                    axis = ["x", "y", "z"][comps.index(max(comps))]
+                except (TypeError, ValueError):
+                    axis = "z"
+            else:
+                axis = str(axis_arg or "z").lower()
+            if axis not in ("x", "y", "z"):
+                axis = "z"
+            cx, cy = center[0], center[1]
+            cz = _xyz_mm(args.get("center_mm") or args.get("origin_mm"), design)[2]
             root = _root(design)
             sketch = root.sketches.add(root.xYConstructionPlane)
             sketch.name = _unique_sketch_name(design, str(args.get("name") or "Cylinder"))
-            center_pt = adsk.core.Point3D.create(
-                center[0] / 10.0, center[1] / 10.0, 0
-            )
-            sketch.sketchCurves.sketchCircles.addByCenterRadius(
-                center_pt, diameter_mm / 20.0
-            )
+            # Para x/y o cilindro nasce na ORIGEM (vai ser rotacionado Z->eixo e
+            # depois transladado p/ a base); para z, nasce direto em (cx,cy).
+            base_x = 0.0 if axis in ("x", "y") else cx
+            base_y = 0.0 if axis in ("x", "y") else cy
+            center_pt = adsk.core.Point3D.create(base_x / 10.0, base_y / 10.0, 0)
+            sketch.sketchCurves.sketchCircles.addByCenterRadius(center_pt, diameter_mm / 20.0)
             extrudes = root.features.extrudeFeatures
             inp = extrudes.createInput(
                 sketch.profiles.item(0),
                 adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
             )
             inp.setDistanceExtent(False, adsk.core.ValueInput.createByReal(h / 10.0))
-            extrudes.add(inp)
+            feat = extrudes.add(inp)
+            body_name = sketch.name
+            stable_id = None
+            dims = [0.0, 0.0, 0.0]
+            if feat.bodies.count > 0:
+                body = feat.bodies.item(0)
+                body_name = _unique_body_name(design, str(args.get("name") or "Cylinder"))
+                body.name = body_name
+                stable_id = _attach_stable_id(body)
+                if axis in ("x", "y"):
+                    # Rotaciona Z->eixo em torno da origem (a base fica em 0,0,0),
+                    # depois posiciona a base do cilindro em (cx, cy, cz).
+                    origin0 = adsk.core.Point3D.create(0, 0, 0)
+                    if axis == "x":
+                        _rotate_body(
+                            design, body, math.pi / 2.0,
+                            adsk.core.Vector3D.create(0, 1, 0), origin0,
+                        )
+                    else:
+                        _rotate_body(
+                            design, body, -math.pi / 2.0,
+                            adsk.core.Vector3D.create(1, 0, 0), origin0,
+                        )
+                    _translate_body(design, body, cx / 10.0, cy / 10.0, cz / 10.0)
+                else:
+                    _translate_body(design, body, 0.0, 0.0, cz / 10.0)
+                dims = _body_dims_mm(body)
             return {{
-                "message": "Cilindro o{{}}x{{}} mm criado ('{{}}').".format(
-                    diameter_mm, h, sketch.name
+                "message": "Cilindro o{{}}x{{}} mm criado (corpo '{{}}', eixo {{}}).".format(
+                    diameter_mm, h, body_name, axis
                 ),
                 "sketch_name": sketch.name,
+                "body_name": body_name,
+                "stable_id": stable_id,
+                "axis": axis,
+                "dimensions_mm": dims,
             }}
 
 
@@ -1241,12 +1725,25 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
             )
             inp.setAngleExtent(False, adsk.core.ValueInput.createByReal(2 * math.pi))
-            revolves.add(inp)
+            feat = revolves.add(inp)
+            body_name = sketch.name
+            stable_id = None
+            dims = [0.0, 0.0, 0.0]
+            if feat.bodies.count > 0:
+                body_name = _unique_body_name(design, str(args.get("name") or "Sphere"))
+                feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
+                _ox, _oy, _oz = _xyz_mm(args.get("origin_mm") or args.get("center_mm"), design)
+                _translate_body(design, feat.bodies.item(0), _ox / 10.0, _oy / 10.0, _oz / 10.0)
+                dims = _body_dims_mm(feat.bodies.item(0))
             return {{
-                "message": "Esfera o{{}} mm criada ('{{}}').".format(
-                    diameter_mm, sketch.name
+                "message": "Esfera o{{}} mm criada (corpo '{{}}').".format(
+                    diameter_mm, body_name
                 ),
                 "sketch_name": sketch.name,
+                "body_name": body_name,
+                "stable_id": stable_id,
+                "dimensions_mm": dims,
             }}
 
 
@@ -1292,13 +1789,26 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
             )
             inp.setAngleExtent(False, adsk.core.ValueInput.createByReal(2 * math.pi))
-            revolves.add(inp)
+            feat = revolves.add(inp)
+            body_name = sketch.name
+            stable_id = None
+            dims = [0.0, 0.0, 0.0]
+            if feat.bodies.count > 0:
+                body_name = _unique_body_name(design, str(args.get("name") or "Cone"))
+                feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
+                _ox, _oy, _oz = _xyz_mm(args.get("origin_mm") or args.get("center_mm"), design)
+                _translate_body(design, feat.bodies.item(0), _ox / 10.0, _oy / 10.0, _oz / 10.0)
+                dims = _body_dims_mm(feat.bodies.item(0))
             shape = "cone" if top_d <= 0 else "tronco de cone"
             return {{
                 "message": "{{}} base o{{}} topo o{{}} altura {{}} mm criado ('{{}}').".format(
-                    shape, base_d, top_d, h, sketch.name
+                    shape, base_d, top_d, h, body_name
                 ),
                 "sketch_name": sketch.name,
+                "body_name": body_name,
+                "stable_id": stable_id,
+                "dimensions_mm": dims,
             }}
 
 
@@ -1310,12 +1820,43 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if radius_mm <= 0:
                 raise ToolError("fusion.invalid_dimensions", "radius_mm precisa ser positivo.")
             body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
+            edge_warn = ""
+            edge_tokens = args.get("edge_tokens")
             edge_ids = args.get("edge_ids") or args.get("edge_indices")
-            if edge_ids:
+            if edge_tokens:
+                # F1 (T1.3): tokens estaveis tem precedencia sobre indices.
+                selector = "edge_tokens"
+                edges = _edges_by_tokens(design, edge_tokens)
+            elif edge_ids:
                 selector = "edge_ids"
                 edges = _edges_by_ids(body, edge_ids)
             else:
-                selector = args.get("edge_selector") or args.get("edges") or "all"
+                selector = args.get("edge_selector") or args.get("edges")
+                if selector is None:
+                    # Era o fallback silencioso: o planner mandava a intencao de
+                    # aresta numa chave nao reconhecida (ex.: edge_ids_from_
+                    # previous_query com texto livre) e caiamos mudo em "all" —
+                    # filetando ate o furo. Agora avisamos alto no trace.
+                    _recognized = {{
+                        "radius_mm", "distance_mm", "edge_tokens", "edge_ids",
+                        "edge_indices", "edge_selector", "edges", "body_ref",
+                        "body", "body_name",
+                    }}
+                    _unknown = [
+                        k for k in args
+                        if k not in _recognized
+                        and ("edge" in k.lower() or "selector" in k.lower())
+                    ]
+                    if _unknown:
+                        edge_warn = (
+                            " [WARN: args de aresta nao reconhecidos "
+                            + str(sorted(_unknown))
+                            + " ignorados; apliquei em TODAS as arestas - selecao"
+                            + " pode estar imprecisa. Use edge_selector=all|top|"
+                            + "bottom|vertical|horizontal ou edge_ids=[i,j] de"
+                            + " query_geometry]"
+                        )
+                    selector = "all"
                 edges = _select_edges(body, selector)
             if edges.count == 0:
                 raise ToolError(
@@ -1329,10 +1870,11 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             )
             fillets.add(inp)
             return {{
-                "message": "Fillet r={{}}mm em {{}} aresta(s) ({{}}) de '{{}}'.".format(
-                    radius_mm, edges.count, selector, body.name
+                "message": "Fillet r={{}}mm em {{}} aresta(s) ({{}}) de '{{}}'.{{}}".format(
+                    radius_mm, edges.count, selector, body.name, edge_warn
                 ),
                 "body_name": body.name,
+                "dimensions_mm": _body_dims_mm(body),
             }}
 
 
@@ -1343,12 +1885,42 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if distance_mm <= 0:
                 raise ToolError("fusion.invalid_dimensions", "distance_mm precisa ser positivo.")
             body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
+            edge_warn = ""
+            edge_tokens = args.get("edge_tokens")
             edge_ids = args.get("edge_ids") or args.get("edge_indices")
-            if edge_ids:
+            if edge_tokens:
+                selector = "edge_tokens"
+                edges = _edges_by_tokens(design, edge_tokens)
+            elif edge_ids:
                 selector = "edge_ids"
                 edges = _edges_by_ids(body, edge_ids)
             else:
-                selector = args.get("edge_selector") or args.get("edges") or "all"
+                selector = args.get("edge_selector") or args.get("edges")
+                if selector is None:
+                    # Era o fallback silencioso: o planner mandava a intencao de
+                    # aresta numa chave nao reconhecida (ex.: edge_ids_from_
+                    # previous_query com texto livre) e caiamos mudo em "all" —
+                    # chanfrando ate o furo. Agora avisamos alto no trace.
+                    _recognized = {{
+                        "radius_mm", "distance_mm", "edge_tokens", "edge_ids",
+                        "edge_indices", "edge_selector", "edges", "body_ref",
+                        "body", "body_name",
+                    }}
+                    _unknown = [
+                        k for k in args
+                        if k not in _recognized
+                        and ("edge" in k.lower() or "selector" in k.lower())
+                    ]
+                    if _unknown:
+                        edge_warn = (
+                            " [WARN: args de aresta nao reconhecidos "
+                            + str(sorted(_unknown))
+                            + " ignorados; apliquei em TODAS as arestas - selecao"
+                            + " pode estar imprecisa. Use edge_selector=all|top|"
+                            + "bottom|vertical|horizontal ou edge_ids=[i,j] de"
+                            + " query_geometry]"
+                        )
+                    selector = "all"
                 edges = _select_edges(body, selector)
             if edges.count == 0:
                 raise ToolError(
@@ -1369,10 +1941,11 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 inp.chamferEdgeSets.addEqualDistanceChamferEdgeSet(edges, dist_vi, True)
                 chamfers.add(inp)
             return {{
-                "message": "Chanfro d={{}}mm em {{}} aresta(s) ({{}}) de '{{}}'.".format(
-                    distance_mm, edges.count, selector, body.name
+                "message": "Chanfro d={{}}mm em {{}} aresta(s) ({{}}) de '{{}}'.{{}}".format(
+                    distance_mm, edges.count, selector, body.name, edge_warn
                 ),
                 "body_name": body.name,
+                "dimensions_mm": _body_dims_mm(body),
             }}
 
 
@@ -1387,8 +1960,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Schema drift (teste bola): o LLM manda `faces` em vez de
             # `open_faces`. "all"/"none" => casca fechada (sem face aberta;
             # abrir "todas" deletaria o corpo, entao tratamos como fechada).
+            face_tokens = args.get("face_tokens")
             face_ids = args.get("face_ids") or args.get("face_indices")
-            if face_ids:
+            if face_tokens:
+                open_sel = "face_tokens"
+                faces = _faces_by_tokens(design, face_tokens)
+            elif face_ids:
                 open_sel = "face_ids"
                 faces = _faces_by_ids(body, face_ids)
             else:
@@ -1414,6 +1991,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     thickness_mm, open_sel, body.name
                 ),
                 "body_name": body.name,
+                "dimensions_mm": _body_dims_mm(body),
             }}
 
 
@@ -1449,6 +2027,663 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             if best is not None:
                 return best
             return sketch.profiles.item(0)
+
+
+        def _resolve_profile_selection(sketch, args, design):
+            # Selecao explicita de profile para extrude/revolve/sweep. Sem isto
+            # caia sempre em sketch.profiles.item(0) (bug "cut apaga a peca",
+            # trace real m3d_plan_2f7aeff0): num sketch com varios profiles
+            # (ex.: retangulo + circulo coplanares) item(0) pode ser a peca toda
+            # e um operation=cut a consome. Suporta profile_index (direto) e
+            # profile_diameter_mm (area do circulo, reusando _profile_for_circle).
+            # Sem seletor mantem o comportamento legado (item(0)).
+            count = sketch.profiles.count
+            idx = args.get("profile_index")
+            if idx is not None:
+                try:
+                    i = int(idx)
+                except Exception:
+                    i = -1
+                if 0 <= i < count:
+                    return sketch.profiles.item(i)
+            diam = _eval_param(args.get("profile_diameter_mm"), design, 0.0) or 0.0
+            if diam > 0:
+                return _profile_for_circle(sketch, diam / 20.0)
+            return sketch.profiles.item(0)
+
+
+        def _open_profile_from_sketch(design, sketch, args):
+            # T5.1b fix (gate m3d_plan_cd836aec): o objeto Sketch da API do
+            # Fusion NAO expoe `.openProfiles` (AttributeError no Fusion real).
+            # O caminho correto para um perfil ABERTO e
+            # Component.createOpenProfile(sketchEntity, chainCurves=True), que
+            # segue a cadeia de curvas conectadas a partir de uma curva-semente.
+            # Retorna um Profile aberto valido para extrude/revolve/sweep em
+            # modo superficie (isSolid=False).
+            curves = sketch.sketchCurves
+            if curves.count == 0:
+                return None
+            idx_raw = args.get("open_profile_index")
+            try:
+                i = int(idx_raw) if idx_raw is not None else 0
+            except Exception:
+                i = 0
+            if not (0 <= i < curves.count):
+                i = 0
+            seed = curves.item(i)
+            try:
+                return _root(design).createOpenProfile(seed, True)
+            except Exception:
+                # Algumas versoes aceitam so 1 arg (chainCurves default True).
+                return _root(design).createOpenProfile(seed)
+
+
+        def _profile_or_open(sketch, args, design, as_surface):
+            # T5.1b (Fase 5): em modo superficie aceita openProfile (curva
+            # aberta) como alternativa ao profile fechado — permite extrudar/
+            # varrer/loftar uma linha ou spline para gerar uma "lasca" NURBS.
+            # Prefere SEMPRE profile fechado quando disponivel; so cai em
+            # openProfile se o sketch nao tem nenhum profile fechado E o
+            # chamador esta em modo surface (extrude/revolve/sweep/loft com
+            # as_surface=true). Sem o flag, mantem comportamento legado.
+            if sketch.profiles.count > 0:
+                return _resolve_profile_selection(sketch, args, design)
+            if as_surface:
+                open_prof = _open_profile_from_sketch(design, sketch, args)
+                if open_prof is not None:
+                    return open_prof
+            raise ToolError(
+                "fusion.no_profile",
+                "Sketch '{{}}' sem profile fechado{{}}.".format(
+                    sketch.name,
+                    " nem curvas p/ openProfile (precisa de geometria)"
+                    if as_surface
+                    else "",
+                ),
+            )
+
+
+        def _collect_edges_for_patch(design, edge_ids, body_ref):
+            # T5.1b (Fase 5): monta um ObjectCollection<BRepEdge> para o
+            # boundary de patch/extend/trim. edge_ids referem-se ao corpo
+            # body_ref (ou primeiro body se omitido), no mesmo esquema do
+            # query_geometry (indice estavel dentro do body).
+            if not isinstance(edge_ids, list) or len(edge_ids) == 0:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "edge_ids precisa ser lista nao-vazia de inteiros.",
+                )
+            body = _find_body(design, body_ref)
+            edge_count = body.edges.count
+            coll = adsk.core.ObjectCollection.create()
+            for raw in edge_ids:
+                try:
+                    i = int(raw)
+                except Exception:
+                    raise ToolError(
+                        "fusion.invalid_arg",
+                        "edge_id '{{}}' nao eh inteiro.".format(raw),
+                    )
+                if not (0 <= i < edge_count):
+                    raise ToolError(
+                        "fusion.invalid_arg",
+                        "edge_id {{}} fora do intervalo [0,{{}}) do body '{{}}'.".format(
+                            i, edge_count, body.name
+                        ),
+                    )
+                coll.add(body.edges.item(i))
+            return coll
+
+
+        def _create_surface_patch(args):
+            # T5.1b (Fase 5): cria uma SurfaceBody preenchendo um boundary
+            # fechado. Aceita boundary via sketch (primeiro profile fechado do
+            # sketch) OU via edge_ids (arestas livres de um body resolvido,
+            # tipico apos sweep/extrude as_surface=true que deixa aberturas).
+            # Bridge para a peca-exemplo do gate da Fase 5: as 2 tampas da
+            # carenagem entram via patch sobre as arestas livres da casca.
+            design = _design()
+            sketch_ref = args.get("sketch") or args.get("boundary_sketch")
+            edge_ids = args.get("edge_ids") or args.get("boundary_edge_ids")
+            operation = str(args.get("operation") or "new_body").lower()
+            op_map = {{
+                "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+                "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
+            }}
+            op = op_map.get(operation, op_map["new_body"])
+
+            if sketch_ref:
+                sketch = _find_sketch(design, sketch_ref)
+                if sketch.profiles.count == 0:
+                    raise ToolError(
+                        "fusion.no_profile",
+                        "Sketch '{{}}' sem profile fechado para patch.".format(sketch.name),
+                    )
+                boundary = sketch.profiles.item(0)
+                source_label = "sketch '{{}}'".format(sketch_ref)
+            elif edge_ids:
+                body_ref = (
+                    args.get("body_ref")
+                    or args.get("body")
+                    or args.get("body_name")
+                )
+                boundary = _collect_edges_for_patch(design, edge_ids, body_ref)
+                source_label = "{{}} aresta(s)".format(len(edge_ids))
+            else:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "create_surface_patch precisa de 'sketch' OU 'edge_ids' (+ body_ref).",
+                )
+
+            patches = _root(design).features.patchFeatures
+            inp = patches.createInput(boundary, op)
+            feat = patches.add(inp)
+            body_name = None
+            if feat.bodies.count > 0:
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or "Patch"))
+                feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
+            else:
+                stable_id = None
+            dims = (
+                _body_dims_mm(feat.bodies.item(0))
+                if feat.bodies.count > 0
+                else [0.0, 0.0, 0.0]
+            )
+            area_mm2 = 0.0
+            if feat.bodies.count > 0:
+                try:
+                    area_mm2 = round(feat.bodies.item(0).physicalProperties.area * 100.0, 2)
+                except Exception:
+                    area_mm2 = 0.0
+            return {{
+                "message": "Patch de superficie criado ({{}}).".format(source_label),
+                "body_name": body_name,
+                "stable_id": stable_id,
+                "dimensions_mm": dims,
+                "surface_area_mm2": area_mm2,
+                "is_surface": True,
+            }}
+
+
+        def _collect_surface_bodies(design, refs):
+            # T5.2 (Fase 5): resolve uma lista de refs (nomes/indices) em um
+            # ObjectCollection<BRepBody>. Aceita SurfaceBody E Body solido
+            # (stitch/thicken podem operar em ambos em algumas variantes da API).
+            # Aliases de entrada: ref unica vira lista de 1; itens podem ser
+            # string (nome ou indice serializado) ou int (indice direto).
+            if isinstance(refs, (str, int)):
+                refs = [refs]
+            if not isinstance(refs, list) or len(refs) == 0:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "surface_refs precisa ser lista nao-vazia (nomes ou indices).",
+                )
+            bodies = _root(design).bRepBodies
+            if bodies.count == 0:
+                raise ToolError("fusion.no_body", "Nenhum corpo na cena (precisa de SurfaceBody).")
+            coll = adsk.core.ObjectCollection.create()
+            available = [bodies.item(i).name for i in range(bodies.count)]
+            for raw in refs:
+                target = None
+                ref_str = str(raw)
+                for i in range(bodies.count):
+                    if bodies.item(i).name == ref_str:
+                        target = bodies.item(i)
+                        break
+                if target is None:
+                    try:
+                        idx = int(ref_str)
+                        if 0 <= idx < bodies.count:
+                            target = bodies.item(idx)
+                    except (TypeError, ValueError):
+                        pass
+                if target is None:
+                    raise ToolError(
+                        "fusion.body_not_found",
+                        "Surface/body nao encontrado: {{}}. Disponiveis: {{}}".format(
+                            ref_str, available
+                        ),
+                    )
+                coll.add(target)
+            return coll
+
+
+        def _thicken_surface(args):
+            # T5.2d (Fase 5): espessa SurfaceBody(ies) gerando BRepBody solido.
+            # Eh a PONTE surface->solid da peca-exemplo do gate (carenagem).
+            # API: ThickenFeatures.createInput(coll, thickness, isSymmetric,
+            # operation, isChainSelection). thickness em cm via ValueInput;
+            # parametrico (createByString) quando o arg referencia userParameter.
+            design = _design()
+            refs = (
+                args.get("surface_refs")
+                or args.get("surfaces")
+                or args.get("surface_ref")
+                or args.get("body_refs")
+                or args.get("bodies")
+            )
+            surfaces = _collect_surface_bodies(design, refs)
+            thickness_mm = _eval_param(args.get("thickness_mm"), design, 0.0) or 0.0
+            if thickness_mm <= 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "thickness_mm precisa ser positivo.",
+                )
+            operation = str(args.get("operation") or "new_body").lower()
+            op_map = {{
+                "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+                "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
+                "cut": adsk.fusion.FeatureOperations.CutFeatureOperation,
+                "intersect": adsk.fusion.FeatureOperations.IntersectFeatureOperation,
+            }}
+            op = op_map.get(operation, op_map["new_body"])
+            is_symmetric = bool(args.get("is_symmetric") or args.get("symmetric"))
+            chain_raw = args.get("chain")
+            is_chain = True if chain_raw is None else bool(chain_raw)
+            thicken = _root(design).features.thickenFeatures
+            thickness_vi = _param_value_input(args.get("thickness_mm"), design)
+            inp = thicken.createInput(surfaces, thickness_vi, is_symmetric, op, is_chain)
+            feat = thicken.add(inp)
+            body_name = None
+            if feat.bodies.count > 0:
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or "Thickened"))
+                feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
+            else:
+                stable_id = None
+            dims = (
+                _body_dims_mm(feat.bodies.item(0))
+                if feat.bodies.count > 0
+                else [0.0, 0.0, 0.0]
+            )
+            return {{
+                "message": "Superficie espessada em {{}} mm ({{}} face(s)){{}}.".format(
+                    thickness_mm,
+                    surfaces.count,
+                    " [simetrico]" if is_symmetric else "",
+                ),
+                "body_name": body_name,
+                "stable_id": stable_id,
+                "dimensions_mm": dims,
+                "is_surface": False,
+            }}
+
+
+        def _stitch_surfaces(args):
+            # T5.2e (Fase 5): costura 2+ SurfaceBody por arestas livres
+            # adjacentes. Resultado pode ser SurfaceBody (se costura nao fecha)
+            # OU BRepBody solido (se fecha volume) — Fusion decide. is_surface
+            # no output reflete o que saiu, util pro verifier saber se pode
+            # ja passar pro fillet/export ou se precisa de thicken antes.
+            design = _design()
+            refs = (
+                args.get("surface_refs")
+                or args.get("surfaces")
+                or args.get("body_refs")
+                or args.get("bodies")
+            )
+            surfaces = _collect_surface_bodies(design, refs)
+            if surfaces.count < 2:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "stitch_surfaces precisa de >= 2 superficies (recebido: {{}}).".format(
+                        surfaces.count
+                    ),
+                )
+            tolerance_mm = _eval_param(args.get("tolerance_mm"), design, 0.01)
+            if tolerance_mm is None or tolerance_mm <= 0:
+                tolerance_mm = 0.01
+            operation = str(args.get("operation") or "new_body").lower()
+            op_map = {{
+                "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+                "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
+            }}
+            op = op_map.get(operation, op_map["new_body"])
+            stitches = _root(design).features.stitchFeatures
+            tolerance_vi = adsk.core.ValueInput.createByReal(float(tolerance_mm) / 10.0)
+            inp = stitches.createInput(surfaces, tolerance_vi, op)
+            feat = stitches.add(inp)
+            body_name = None
+            is_surface_result = True
+            if feat.bodies.count > 0:
+                first = feat.bodies.item(0)
+                try:
+                    is_surface_result = not bool(first.isSolid)
+                except Exception:
+                    is_surface_result = True
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or "Stitched"))
+                first.name = body_name
+                stable_id = _attach_stable_id(first)
+            else:
+                stable_id = None
+            dims = (
+                _body_dims_mm(feat.bodies.item(0))
+                if feat.bodies.count > 0
+                else [0.0, 0.0, 0.0]
+            )
+            area_mm2 = 0.0
+            if feat.bodies.count > 0:
+                try:
+                    area_mm2 = round(feat.bodies.item(0).physicalProperties.area * 100.0, 2)
+                except Exception:
+                    area_mm2 = 0.0
+            return {{
+                "message": "Stitch de {{}} superficies (tol={{}}mm){{}}.".format(
+                    surfaces.count,
+                    tolerance_mm,
+                    " - resultado solido" if not is_surface_result else "",
+                ),
+                "body_name": body_name,
+                "stable_id": stable_id,
+                "dimensions_mm": dims,
+                "surface_area_mm2": area_mm2,
+                "is_surface": is_surface_result,
+            }}
+
+
+        def _trim_surface(args):
+            # T5.2a (Fase 5): apara SurfaceBody com uma ferramenta (sketch
+            # curve, outra superficie ou face). API: trimFeatures.createInput
+            # (trimmingTool, surfaceToTrim) — escolhe célula a manter por
+            # criterio keep ("largest" default por area). Versoes diferentes
+            # do Fusion expõem createInput vs createInput2 — tentamos a
+            # forma de 2 args primeiro.
+            design = _design()
+            surface_ref = (
+                args.get("surface_ref")
+                or args.get("surface")
+                or args.get("body_ref")
+                or args.get("body")
+            )
+            tool_ref = (
+                args.get("trim_tool_ref")
+                or args.get("trim_tool")
+                or args.get("tool_ref")
+                or args.get("trimming_tool")
+            )
+            if not surface_ref or not tool_ref:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "trim_surface precisa de surface_ref + trim_tool_ref.",
+                )
+            surface_body = _find_body(design, surface_ref)
+            keep = str(args.get("keep") or "largest").lower()
+            # tool pode ser body ou sketch — tentamos sketch primeiro pra
+            # pegar a curva (mais comum em trim de superficie).
+            tool_entity = None
+            try:
+                tool_entity = _find_sketch(design, tool_ref)
+            except Exception:
+                tool_entity = None
+            if tool_entity is None:
+                tool_entity = _find_body(design, tool_ref)
+            trims = _root(design).features.trimFeatures
+            # Fix gate (probe extend_trim): TrimFeatures.createInput aceita
+            # APENAS a trimTool (1 arg); a surface a aparar e as celulas vem
+            # do TrimFeatureInput. Selecionamos as celulas a remover por area
+            # (keep=largest mantem a maior, remove as outras) via isRemoved.
+            inp = trims.createInput(tool_entity)
+            removed = 0
+            try:
+                cells = inp.bRepCells
+                if cells is not None and cells.count > 1:
+                    best_i, best_a = 0, -1.0
+                    areas = []
+                    for ci in range(cells.count):
+                        try:
+                            a = cells.item(ci).cellSurface.area
+                        except Exception:
+                            a = 0.0
+                        areas.append(a)
+                        if a > best_a:
+                            best_a, best_i = a, ci
+                    for ci in range(cells.count):
+                        try:
+                            cells.item(ci).isRemoved = ci != best_i
+                            if ci != best_i:
+                                removed += 1
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            feat = trims.add(inp)
+            body_name = None
+            if feat.bodies.count > 0:
+                target = feat.bodies.item(0)
+                if keep == "largest" and feat.bodies.count > 1:
+                    best_area = -1.0
+                    for bi in range(feat.bodies.count):
+                        try:
+                            area = feat.bodies.item(bi).physicalProperties.area
+                        except Exception:
+                            area = 0.0
+                        if area > best_area:
+                            best_area = area
+                            target = feat.bodies.item(bi)
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or "Trimmed"))
+                target.name = body_name
+                stable_id = _attach_stable_id(target)
+            else:
+                stable_id = None
+            dims = (
+                _body_dims_mm(feat.bodies.item(0))
+                if feat.bodies.count > 0
+                else [0.0, 0.0, 0.0]
+            )
+            return {{
+                "message": "Trim de superficie aplicado (keep={{}}).".format(keep),
+                "body_name": body_name,
+                "stable_id": stable_id,
+                "dimensions_mm": dims,
+                "is_surface": True,
+            }}
+
+
+        def _extend_surface(args):
+            # T5.2b (Fase 5): estende SurfaceBody ao longo de arestas livres.
+            # API: extendFeatures.createInput(edges, ValueInput distance,
+            # SurfaceExtendType). edge_ids referem-se ao body_ref (default
+            # primeiro body); use selector "free_edges" via query_geometry
+            # para descobrir os indices.
+            design = _design()
+            edge_ids = args.get("edge_ids") or args.get("edges")
+            distance_mm = _eval_param(args.get("distance_mm"), design, 0.0) or 0.0
+            if distance_mm <= 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "distance_mm precisa ser positivo.",
+                )
+            extend_type_name = str(args.get("extend_type") or "natural").lower()
+            extend_type_map = {{
+                "natural": adsk.fusion.SurfaceExtendTypes.NaturalSurfaceExtendType,
+                "perpendicular": adsk.fusion.SurfaceExtendTypes.PerpendicularSurfaceExtendType,
+                "tangent": adsk.fusion.SurfaceExtendTypes.TangentSurfaceExtendType,
+            }}
+            extend_type = extend_type_map.get(
+                extend_type_name, extend_type_map["natural"]
+            )
+            body_ref = args.get("body_ref") or args.get("body") or args.get("body_name")
+            if not edge_ids:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "extend_surface precisa de edge_ids (use query_geometry com selector free_edges).",
+                )
+            edges = _collect_edges_for_patch(design, edge_ids, body_ref)
+            extends = _root(design).features.extendFeatures
+            distance_vi = _param_value_input(args.get("distance_mm"), design)
+            inp = extends.createInput(edges, distance_vi, extend_type)
+            feat = extends.add(inp)
+            return {{
+                "message": "Superficie estendida {{}} mm ({{}} aresta(s), tipo={{}}).".format(
+                    distance_mm, edges.count, extend_type_name
+                ),
+                "feature_id": feat.entityToken if hasattr(feat, "entityToken") else None,
+                "is_surface": True,
+            }}
+
+
+        def _offset_surface(args):
+            # T5.2c (Fase 5): cria SurfaceBody paralela a face(s)/superficie(s).
+            # API: offsetFeatures.createInput(inputSurfaces, ValueInput distance,
+            # FeatureOperation). Aceita lista de faces ou SurfaceBody inteiro.
+            design = _design()
+            distance_mm = _eval_param(args.get("distance_mm"), design, 0.0) or 0.0
+            if distance_mm == 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "distance_mm precisa ser diferente de zero.",
+                )
+            operation = str(args.get("operation") or "new_body").lower()
+            op_map = {{
+                "new_body": adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+                "join": adsk.fusion.FeatureOperations.JoinFeatureOperation,
+            }}
+            op = op_map.get(operation, op_map["new_body"])
+            # Resolucao: se face_ids veio, monta ObjectCollection<BRepFace>
+            # usando body_ref; senao usa surface_refs (collection de bodies).
+            face_ids = args.get("face_ids") or args.get("faces")
+            surface_refs = args.get("surface_refs") or args.get("surfaces")
+            inputs = None
+            source_label = ""
+            if face_ids:
+                body_ref = args.get("body_ref") or args.get("body") or args.get("body_name")
+                body = _find_body(design, body_ref)
+                inputs = adsk.core.ObjectCollection.create()
+                face_count = body.faces.count
+                for raw in face_ids:
+                    try:
+                        i = int(raw)
+                    except Exception:
+                        raise ToolError(
+                            "fusion.invalid_arg",
+                            "face_id '{{}}' nao eh inteiro.".format(raw),
+                        )
+                    if 0 <= i < face_count:
+                        inputs.add(body.faces.item(i))
+                source_label = "{{}} face(s)".format(inputs.count)
+            elif surface_refs:
+                inputs = _collect_surface_bodies(design, surface_refs)
+                source_label = "{{}} superficie(s)".format(inputs.count)
+            else:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "offset_surface precisa de face_ids+body_ref OU surface_refs.",
+                )
+            offsets = _root(design).features.offsetFeatures
+            distance_vi = _param_value_input(args.get("distance_mm"), design)
+            inp = offsets.createInput(inputs, distance_vi, op)
+            feat = offsets.add(inp)
+            body_name = None
+            if feat.bodies.count > 0:
+                explicit = (
+                    args.get("name")
+                    or args.get("result_name")
+                    or args.get("body_name")
+                    or args.get("result")
+                )
+                body_name = _unique_body_name(design, str(explicit or "Offset"))
+                feat.bodies.item(0).name = body_name
+                stable_id = _attach_stable_id(feat.bodies.item(0))
+            else:
+                stable_id = None
+            dims = (
+                _body_dims_mm(feat.bodies.item(0))
+                if feat.bodies.count > 0
+                else [0.0, 0.0, 0.0]
+            )
+            return {{
+                "message": "Offset de {{}} mm aplicado ({{}}).".format(
+                    distance_mm, source_label
+                ),
+                "body_name": body_name,
+                "stable_id": stable_id,
+                "dimensions_mm": dims,
+                "is_surface": True,
+            }}
+
+
+        def _unstitch_surface(args):
+            # T5.2f (Fase 5): quebra body/SurfaceBody em superficies individuais
+            # por face — inverso do stitch. Util para reparar trecho especifico
+            # (unstitch -> patch novo -> stitch). API:
+            # unstitchFeatures.add(faces, isChainSelection, isSplitConnected).
+            design = _design()
+            face_ids = args.get("face_ids") or args.get("faces")
+            surface_ref = (
+                args.get("surface_ref")
+                or args.get("body_ref")
+                or args.get("body")
+                or args.get("body_name")
+            )
+            faces_coll = adsk.core.ObjectCollection.create()
+            if face_ids:
+                body = _find_body(design, surface_ref)
+                face_count = body.faces.count
+                for raw in face_ids:
+                    try:
+                        i = int(raw)
+                    except Exception:
+                        raise ToolError(
+                            "fusion.invalid_arg",
+                            "face_id '{{}}' nao eh inteiro.".format(raw),
+                        )
+                    if 0 <= i < face_count:
+                        faces_coll.add(body.faces.item(i))
+            elif surface_ref:
+                # Sem face_ids, unstitch o body inteiro (todas as faces).
+                body = _find_body(design, surface_ref)
+                for fi in range(body.faces.count):
+                    faces_coll.add(body.faces.item(fi))
+            else:
+                raise ToolError(
+                    "fusion.invalid_arg",
+                    "unstitch_surface precisa de face_ids+body_ref OU surface_ref.",
+                )
+            is_chain = bool(args.get("is_chain_selection") or args.get("chain"))
+            unstitches = _root(design).features.unstitchFeatures
+            # Fix gate (probe edicao): UnstitchFeatures NAO tem createInput — o
+            # .add() recebe os argumentos direto: add(faces, isChainSelection,
+            # isSplitConnectedSurfaces). Tenta a forma completa e cai p/ formas
+            # mais curtas em versoes diferentes do Fusion.
+            try:
+                feat = unstitches.add(faces_coll, is_chain, False)
+            except Exception:
+                try:
+                    feat = unstitches.add(faces_coll, is_chain)
+                except Exception:
+                    feat = unstitches.add(faces_coll)
+            return {{
+                "message": "Unstitch aplicado ({{}} face(s), chain={{}}).".format(
+                    faces_coll.count, is_chain
+                ),
+                "bodies_count": feat.bodies.count if hasattr(feat, "bodies") else 0,
+                "is_surface": True,
+            }}
 
 
         def _hole(args):
@@ -1525,6 +2760,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     diameter_mm, depth_mm or "through", body.name, cbore_note
                 ),
                 "body_name": body.name,
+                "dimensions_mm": _body_dims_mm(body),
             }}
 
 
@@ -1665,8 +2901,16 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # Onda D (high_risk): boolean entre bodies existentes.
             # target_ref + tool_refs[] (nomes/indices) + operation.
             design = _design()
-            target = _find_body(design, args.get("target_ref") or args.get("target"))
-            tool_refs = args.get("tool_refs") or args.get("tools") or []
+            # Drift do gate F3 (parafuso f9f2ce0b): o LLM usa target_body/
+            # target_name em vez de target_ref/target.
+            target = _find_body(
+                design,
+                args.get("target_ref")
+                or args.get("target")
+                or args.get("target_body")
+                or args.get("target_name"),
+            )
+            tool_refs = args.get("tool_refs") or args.get("tools") or args.get("tool_bodies") or []
             if not isinstance(tool_refs, list) or not tool_refs:
                 raise ToolError(
                     "fusion.invalid_dimensions",
@@ -1690,11 +2934,16 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             inp = combines.createInput(target, tools)
             inp.operation = op_map[operation]
             combines.add(inp)
+            try:
+                dims = _body_dims_mm(target)
+            except Exception:
+                dims = [0.0, 0.0, 0.0]  # target consumido pelo boolean (cut/intersect)
             return {{
                 "message": "Combine {{}} de {{}} body(ies) em '{{}}'.".format(
                     operation, tools.count, target.name
                 ),
                 "body_name": target.name,
+                "dimensions_mm": dims,
             }}
 
 
@@ -1718,25 +2967,47 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             op = op_map.get(operation, op_map["new_body"])
             lofts = _root(design).features.loftFeatures
             inp = lofts.createInput(op)
+            # T5.1a/T5.1b: as_surface=true → isSolid=False E permite que cada
+            # section seja openProfile (curva aberta) alem de profile fechado.
+            as_surface = bool(args.get("as_surface"))
+            if as_surface:
+                inp.isSolid = False
             for ref in refs:
                 sk = _find_sketch(design, ref)
-                if sk.profiles.count == 0:
+                if sk.profiles.count > 0:
+                    section = sk.profiles.item(0)
+                elif as_surface:
+                    # T5.1b fix: Sketch nao tem .openProfiles; usar
+                    # createOpenProfile (ver _open_profile_from_sketch).
+                    section = _open_profile_from_sketch(design, sk, {{}})
+                    if section is None:
+                        raise ToolError(
+                            "fusion.no_profile",
+                            "Sketch '{{}}' sem profile fechado nem curvas.".format(ref),
+                        )
+                else:
                     raise ToolError(
                         "fusion.no_profile",
-                        "Sketch '{{}}' nao tem profile fechado.".format(ref),
+                        "Sketch '{{}}' sem profile fechado.".format(ref),
                     )
-                inp.loftSections.add(sk.profiles.item(0))
-            lofts.add(inp)
+                inp.loftSections.add(section)
+            feat = lofts.add(inp)
+            dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
+            kind_label = "Loft de superficie" if as_surface else "Loft"
             return {{
-                "message": "Loft entre {{}} profiles.".format(len(refs)),
+                "message": "{{}} entre {{}} profiles.".format(kind_label, len(refs)),
+                "dimensions_mm": dims,
+                "is_surface": as_surface,
             }}
 
 
         def _sweep_profile(args):
             # Onda E: varre um profile ao longo de um caminho (sketch path).
+            # T5.1b: as_surface=true aceita perfil aberto (gera lasca NURBS).
             design = _design()
             profile_sketch = _find_sketch(design, args.get("profile") or args.get("profile_sketch"))
-            if profile_sketch.profiles.count == 0:
+            _as_surface_sweep = bool(args.get("as_surface"))
+            if not _as_surface_sweep and profile_sketch.profiles.count == 0:
                 raise ToolError("fusion.no_profile", "Profile sem perfil fechado.")
             path_sketch = _find_sketch(design, args.get("path") or args.get("path_sketch"))
             if path_sketch.sketchCurves.count == 0:
@@ -1751,12 +3022,21 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             root = _root(design)
             path = root.features.createPath(path_sketch.sketchCurves.item(0))
             sweeps = root.features.sweepFeatures
-            inp = sweeps.createInput(profile_sketch.profiles.item(0), path, op)
-            sweeps.add(inp)
+            as_surface = _as_surface_sweep
+            inp = sweeps.createInput(
+                _profile_or_open(profile_sketch, args, design, as_surface), path, op
+            )
+            if as_surface:
+                inp.isSolid = False
+            feat = sweeps.add(inp)
+            dims = _body_dims_mm(feat.bodies.item(0)) if feat.bodies.count > 0 else [0.0, 0.0, 0.0]
+            kind_label = "Sweep de superficie" if as_surface else "Sweep"
             return {{
-                "message": "Sweep do profile '{{}}' pelo path '{{}}'.".format(
-                    profile_sketch.name, path_sketch.name
+                "message": "{{}} do profile '{{}}' pelo path '{{}}'.".format(
+                    kind_label, profile_sketch.name, path_sketch.name
                 ),
+                "dimensions_mm": dims,
+                "is_surface": as_surface,
             }}
 
 
@@ -1810,30 +3090,59 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
         # ---- Onda F: modificacao direta de bodies ----
 
         def _move_body(args):
-            # Onda F: translada (e opcionalmente nao rotaciona ainda) um body.
+            # Onda F + G3: translada E/OU rotaciona um body. Translacao via
+            # translation_mm=[x,y,z]; rotacao via rotation_deg + axis (x/y/z ou
+            # vetor [x,y,z]) em torno de center_mm (default = centro do bbox).
             design = _design()
             body = _find_body(design, args.get("body_ref") or args.get("body") or args.get("body_name"))
-            trans = _eval_pair(args.get("translation_mm"), design)
             tx = ty = tz = 0.0
             raw = args.get("translation_mm")
             if isinstance(raw, (list, tuple)) and len(raw) >= 3:
                 tx = _eval_param(raw[0], design, 0.0) or 0.0
                 ty = _eval_param(raw[1], design, 0.0) or 0.0
                 tz = _eval_param(raw[2], design, 0.0) or 0.0
-            elif trans is not None:
-                tx, ty = trans
-            if tx == 0 and ty == 0 and tz == 0:
+            else:
+                trans = _eval_pair(raw, design)
+                if trans is not None:
+                    tx, ty = trans
+            rot_deg = _eval_param(args.get("rotation_deg"), design, 0.0) or 0.0
+            axis_arg = args.get("axis")
+            axis_map = {{"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}}
+            if isinstance(axis_arg, (list, tuple)) and len(axis_arg) >= 3:
+                ax = (float(axis_arg[0]), float(axis_arg[1]), float(axis_arg[2]))
+                axis_label = "vec"
+            else:
+                axis_label = str(axis_arg or "z").lower()
+                ax = axis_map.get(axis_label, (0.0, 0.0, 1.0))
+            if tx == 0 and ty == 0 and tz == 0 and rot_deg == 0:
                 raise ToolError(
                     "fusion.invalid_dimensions",
-                    "translation_mm precisa ter ao menos um componente nao-zero.",
+                    "Informe translation_mm e/ou rotation_deg nao-zero.",
                 )
             root = _root(design)
             coll = adsk.core.ObjectCollection.create()
             coll.add(body)
             transform = adsk.core.Matrix3D.create()
-            transform.translation = adsk.core.Vector3D.create(
-                tx / 10.0, ty / 10.0, tz / 10.0
-            )
+            if rot_deg != 0:
+                center = args.get("center_mm")
+                if isinstance(center, (list, tuple)) and len(center) >= 3:
+                    cx = (_eval_param(center[0], design, 0.0) or 0.0) / 10.0
+                    cy = (_eval_param(center[1], design, 0.0) or 0.0) / 10.0
+                    cz = (_eval_param(center[2], design, 0.0) or 0.0) / 10.0
+                else:
+                    bb = body.boundingBox
+                    cx = (bb.minPoint.x + bb.maxPoint.x) / 2.0
+                    cy = (bb.minPoint.y + bb.maxPoint.y) / 2.0
+                    cz = (bb.minPoint.z + bb.maxPoint.z) / 2.0
+                transform.setToRotation(
+                    rot_deg * math.pi / 180.0,
+                    adsk.core.Vector3D.create(ax[0], ax[1], ax[2]),
+                    adsk.core.Point3D.create(cx, cy, cz),
+                )
+            if tx != 0 or ty != 0 or tz != 0:
+                trans_m = adsk.core.Matrix3D.create()
+                trans_m.translation = adsk.core.Vector3D.create(tx / 10.0, ty / 10.0, tz / 10.0)
+                transform.transformBy(trans_m)
             moves = root.features.moveFeatures
             # G5: moveFeatures.createInput(entities, transform) foi deprecada
             # em favor de createInput2(entities)+defineAsFreeMove(transform).
@@ -1845,8 +3154,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 inp.defineAsFreeMove(transform)
                 moves.add(inp)
             return {{
-                "message": "Body '{{}}' movido ({{}},{{}},{{}})mm.".format(
-                    body.name, tx, ty, tz
+                "message": "Body '{{}}' movido t=({{}},{{}},{{}})mm rot={{}}deg/{{}}.".format(
+                    body.name, tx, ty, tz, rot_deg, axis_label
                 ),
                 "body_name": body.name,
             }}
@@ -1919,9 +3228,48 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # G2.2 (read-only): lista bodies/faces/arestas com indice estavel
             # + metadata, para o LLM mirar por face_ids/edge_ids depois em vez
             # de adivinhar selectors. Limita contagem para nao estourar payload.
+            # F1 (T1.1): expoe entityToken de face/edge (identidade ESTAVEL que
+            # sobrevive a recompute, ao contrario do indice posicional) +
+            # topologia (raio de cilindricas, adjacencia edge->faces, arestas
+            # circulares). include_tokens=false desliga (payload menor).
             design = _design()
             root = _root(design)
             limit = int(_eval_param(args.get("limit"), design, 60.0) or 60)
+            _inc_tok = args.get("include_tokens")
+            include_tokens = True if _inc_tok is None else bool(_inc_tok)
+
+            def _safe_token(entity):
+                if not include_tokens:
+                    return None
+                try:
+                    return entity.entityToken
+                except Exception:
+                    return None
+
+            def _face_radius_mm(face):
+                # Raio (mm) de faces cilindricas/conicas/esfericas; None senao.
+                try:
+                    geom = face.geometry
+                    r = getattr(geom, "radius", None)
+                    if r is not None:
+                        return round(r * 10.0, 3)
+                except Exception:
+                    pass
+                return None
+
+            def _edge_circle_mm(edge):
+                # (is_circular, radius_mm) para arestas em arco/circulo — chave
+                # para furos/knuckle (o LLM mede o diametro do pino para casar
+                # o furo). None de raio quando nao circular.
+                try:
+                    geom = edge.geometry
+                    r = getattr(geom, "radius", None)
+                    if r is not None:
+                        return True, round(r * 10.0, 3)
+                except Exception:
+                    pass
+                return False, None
+
             bodies_out = []
             for bi in range(root.bRepBodies.count):
                 body = root.bRepBodies.item(bi)
@@ -1946,8 +3294,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         area_mm2 = 0.0
                     faces_out.append({{
                         "face_index": fi,
+                        "face_token": _safe_token(f),
                         "type": type_name,
                         "area_mm2": round(area_mm2, 2),
+                        "radius_mm": _face_radius_mm(f),
                         "normal_axis": _face_normal_axis(f),
                         "center_mm": [
                             round((fbb.minPoint.x + fbb.maxPoint.x) * 5.0, 2),
@@ -1962,13 +3312,59 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         length_mm = e.length * 10.0
                     except Exception:
                         length_mm = 0.0
+                    is_circular, edge_radius_mm = _edge_circle_mm(e)
+                    # Adjacencia edge->faces (tokens): "que faces esta aresta
+                    # separa" — o LLM usa para mirar a face certa a partir de
+                    # uma aresta conhecida.
+                    adj_face_tokens = []
+                    if include_tokens:
+                        try:
+                            for _fi in range(e.faces.count):
+                                _tok = _safe_token(e.faces.item(_fi))
+                                if _tok is not None:
+                                    adj_face_tokens.append(_tok)
+                        except Exception:
+                            adj_face_tokens = []
                     edges_out.append({{
                         "edge_index": ei,
+                        "edge_token": _safe_token(e),
                         "length_mm": round(length_mm, 2),
+                        "is_circular": is_circular,
+                        "radius_mm": edge_radius_mm,
+                        "adjacent_face_tokens": adj_face_tokens,
                     }})
+                # T5.3a (Fase 5): expor is_solid/is_closed/surface_area_mm2 e
+                # contagem de arestas livres para SurfaceBody. O LLM precisa
+                # ver isso para decidir: stitch fechou? thicken pode rodar?
+                # Sem isso o verifier de dimensoes nao detecta "stitch deixou
+                # gap" — a peca-exemplo (carenagem) escorrega.
+                try:
+                    is_solid = bool(body.isSolid)
+                except Exception:
+                    is_solid = True
+                try:
+                    surface_area_mm2 = round(body.physicalProperties.area * 100.0, 2)
+                except Exception:
+                    surface_area_mm2 = 0.0
+                free_edge_count = 0
+                for ei2 in range(body.edges.count):
+                    try:
+                        if body.edges.item(ei2).faces.count <= 1:
+                            free_edge_count += 1
+                    except Exception:
+                        pass
+                # is_closed = body solido (fechado por definicao) OU superficie
+                # sem arestas livres. Fix gate: um stitch que fecha volume vira
+                # is_solid=true, mas a seam do revolve 360 pode contar 1 free
+                # edge — sem o "is_solid or", o verifier teria falso-negativo de
+                # is_closed e o loop "corrigiria" uma costura que ja funcionou.
+                is_closed = bool(is_solid) or free_edge_count == 0
                 bodies_out.append({{
                     "body_index": bi,
                     "name": body.name,
+                    # T4.2: stable_id sobrevive a rename do usuario; o LLM
+                    # deve preferi-lo a body_name em refs subsequentes.
+                    "stable_id": _stable_id_of(body),
                     "dimensions_mm": [
                         round((bbox.maxPoint.x - bbox.minPoint.x) * 10.0, 2),
                         round((bbox.maxPoint.y - bbox.minPoint.y) * 10.0, 2),
@@ -1976,12 +3372,135 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     ],
                     "face_count": body.faces.count,
                     "edge_count": body.edges.count,
+                    "free_edge_count": free_edge_count,
+                    "is_solid": is_solid,
+                    "is_closed": is_closed,
+                    "surface_area_mm2": surface_area_mm2,
                     "faces": faces_out,
                     "edges": edges_out,
                 }})
             return {{
                 "message": "{{}} corpo(s) inspecionado(s).".format(len(bodies_out)),
                 "bodies": bodies_out,
+            }}
+
+
+        def _query_timeline(args):
+            # T3.1 (read-only): le a timeline (features, ordem, supressao) + os
+            # user parameters atuais. Insumo da reconciliacao (T3.2/T3.3): o
+            # planner ve o estado REAL antes de planejar uma edicao, mesmo que o
+            # usuario tenha mexido a mao direto no Fusion.
+            design = _design()
+            limit = int(_eval_param(args.get("limit"), design, 200.0) or 200)
+            features_out = []
+            tl = design.timeline
+            for i in range(min(tl.count, limit)):
+                obj = tl.item(i)
+                try:
+                    ent = obj.entity
+                except Exception:
+                    ent = None
+                try:
+                    fname = ent.name if ent is not None else None
+                except Exception:
+                    fname = None
+                try:
+                    ftype = ent.objectType if ent is not None else None
+                except Exception:
+                    ftype = None
+                try:
+                    suppressed = bool(obj.isSuppressed)
+                except Exception:
+                    suppressed = False
+                features_out.append({{
+                    "index": i,
+                    "name": fname,
+                    "type": ftype,
+                    "suppressed": suppressed,
+                }})
+            params_out = []
+            ups = design.userParameters
+            for pi in range(min(ups.count, limit)):
+                p = ups.item(pi)
+                try:
+                    params_out.append({{
+                        "name": p.name,
+                        "expression": p.expression,
+                        "unit": p.unit,
+                    }})
+                except Exception:
+                    continue
+            return {{
+                "message": "Timeline: {{}} feature(s), {{}} parametro(s).".format(
+                    tl.count, ups.count
+                ),
+                "timeline_count": tl.count,
+                "timeline": features_out,
+                "parameters": params_out,
+            }}
+
+
+        def _rollback_timeline(args):
+            # T3.6: desfaz a ultima edicao deletando as features da timeline a
+            # partir de target_count (a contagem capturada ANTES da edicao).
+            # Deleta de tras pra frente p/ nao invalidar indices. Destrutivo;
+            # acionado pelo usuario (botao undo), nunca planejado pelo LLM.
+            design = _design()
+            raw = args.get("target_count")
+            try:
+                target = int(raw)
+            except (TypeError, ValueError):
+                target = -1
+            if target < 0:
+                raise ToolError(
+                    "fusion.invalid_dimensions",
+                    "target_count (contagem da timeline antes da edicao) e obrigatorio.",
+                )
+            tl = design.timeline
+            before = tl.count
+            if target > before:
+                target = before
+            removed = 0
+            errors = []
+            for i in range(before - 1, target - 1, -1):
+                obj = tl.item(i)
+                done = False
+                # TimelineObject.deleteMe() devolve BOOL (nem sempre levanta) — o
+                # codigo antigo ignorava o retorno e contava como removido mesmo
+                # quando falhava. Checa o bool E captura a excecao real do Fusion.
+                try:
+                    if obj.deleteMe():
+                        done = True
+                except Exception as exc:
+                    errors.append("tl[{{}}].deleteMe: {{}}".format(i, exc))
+                if not done:
+                    # Fallback: deleta a feature/entidade subjacente.
+                    try:
+                        ent = obj.entity
+                        if ent is not None and hasattr(ent, "deleteMe") and ent.deleteMe():
+                            done = True
+                    except Exception as exc:
+                        errors.append("tl[{{}}].entity.deleteMe: {{}}".format(i, exc))
+                if done:
+                    removed += 1
+            after = design.timeline.count
+            if removed == 0 and target < before:
+                # Nao reverteu nada quando deveria: falha ALTA (nao "completed"
+                # silencioso) com o motivo real do Fusion p/ diagnostico/gate.
+                raise ToolError(
+                    "fusion.rollback_failed",
+                    "Rollback nao removeu features (timeline segue em {{}}). {{}}".format(
+                        after, " | ".join(errors[:6]) or "deleteMe sem efeito e sem excecao"
+                    ),
+                )
+            msg = "Rollback: {{}}/{{}} feature(s) removida(s) (timeline {{}} -> {{}}).".format(
+                removed, before - target, before, after
+            )
+            return {{
+                "message": msg,
+                "removed": removed,
+                "timeline_count": after,
+                "errors": errors[:12],
             }}
 
 
@@ -1996,6 +3515,21 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # sem chaves literais porque este modulo inteiro e um f-string
             # template e qualquer ``X`` cru e interpretado como expressao.
             design = _design()
+
+            def _infer_unit_from_expr(raw_expr):
+                # Fix T4 gate: o LLM as vezes manda a unidade DENTRO da
+                # expression (ex.: "270 deg", "5mm", "1.5 rad"). Quando o
+                # nome do parametro nao tem sufixo (_deg/_mm/...) e nao ha
+                # ``unit`` explicito, o fallback "mm" do _unit_for fazia
+                # userParameters.add rejeitar "270 deg" com "Invalid
+                # expression". Aqui detectamos a unidade no fim da string.
+                if not isinstance(raw_expr, str):
+                    return None
+                stripped = raw_expr.strip().lower().replace(" ", "")
+                for candidate in ("deg", "rad", "mm", "cm"):
+                    if stripped.endswith(candidate):
+                        return candidate
+                return None
 
             def _unit_for(param_name, default_unit):
                 lower_name = str(param_name).lower()
@@ -2042,7 +3576,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 for raw_name, raw_value in bulk.items():
                     param_name = str(raw_name).strip()
                     expression = str(raw_value).strip()
-                    unit = _unit_for(param_name, default_unit)
+                    unit = (
+                        _infer_unit_from_expr(expression)
+                        or _unit_for(param_name, default_unit)
+                    )
                     _ensure_param(param_name, expression, unit, "")
                     applied.append(param_name)
                 return {{
@@ -2084,7 +3621,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     for raw_name, raw_value in implicit_bulk.items():
                         param_name = str(raw_name).strip()
                         expression = str(raw_value).strip()
-                        unit = _unit_for(param_name, default_unit)
+                        unit = (
+                            _infer_unit_from_expr(expression)
+                            or _unit_for(param_name, default_unit)
+                        )
                         _ensure_param(param_name, expression, unit, "")
                         applied.append(param_name)
                     return {{
@@ -2114,7 +3654,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         expression = str(args.get(alias_key)).strip()
                         alias_unit = alias_unit_hint
                         break
-            unit = str(args.get("unit") or alias_unit or _unit_for(name, "mm"))
+            unit = str(
+                args.get("unit")
+                or alias_unit
+                or _infer_unit_from_expr(expression)
+                or _unit_for(name, "mm")
+            )
             comment = str(args.get("comment") or "")
             _ensure_param(name, expression, unit, comment)
             return {{"message": "Parâmetro '{{}}' = {{}}.".format(name, expression)}}
@@ -2282,6 +3827,532 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             }}
 
 
+        # ---- F3: mecanismos funcionais (rosca, componente, junta, macros) ----
+
+        def _nearest_thread_designation(query, thread_type, diameter_mm, is_internal):
+            # Escolhe a designacao metrica cujo tamanho nominal mais se aproxima
+            # do diametro (mm). allSizes da os tamanhos nominais; allDesignations
+            # da as designacoes (ex.: "M6x1") — pega a primeira (passo grosso).
+            if diameter_mm <= 0:
+                return None
+            try:
+                sizes = list(query.allSizes(thread_type))
+            except Exception:
+                return None
+            best = None
+            best_err = None
+            for size in sizes:
+                try:
+                    nominal = float(size)
+                except (TypeError, ValueError):
+                    continue
+                err = abs(nominal - diameter_mm)
+                if best_err is None or err < best_err:
+                    best_err = err
+                    best = size
+            if best is None:
+                return None
+            try:
+                designations = list(query.allDesignations(thread_type, best))
+            except Exception:
+                return None
+            return designations[0] if designations else None
+
+
+        def _thread(args):
+            # F3: rosca MODELADA (geometria real, nao cosmetica) numa face
+            # cilindrica de um corpo. Usa ThreadFeatures.createInput +
+            # isModeled=True. Resolve a face por token (F1) ou selector
+            # "cylindrical". designation tipo "M6x1"; senao deriva do diametro.
+            design = _design()
+            body = _find_body(
+                design,
+                args.get("body_ref") or args.get("body") or args.get("body_name"),
+            )
+            face = None
+            tokens = args.get("face_tokens")
+            if not tokens and args.get("face_token"):
+                tokens = [args.get("face_token")]
+            # F3 (parafuso f9f2ce0b): o LLM às vezes deixa um PLACEHOLDER no
+            # face_token (ex.: "<use_cylindrical_shank_face_token...>"). Ignora
+            # tokens que não parecem reais e cai no selector cylindrical.
+            if tokens:
+                tokens = [
+                    t for t in tokens
+                    if isinstance(t, str) and t.strip() and "<" not in t
+                ]
+            if tokens:
+                faces = _faces_by_tokens(design, tokens)
+                if faces.count > 0:
+                    face = faces.item(0)
+            if face is None:
+                cyl = _select_faces(body, "cylindrical")
+                if cyl.count == 0:
+                    raise ToolError(
+                        "fusion.no_face",
+                        "Sem face cilindrica para rosca em '" + body.name + "'.",
+                    )
+                face = cyl.item(0)
+            threads = _root(design).features.threadFeatures
+            is_internal = bool(args.get("is_internal", False))
+            query = threads.threadDataQuery
+            thread_type = args.get("thread_type") or query.defaultMetricThreadType
+            designation = args.get("designation") or args.get("thread_designation")
+            if not designation:
+                diameter_mm = _eval_param(args.get("diameter_mm"), design, 0.0) or 0.0
+                if diameter_mm <= 0:
+                    r = _face_radius_mm(face)
+                    diameter_mm = (r * 2.0) if r else 0.0
+                designation = _nearest_thread_designation(
+                    query, thread_type, diameter_mm, is_internal
+                )
+            if not designation:
+                raise ToolError(
+                    "fusion.thread_designation",
+                    "Nao deu para determinar a rosca (passe designation tipo "
+                    "'M6x1' ou diameter_mm).",
+                )
+            try:
+                classes = list(query.allClasses(is_internal, thread_type, designation))
+            except Exception:
+                classes = []
+            thread_class = classes[0] if classes else ""
+            thread_info = threads.createThreadInfo(
+                is_internal, thread_type, designation, thread_class
+            )
+            thread_input = threads.createInput(face, thread_info)
+            try:
+                thread_input.isModeled = True
+            except Exception:
+                pass
+            length_mm = _eval_param(args.get("length_mm"), design, 0.0) or 0.0
+            if length_mm > 0:
+                try:
+                    thread_input.isFullLength = False
+                    thread_input.threadLength = adsk.core.ValueInput.createByReal(
+                        length_mm / 10.0
+                    )
+                except Exception:
+                    pass
+            threads.add(thread_input)
+            return {{
+                "message": "Rosca {{}} ({{}}) em '{{}}'.".format(
+                    designation,
+                    "interna" if is_internal else "externa",
+                    body.name,
+                ),
+                "body_name": body.name,
+                "designation": designation,
+                "is_internal": is_internal,
+                "dimensions_mm": _body_dims_mm(body),
+            }}
+
+
+        def _make_component(args):
+            # F3: transforma um corpo em componente (occurrence) — base para
+            # montagens e juntas. Cria occurrence vazia no root e move o corpo
+            # pra dentro (BRepBody.moveToComponent).
+            design = _design()
+            body = _find_body(
+                design,
+                args.get("body_ref") or args.get("body") or args.get("body_name"),
+            )
+            root = _root(design)
+            name = str(args.get("name") or args.get("component_name") or body.name)
+            transform = adsk.core.Matrix3D.create()
+            occ = root.occurrences.addNewComponent(transform)
+            try:
+                occ.component.name = name
+            except Exception:
+                pass
+            try:
+                body.moveToComponent(occ)
+            except Exception as exc:
+                raise ToolError(
+                    "fusion.component_failed",
+                    "Falha ao mover corpo para componente: " + str(exc),
+                )
+            return {{
+                "message": "Componente '{{}}' criado a partir do corpo.".format(name),
+                "component_name": name,
+                "occurrence_name": occ.name,
+            }}
+
+
+        def _joint_geo_from_ref(design, body_ref, face_token, face_selector):
+            # Monta JointGeometry a partir de uma face (token F1 preferido, senao
+            # selector). Planar => createByPlanarFace; cilindrica/curva =>
+            # createByNonPlanarFace. CenterKeyPoint para coaxialidade.
+            face = None
+            if face_token:
+                faces = _faces_by_tokens(design, [face_token])
+                if faces.count > 0:
+                    face = faces.item(0)
+            if face is None:
+                body = _find_body(design, body_ref)
+                coll = _select_faces(body, face_selector or "cylindrical")
+                if coll.count > 0:
+                    face = coll.item(0)
+            if face is None:
+                return None
+            kp = adsk.fusion.JointKeyPointTypes.CenterKeyPoint
+            try:
+                is_planar = (
+                    face.geometry.surfaceType
+                    == adsk.core.SurfaceTypes.PlaneSurfaceType
+                )
+            except Exception:
+                is_planar = False
+            try:
+                if is_planar:
+                    return adsk.fusion.JointGeometry.createByPlanarFace(face, None, kp)
+                return adsk.fusion.JointGeometry.createByNonPlanarFace(face, kp)
+            except Exception:
+                return None
+
+
+        def _joint(args):
+            # F3: junta entre dois corpos/componentes. revolute (dobradica),
+            # rigid (fixa), slider (linear), cylindrical. A geometria das juntas
+            # vem de faces (token F1 preferido, senao selector). Best-effort: se
+            # a API recusar a geometria, erro claro — a geometria do mecanismo
+            # segue valida (a junta e a cinematica por cima dela).
+            design = _design()
+            joint_type = str(
+                args.get("joint_type") or args.get("type") or "revolute"
+            ).lower()
+            geo0 = _joint_geo_from_ref(
+                design,
+                args.get("occurrence_one")
+                or args.get("body_one")
+                or args.get("body_a"),
+                args.get("face_token_one"),
+                args.get("face_selector_one"),
+            )
+            geo1 = _joint_geo_from_ref(
+                design,
+                args.get("occurrence_two")
+                or args.get("body_two")
+                or args.get("body_b"),
+                args.get("face_token_two"),
+                args.get("face_selector_two"),
+            )
+            if geo0 is None or geo1 is None:
+                raise ToolError(
+                    "fusion.joint_geometry",
+                    "Nao deu para montar a geometria da junta (faces). Passe "
+                    "face_token_one/two (F1) ou face_selector_one/two.",
+                )
+            joints = _root(design).joints
+            jinp = joints.createInput(geo0, geo1)
+            axis_map = {{
+                "x": adsk.fusion.JointDirections.XAxisJointDirection,
+                "y": adsk.fusion.JointDirections.YAxisJointDirection,
+                "z": adsk.fusion.JointDirections.ZAxisJointDirection,
+            }}
+            axis = axis_map.get(
+                str(args.get("axis") or "z").lower(),
+                adsk.fusion.JointDirections.ZAxisJointDirection,
+            )
+            if joint_type in ("revolute", "hinge", "pin"):
+                jinp.setAsRevoluteJointMotion(axis)
+            elif joint_type in ("slider", "prismatic"):
+                jinp.setAsSliderJointMotion(axis)
+            elif joint_type == "cylindrical":
+                jinp.setAsCylindricalJointMotion(axis)
+            else:
+                jinp.setAsRigidJointMotion()
+            feat = joints.add(jinp)
+            return {{
+                "message": "Junta {{}} criada.".format(joint_type),
+                "joint_type": joint_type,
+                "joint_name": getattr(feat, "name", None),
+            }}
+
+
+        def _metric_nominal_mm(designation):
+            # "M6" / "M6x1" -> 6.0 (diametro nominal em mm).
+            s = str(designation or "M6").upper().strip()
+            if s.startswith("M"):
+                s = s[1:]
+            for sep in ("X", "-"):
+                if sep in s:
+                    s = s.split(sep)[0]
+            try:
+                return float(s)
+            except (TypeError, ValueError):
+                return 6.0
+
+
+        def _metric_screw(args):
+            # F3 macro: parafuso metrico = haste (shank) + cabeca + rosca
+            # modelada na haste. Compoe primitivas validadas (_add_cylinder x2,
+            # _thread, _combine_bodies). Eixo Z. designation "M6" da o diametro
+            # nominal; length_mm = comprimento da haste.
+            design = _design()
+            designation = str(args.get("designation") or args.get("size") or "M6")
+            nominal = _eval_param(args.get("diameter_mm"), design, 0.0) or 0.0
+            if nominal <= 0:
+                nominal = _metric_nominal_mm(designation)
+            length_mm = _eval_param(args.get("length_mm"), design, 0.0) or (
+                nominal * 4.0
+            )
+            head_d = _eval_param(args.get("head_diameter_mm"), design, 0.0) or (
+                nominal * 1.6
+            )
+            head_h = _eval_param(args.get("head_height_mm"), design, 0.0) or (
+                nominal * 0.9
+            )
+            center = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
+            cx, cy = center[0], center[1]
+            name = str(args.get("name") or "Screw")
+            shank = _add_cylinder({{
+                "diameter_mm": nominal,
+                "height_mm": length_mm,
+                "center_mm": [cx, cy, 0.0],
+                "name": name + "_Shank",
+            }})
+            shank_name = shank.get("body_name")
+            thread_note = ""
+            if args.get("threaded") is not False:
+                try:
+                    _thread({{
+                        "body_ref": shank_name,
+                        "diameter_mm": nominal,
+                        "is_internal": False,
+                        "length_mm": length_mm,
+                        "face_selector": "cylindrical",
+                    }})
+                    thread_note = " + rosca"
+                except Exception as exc:
+                    thread_note = " [rosca pulada: " + str(exc) + "]"
+            # head_type: hex (sextavada, default — cara de parafuso) ou
+            # cylinder/socket (cabeça cilíndrica). A sextavada compõe plano no
+            # topo da haste + hexágono + extrude (entre-faces = head_diameter_mm,
+            # circunraio = AF/sqrt(3)). A cilíndrica é 1 _add_cylinder.
+            head_type = str(args.get("head_type") or "hex").lower()
+            if head_type in ("hex", "hexagon", "sextavada", "sextavado", "bolt"):
+                _add_construction_plane({{
+                    "name": name + "_HeadPlane",
+                    "plane": "xy",
+                    "offset_mm": length_mm,
+                }})
+                _create_sketch({{
+                    "name": name + "_HeadSketch",
+                    "plane": name + "_HeadPlane",
+                }})
+                _add_polygon({{
+                    "sketch": name + "_HeadSketch",
+                    "sides": 6,
+                    "radius_mm": head_d / (3.0 ** 0.5),
+                    "center_mm": [cx, cy],
+                }})
+                head = _extrude_profile({{
+                    "sketch": name + "_HeadSketch",
+                    "operation": "new_body",
+                    "distance_mm": head_h,
+                    "name": name + "_Head",
+                }})
+            else:
+                head = _add_cylinder({{
+                    "diameter_mm": head_d,
+                    "height_mm": head_h,
+                    "center_mm": [cx, cy, length_mm],
+                    "name": name + "_Head",
+                }})
+            head_name = head.get("body_name")
+            try:
+                _combine_bodies({{
+                    "target_ref": shank_name,
+                    "tool_refs": [head_name],
+                    "operation": "join",
+                }})
+            except Exception:
+                pass
+            return {{
+                "message": "Parafuso {{}} L{{}}mm (cabeca o{{}}mm){{}}.".format(
+                    designation, length_mm, head_d, thread_note
+                ),
+                "body_name": shank_name,
+                "designation": designation,
+                "nominal_mm": nominal,
+                "length_mm": length_mm,
+            }}
+
+
+        def _knuckle_hinge(args):
+            # F3 macro: dobradica de nos (knuckles) que abre em torno de um pino
+            # vertical (eixo Z). Duas abas (leaves) planares flanqueando uma
+            # coluna de knuckles cilindricos alternados (par->aba A, impar->aba
+            # B) + pino passante coaxial. Compoe primitivas validadas. Eixo Z
+            # (orientacao reparametrizavel). joint=revolute opcional cria a junta.
+            design = _design()
+            leaf_len = _eval_param(args.get("leaf_length_mm"), design, 0.0) or 40.0
+            leaf_w = _eval_param(args.get("leaf_width_mm"), design, 0.0) or 20.0
+            thickness = _eval_param(args.get("thickness_mm"), design, 0.0) or 4.0
+            n = int(args.get("knuckle_count") or 5)
+            if n < 3:
+                n = 3
+            knuckle_d = _eval_param(args.get("knuckle_diameter_mm"), design, 0.0) or (
+                thickness * 2.5
+            )
+            pin_d = _eval_param(args.get("pin_diameter_mm"), design, 0.0) or (
+                knuckle_d * 0.45
+            )
+            center = _eval_pair(args.get("center_mm"), design) or (0.0, 0.0)
+            cx, cy = center[0], center[1]
+            name = str(args.get("name") or "Hinge")
+            seg = leaf_len / float(n)
+            knuckle_r = knuckle_d / 2.0
+            a_names = []
+            b_names = []
+            for i in range(n):
+                k = _add_cylinder({{
+                    "diameter_mm": knuckle_d,
+                    "height_mm": seg,
+                    "center_mm": [cx, cy, i * seg],
+                    "name": name + "_Knuckle_" + str(i),
+                }})
+                if i % 2 == 0:
+                    a_names.append(k.get("body_name"))
+                else:
+                    b_names.append(k.get("body_name"))
+            leaf_a = _add_box({{
+                "width_mm": leaf_w,
+                "depth_mm": thickness,
+                "height_mm": leaf_len,
+                "origin_mm": [cx + knuckle_r * 0.5, cy - thickness / 2.0, 0.0],
+                "name": name + "_Leaf_A",
+            }})
+            leaf_b = _add_box({{
+                "width_mm": leaf_w,
+                "depth_mm": thickness,
+                "height_mm": leaf_len,
+                "origin_mm": [
+                    cx - knuckle_r * 0.5 - leaf_w,
+                    cy - thickness / 2.0,
+                    0.0,
+                ],
+                "name": name + "_Leaf_B",
+            }})
+            a_asm = leaf_a.get("body_name")
+            b_asm = leaf_b.get("body_name")
+            if a_names:
+                try:
+                    _combine_bodies({{
+                        "target_ref": a_asm,
+                        "tool_refs": a_names,
+                        "operation": "join",
+                    }})
+                except Exception:
+                    pass
+            if b_names:
+                try:
+                    _combine_bodies({{
+                        "target_ref": b_asm,
+                        "tool_refs": b_names,
+                        "operation": "join",
+                    }})
+                except Exception:
+                    pass
+            pin = _add_cylinder({{
+                "diameter_mm": pin_d,
+                "height_mm": leaf_len,
+                "center_mm": [cx, cy, 0.0],
+                "name": name + "_Pin",
+            }})
+            pin_name = pin.get("body_name")
+            joint_note = ""
+            if str(args.get("joint") or "").lower() in ("revolute", "true", "1", "yes"):
+                try:
+                    _make_component({{"body_ref": a_asm, "name": name + "_A"}})
+                    _make_component({{"body_ref": b_asm, "name": name + "_B"}})
+                    _joint({{
+                        "joint_type": "revolute",
+                        "body_one": a_asm,
+                        "body_two": b_asm,
+                        "face_selector_one": "cylindrical",
+                        "face_selector_two": "cylindrical",
+                        "axis": "z",
+                    }})
+                    joint_note = " + junta revolute"
+                except Exception as exc:
+                    joint_note = " [junta pulada: " + str(exc) + "]"
+            return {{
+                "message": "Dobradica '{{}}' {{}} knuckles (pino o{{}}mm){{}}.".format(
+                    name, n, pin_d, joint_note
+                ),
+                "body_names": [a_asm, b_asm, pin_name],
+                "knuckle_count": n,
+                "pin_diameter_mm": pin_d,
+            }}
+
+
+        def _capture_viewport(args):
+            # Loop visual (motor genérico): renderiza o viewport ATIVO do Fusion
+            # e devolve a imagem em base64, para a LLM de visão criticar a
+            # geometria vs. a intenção (e replanejar). Read-only: não muda o
+            # modelo. view=iso|front|back|top|bottom|left|right (default iso),
+            # com fit automático. Defensivo: nunca derruba a execução.
+            app = _app()
+            vp = app.activeViewport
+            view = str(args.get("view") or "iso").lower()
+            orient_map = {{
+                "iso": adsk.core.ViewOrientations.IsoTopRightViewOrientation,
+                "front": adsk.core.ViewOrientations.FrontViewOrientation,
+                "back": adsk.core.ViewOrientations.BackViewOrientation,
+                "top": adsk.core.ViewOrientations.TopViewOrientation,
+                "bottom": adsk.core.ViewOrientations.BottomViewOrientation,
+                "left": adsk.core.ViewOrientations.LeftViewOrientation,
+                "right": adsk.core.ViewOrientations.RightViewOrientation,
+            }}
+            if view in orient_map:
+                try:
+                    cam = vp.camera
+                    cam.viewOrientation = orient_map[view]
+                    cam.isFitView = True
+                    vp.camera = cam
+                except Exception:
+                    try:
+                        vp.fit()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    vp.fit()
+                except Exception:
+                    pass
+            try:
+                vp.refresh()
+            except Exception:
+                pass
+            width = int(_eval_param(args.get("width_px"), _design(), 0.0) or 0) or 1024
+            height = int(_eval_param(args.get("height_px"), _design(), 0.0) or 0) or 768
+            import base64 as _b64
+            import os as _os
+            import tempfile as _tf
+
+            path = _os.path.join(_tf.gettempdir(), "tf_viewport_capture.png")
+            saved = vp.saveAsImageFile(path, width, height)
+            if not saved:
+                raise ToolError(
+                    "fusion.capture_failed",
+                    "saveAsImageFile retornou falso (viewport indisponível?).",
+                )
+            with open(path, "rb") as _fh:
+                raw = _fh.read()
+            return {{
+                "message": "Viewport {{}} capturado ({{}}x{{}}, {{}} bytes).".format(
+                    view, width, height, len(raw)
+                ),
+                "image_base64": _b64.b64encode(raw).decode("ascii"),
+                "image_format": "png",
+                "width_px": width,
+                "height_px": height,
+                "view": view,
+            }}
+
+
         def _dispatch_inner(tool_name, args):
             if tool_name == "fusion.open_design":
                 return _open_design(args)
@@ -2329,10 +4400,34 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _mirror_feature(args)
             if tool_name == "fusion.combine_bodies":
                 return _combine_bodies(args)
+            if tool_name == "fusion.thread":
+                return _thread(args)
+            if tool_name == "fusion.make_component":
+                return _make_component(args)
+            if tool_name == "fusion.joint":
+                return _joint(args)
+            if tool_name == "fusion.knuckle_hinge":
+                return _knuckle_hinge(args)
+            if tool_name == "fusion.metric_screw":
+                return _metric_screw(args)
             if tool_name == "fusion.loft_profiles":
                 return _loft_profiles(args)
             if tool_name == "fusion.sweep_profile":
                 return _sweep_profile(args)
+            if tool_name == "fusion.create_surface_patch":
+                return _create_surface_patch(args)
+            if tool_name == "fusion.thicken_surface":
+                return _thicken_surface(args)
+            if tool_name == "fusion.stitch_surfaces":
+                return _stitch_surfaces(args)
+            if tool_name == "fusion.trim_surface":
+                return _trim_surface(args)
+            if tool_name == "fusion.extend_surface":
+                return _extend_surface(args)
+            if tool_name == "fusion.offset_surface":
+                return _offset_surface(args)
+            if tool_name == "fusion.unstitch_surface":
+                return _unstitch_surface(args)
             if tool_name == "fusion.add_construction_plane":
                 return _add_construction_plane(args)
             if tool_name == "fusion.add_spline":
@@ -2347,6 +4442,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _split_body(args)
             if tool_name == "fusion.query_geometry":
                 return _query_geometry(args)
+            if tool_name == "fusion.capture_viewport":
+                return _capture_viewport(args)
+            if tool_name == "fusion.query_timeline":
+                return _query_timeline(args)
+            if tool_name == "fusion.rollback_timeline":
+                return _rollback_timeline(args)
             if tool_name == "fusion.set_parameter":
                 return _set_parameter(args)
             if tool_name == "fusion.export_step":

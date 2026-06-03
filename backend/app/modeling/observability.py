@@ -265,9 +265,28 @@ class ModelingTracer:
         Útil quando ``start_trace`` é chamado antes do plano ter ID,
         permitindo que eventos subsequentes carreguem o plan_id no
         registro mesmo sem o caller passar explicitamente.
+
+        Também faz **backfill** dos eventos já buffered deste trace que
+        ainda estão sem plan_id (ex.: spans do planner — ``model_resolved``,
+        ``llm_request`` — gravados ANTES do plano existir). Sem isto eles
+        ficam com ``plan_id=None`` e o diagnóstico-por-plano não os acha,
+        deixando o trace "vazio" mesmo tendo eventos. O buffer só dá flush
+        em ``batch_size`` (25) ou no ``close``, então no propose típico
+        (≈5–8 eventos) eles ainda estão em memória aqui.
         """
 
         _plan_id_var.set(plan_id)
+        tid = current_trace_id()
+        if tid is None:
+            return
+        with self._buffers_lock:
+            buffer = self._buffers.get(tid)
+        if buffer is None:
+            return
+        with buffer.lock:
+            for index, event in enumerate(buffer.events):
+                if event.plan_id is None:
+                    buffer.events[index] = event.model_copy(update={"plan_id": plan_id})
 
     def flush(self, trace_id: str | None = None) -> None:
         """Persiste eventos buffered para a store.

@@ -13,13 +13,21 @@
 - `DELETE /api/chat/sessions/{session_id}`
 - `POST /api/chat/sessions/{session_id}/move`
 - `PUT /api/chat/sessions/{session_id}/context`
+- `POST /api/chat/sessions/{session_id}/attachments/analyze`
 - `POST /api/chat/stream`
 
-`/api/chat/stream` retorna SSE com eventos:
+`/api/chat/sessions/{session_id}/attachments/analyze` dispara a análise profunda
+de um anexo num chat 3D (vision para imagens, Blender headless para arquivos 3D).
+
+`/api/chat/stream` retorna SSE. Eventos centrais:
 
 - `meta`: ids da sessao e mensagem.
 - `token`: fragmento de texto.
 - `done`: conclusao do stream.
+
+Conforme o modo da execução também ocorrem `runtime_status`, `error`,
+`reasoning_summary` e, em chats 3D, `modeling_plan` (plano/edição, com `trace_id`)
+e `session_title`.
 
 O backend valida o projeto ativo antes de criar ou atualizar a sessão: se o
 agente principal, o agente solicitado ou agentes de apoio não tiverem acesso ao
@@ -98,10 +106,12 @@ devem permanecer auditáveis conforme `specs/060-cost-audit-governance/`.
 - `GET /api/3d/sessions`
 - `POST /api/3d/sessions/start`
 - `GET /api/3d/plans`
-- `POST /api/3d/plans`
+- `GET /api/3d/plans/{plan_id}`
 - `POST /api/3d/plans/{plan_id}/approve`
+- `PATCH /api/3d/plans/{plan_id}` — edita o plano antes da aprovação
 - `POST /api/3d/plans/{plan_id}/execute`
-- `POST /api/3d/steps/{step_id}/approve`
+- `POST /api/3d/plans/{plan_id}/rollback` — desfaz a última edição (timeline)
+- `GET /api/3d/plans/{plan_id}/diagnostics` — bundle plano + tool calls + trace
 - `GET /api/3d/snapshots`
 - `POST /api/3d/snapshots`
 - `GET /api/3d/snapshots/{snapshot_id}`
@@ -109,6 +119,13 @@ devem permanecer auditáveis conforme `specs/060-cost-audit-governance/`.
 - `GET /api/3d/tool-calls`
 - `POST /api/3d/validate/printability`
 - `GET /api/3d/printability-reports`
+- `GET /api/3d/model-versions`
+- `GET /api/3d/plans/{plan_id}/trace`
+- `GET /api/3d/traces/{trace_id}`
+- `POST /api/3d/traces/events`
+
+> Removidos no v4 (ADR-013, Onda 2.11): `POST /api/3d/plans` (todo plano nasce no
+> chat) e `POST /api/3d/steps/{step_id}/approve` (a aprovação é global no plano).
 
 O modulo 3D usa MCP local com fallback mock. O Blender executa ferramentas allowlistadas em background quando `TRUTHS_FORGE_BLENDER_EXECUTABLE` aponta para o executavel. O Fusion 360 usa primeiro o Fusion MCP Server local do aplicativo em `TRUTHS_FORGE_FUSION_MCP_URL` (`http://127.0.0.1:27182/mcp` por padrao) e cai para o bridge desktop legado por discovery file/socket loopback quando necessario. Mesmo no MCP oficial, o backend so envia scripts determinísticos para tools `fusion.*` allowlistadas; sem adapter conectado, as chamadas retornam envelopes auditaveis de mock/erro seguro.
 

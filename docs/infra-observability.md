@@ -63,6 +63,7 @@ As tabelas principais hoje sao:
 - `modeling_tool_calls`
 - `modeling_printability_reports`
 - `modeling_model_versions`
+- `modeling_trace_events` (criada sob demanda pela `PostgresStore`, não via migração)
 
 Os dados ficam em payloads `JSONB` para acelerar o MVP sem travar a modelagem final.
 
@@ -70,7 +71,7 @@ Os dados ficam em payloads `JSONB` para acelerar o MVP sem travar a modelagem fi
 
 Abra `http://127.0.0.1:8081`. Ele ja vem apontando para `valkey:6379`.
 
-Hoje o Redis/Valkey esta preparado para cache/fila, mas as filas implementadas de importacao do ChatGPT e indexacao de arquivos ainda rodam em memoria no processo FastAPI. Quando a fila virar distribuida ou houver jobs de producao intensa, listas, streams ou chaves de status aparecerao ali.
+Por padrao (`TRUTHS_FORGE_QUEUE_BACKEND=memory`) as filas de importacao do ChatGPT e indexacao de arquivos rodam em memoria no processo FastAPI. Defina `TRUTHS_FORGE_QUEUE_BACKEND=redis` (ou `valkey`) para usar o servidor em `redis_url` (`job_queue.RedisJobQueue`, sorted set + dedup set, compartilhavel entre replicas) — ai as listas/chaves de status aparecem aqui.
 
 ## Qdrant
 

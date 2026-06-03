@@ -37,6 +37,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.config import settings
 from app.core.contracts import (
     AuditEvent,
     ChatModelingStage,
@@ -48,21 +49,47 @@ from app.core.contracts import (
     ModelingPlanCreate,
     ModelingPlanKind,
     ModelingPlanStatus,
+    ModelingPlanStep,
     ModelingRiskLevel,
+    ModelingSoftware,
+    ModelingStepStatus,
+    ModelingSubGoalStatus,
     ModelingTraceLevel,
     ModelingTraceSource,
     now_utc,
 )
+from app.modeling.agent_loop import run_plan_with_optional_loop
 from app.modeling.chat_state import (
     ChatModelingEvent,
     transition,
 )
-from app.modeling.executor import ModelingExecutorService
+from app.modeling.executor import ModelingExecutorService, inner_fusion_payload
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner_service import ModelingPlannerService
-from app.modeling.tool_registry import is_high_risk
+from app.modeling.policy import apply_plan_approval
+from app.modeling.tool_registry import READ_ONLY_TOOL_NAMES, is_high_risk
 
 logger = logging.getLogger(__name__)
+
+
+# Fix T4 gate: edits que so mudam parametros (set_parameter) NAO criam
+# entradas na timeline do Fusion — o tool re-avalia as formulas sem
+# adicionar feature. Como o rollback atual usa ``timeline_count`` como
+# marker (T3.6), reverter um edit parameter-only seria sempre no-op
+# (count antes == count depois). A UI esconde o botao Reverter quando
+# ``rollback_marker`` e None (vide ModelingEditCard.canRollback), entao
+# nao gravamos marker para esses planos — evita prometer um rollback
+# que nao tem como ser cumprido.
+_NON_TIMELINE_MODIFYING_TOOLS: frozenset[str] = frozenset(
+    {"fusion.set_parameter", "blender.set_parameter"} | READ_ONLY_TOOL_NAMES
+)
+
+
+def _is_parameter_only_edit(plan: ModelingPlan) -> bool:
+    """True se TODOS os steps do plan sao parameter-changes ou read-only."""
+    if not plan.steps:
+        return False
+    return all(step.tool_name in _NON_TIMELINE_MODIFYING_TOOLS for step in plan.steps)
 
 
 @dataclass
@@ -97,6 +124,125 @@ class ModelingChatOrchestrator:
         # store pode não ter ``record_trace_events_bulk``; o tracer aceita
         # ``None`` e vira no-op nesse caso.
         self._tracer = get_tracer(store if hasattr(store, "record_trace_events_bulk") else None)
+
+    # ------------------------------------------------------------------
+    # execution backend (linear executor × loop agêntico)
+    # ------------------------------------------------------------------
+
+    def _run_execution(self, plan: ModelingPlan) -> ModelingExecutionResult:
+        """Executa um plano aprovado (loop agêntico × executor linear).
+
+        F2: quando o planejamento hierárquico está ligado E o plano é primary
+        COM sub-objetivos, despacha para ``_run_execution_hierarchical`` (planeja
+        e executa bloco a bloco observando o ModelState real entre eles). Caso
+        contrário — e para os próprios blocos (kind=edit) — delega a
+        ``run_plan_with_optional_loop`` (fonte única, sem recursão).
+        """
+
+        if (
+            settings.modeling_hierarchical_planning_enabled
+            and plan.kind == ModelingPlanKind.primary
+            and plan.sub_goals
+        ):
+            return self._run_execution_hierarchical(plan)
+        return run_plan_with_optional_loop(self.executor, self.planner, plan)
+
+    def _run_execution_hierarchical(self, primary: ModelingPlan) -> ModelingExecutionResult:
+        """F2 (T2.5): executa um plano primary decomposto, bloco a bloco.
+
+        Para cada sub-objetivo: planeja o bloco vendo o ModelState corrente
+        (read-back do bloco anterior), executa via ``run_plan_with_optional_loop``
+        (que corrige step a step e captura o ModelState), avalia o aceite
+        (status do bloco) e segue. Se um bloco falha, aborta de forma
+        consistente (não tenta os dependentes). Agrega o resultado no primary.
+        """
+
+        base_payload = ModelingPlanCreate(
+            prompt=primary.prompt,
+            conversation_id=primary.conversation_id,
+            project_id=primary.project_id,
+            software_override=primary.software_choice,
+            knowledge_base_ids=primary.knowledge_base_ids,
+        )
+        current_state = primary.model_state
+        executed: list[str] = []
+        blocked: list[str] = []
+        events: list[str] = []
+        tool_calls: list[str] = []
+        done_titles: list[str] = []
+        sub_goals = [sg.model_copy() for sg in primary.sub_goals]
+        final_status = ModelingPlanStatus.completed
+
+        for sg in sub_goals:
+            self._tracer.record(
+                "orchestrator.block_started",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.info,
+                message=f"Sub-objetivo {sg.seq}: {sg.title}",
+                payload={"sub_goal_id": sg.id, "seq": sg.seq, "title": sg.title},
+                plan_id=primary.id,
+            )
+            block = self.planner.plan_block_for_subgoal(
+                sg,
+                base_payload=base_payload,
+                parent_plan_id=primary.id,
+                model_state=current_state,
+                done_titles=done_titles,
+            )
+            result = run_plan_with_optional_loop(self.executor, self.planner, block)
+            executed.extend(result.executed_step_ids)
+            blocked.extend(result.blocked_step_ids)
+            events.extend(result.events)
+            tool_calls.extend(result.tool_call_ids)
+            current_state = result.plan.model_state or current_state
+            block_ok = result.plan.status == ModelingPlanStatus.completed
+            sg.status = (
+                ModelingSubGoalStatus.completed if block_ok else ModelingSubGoalStatus.failed
+            )
+            sg.block_plan_id = result.plan.id
+            self._tracer.record(
+                "orchestrator.block_observed",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.info if block_ok else ModelingTraceLevel.error,
+                message=f"Sub-objetivo {sg.seq} {'OK' if block_ok else 'FALHOU'}: {sg.title}",
+                payload={
+                    "sub_goal_id": sg.id,
+                    "block_plan_id": result.plan.id,
+                    "status": result.plan.status.value,
+                    "step_count": len(result.plan.steps),
+                },
+                plan_id=primary.id,
+            )
+            if block_ok:
+                done_titles.append(sg.title)
+            else:
+                final_status = ModelingPlanStatus.failed
+                self._tracer.record(
+                    "orchestrator.hierarchical_aborted",
+                    source=ModelingTraceSource.backend,
+                    level=ModelingTraceLevel.error,
+                    message=f"Sub-objetivo '{sg.title}' falhou; abortando os seguintes.",
+                    payload={"sub_goal_id": sg.id, "remaining": len(sub_goals) - sg.seq},
+                    plan_id=primary.id,
+                )
+                break
+
+        updated = primary.model_copy(
+            update={
+                "sub_goals": sub_goals,
+                "status": final_status,
+                "model_state": current_state,
+                "updated_at": now_utc(),
+            }
+        )
+        self.store.upsert_modeling_plan(updated)
+        return ModelingExecutionResult(
+            plan=updated,
+            executed_step_ids=executed,
+            blocked_step_ids=blocked,
+            events=events,
+            tool_call_ids=tool_calls,
+        )
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -151,13 +297,18 @@ class ModelingChatOrchestrator:
     # ------------------------------------------------------------------
 
     def propose_plan(
-        self, chat: ChatSession, *, payload: ModelingPlanCreate
+        self, chat: ChatSession, *, payload: ModelingPlanCreate, manage_trace: bool = True
     ) -> tuple[ChatSession, ModelingPlan]:
         """Create the primary plan for ``chat`` and move it to ``planning``.
 
         Forces ``payload.kind = primary``; the orchestrator owns this
         invariant. The chat is linked to the new plan via
         ``modeling_plan_id``.
+
+        ``manage_trace=False`` (DT-006) lets a caller that already opened a
+        trace — the live chat-stream route — drive this without the
+        orchestrator starting/closing its own; events still land on the
+        active trace.
         """
 
         self._require_modeling_chat(chat)
@@ -165,10 +316,11 @@ class ModelingChatOrchestrator:
         # Inicia trace para este request de proposta de plano. Identifica
         # a sessão de chat e o projeto pais. O plan_id ainda não existe;
         # o planner_service vai chamar ``bind_plan`` quando souber.
-        self._tracer.start_trace(
-            session_id=chat.id,
-            project_id=chat.project_id,
-        )
+        if manage_trace:
+            self._tracer.start_trace(
+                session_id=chat.id,
+                project_id=chat.project_id,
+            )
 
         primary_payload = payload.model_copy(
             update={
@@ -181,6 +333,15 @@ class ModelingChatOrchestrator:
             }
         )
         plan = self.planner.create_plan(primary_payload)
+        # F2 (T2.6): no modo hierárquico, anexa a decomposição em sub-objetivos
+        # ao primary (o card a mostra como preview; a execução é bloco a bloco,
+        # ver _run_execution_hierarchical). Os steps one-shot gerados acima
+        # permanecem como fallback (executados só se não houver sub_goals).
+        if settings.modeling_hierarchical_planning_enabled:
+            sub_goals = self.planner.decompose(primary_payload)
+            if sub_goals:
+                plan = plan.model_copy(update={"sub_goals": sub_goals})
+                self.store.upsert_modeling_plan(plan)
         next_stage = transition(chat.modeling_stage, ChatModelingEvent.PLAN_PROPOSED)
         updated = chat.model_copy(
             update={
@@ -201,8 +362,9 @@ class ModelingChatOrchestrator:
         # Flush dos eventos buffered — garante que o frontend que ler o
         # endpoint /trace logo após receber o ``modeling_plan`` SSE veja
         # tudo já persistido. PR#28 review: close_trace para liberar buffer.
-        self._tracer.flush(current_trace_id())
-        self._tracer.close_trace()
+        if manage_trace:
+            self._tracer.flush(current_trace_id())
+            self._tracer.close_trace()
         return updated, plan
 
     def approve_plan(
@@ -254,7 +416,7 @@ class ModelingChatOrchestrator:
             extra={"plan_id": plan_id},
         )
 
-        execution = self.executor.execute_plan(approved_plan)
+        execution = self._run_execution(approved_plan)
         outcome_event = (
             ChatModelingEvent.EXECUTION_FAILED
             if execution.plan.status == ModelingPlanStatus.failed
@@ -392,7 +554,7 @@ class ModelingChatOrchestrator:
                 extra={"plan_id": plan_id},
             )
 
-        execution = self.executor.execute_plan(plan)
+        execution = self._run_execution(plan)
 
         if chat.modeling_stage is ChatModelingStage.executing:
             outcome_event = (
@@ -486,20 +648,212 @@ class ModelingChatOrchestrator:
     # editing (mini-plans)
     # ------------------------------------------------------------------
 
-    def propose_edit_plan(
-        self, chat: ChatSession, *, payload: ModelingPlanCreate
-    ) -> EditPlanOutcome:
-        """Create a mini-plan for a follow-up edit in ``editing`` stage.
+    def _load_parent_plan(self, plan_id: str | None) -> ModelingPlan | None:
+        """Best-effort load do plano-pai (não levanta quando ausente)."""
 
-        * No high-risk step in the plan → auto-execute immediately and
-          emit ``EDIT_AUTO_EXECUTED``.
+        if not plan_id or not hasattr(self.store, "get_modeling_plan"):
+            return None
+        try:
+            return self.store.get_modeling_plan(plan_id)
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    def _read_live_timeline(
+        self, *, software: ModelingSoftware | None, context_plan: ModelingPlan
+    ) -> dict[str, Any] | None:
+        """T3.2/T3.6: leitura best-effort da timeline do Fusion antes da edição.
+
+        Roda ``fusion.query_timeline`` UMA vez, *fora* dos passos da edição (o
+        loop agêntico nunca a vê; uma leitura que falha nunca bloqueia a
+        edição). A saída alimenta tanto a reconciliação (T3.2/T3.3 — o planner
+        parte do modelo real) quanto o marcador de rollback (T3.6 —
+        ``timeline_count``). Retorna o dict de saída, ou ``None`` para software
+        não-fusion / qualquer falha (Fusion offline, saída malformada).
+        """
+
+        if software != ModelingSoftware.fusion:
+            return None
+        probe = ModelingPlanStep(
+            seq=1,
+            title="Ler estado atual da timeline",
+            software=ModelingSoftware.fusion,
+            tool_name="fusion.query_timeline",
+            risk_level=ModelingRiskLevel.low,
+            status=ModelingStepStatus.approved,
+            input_json={},
+        )
+        try:
+            outcome = self.executor._execute_single_step(probe, plan=context_plan)
+        except Exception:  # pragma: no cover - defensive: read must not block edit
+            logger.warning("live timeline read raised; edit proceeds without it", exc_info=True)
+            return None
+        if not outcome.ok or not isinstance(outcome.output, dict):
+            return None
+        return self._inner_fusion_payload(outcome.output)
+
+    def _read_live_geometry(
+        self, *, software: ModelingSoftware | None, context_plan: ModelingPlan
+    ) -> dict[str, Any] | None:
+        """F5: leitura best-effort da GEOMETRIA real antes da edição.
+
+        Mesmo padrão de ``_read_live_timeline``, mas com ``fusion.query_geometry``
+        — traz corpos, faces/arestas e tokens estáveis (F1) do estado AO VIVO.
+        Alimenta a reconciliação estruturada (ModelState ao vivo) para o planner
+        editar o modelo atual, captando mudanças manuais do usuário desde o
+        último plano. ``None`` para não-fusion / qualquer falha (nunca bloqueia).
+        """
+
+        if software != ModelingSoftware.fusion:
+            return None
+        probe = ModelingPlanStep(
+            seq=1,
+            title="Ler geometria atual do modelo",
+            software=ModelingSoftware.fusion,
+            tool_name="fusion.query_geometry",
+            risk_level=ModelingRiskLevel.low,
+            status=ModelingStepStatus.approved,
+            input_json={},
+        )
+        try:
+            outcome = self.executor._execute_single_step(probe, plan=context_plan)
+        except Exception:  # pragma: no cover - defensive: read must not block edit
+            logger.warning("live geometry read raised; edit proceeds without it", exc_info=True)
+            return None
+        if not outcome.ok or not isinstance(outcome.output, dict):
+            return None
+        return outcome.output
+
+    def _build_live_state_block(
+        self,
+        reconciliation: str | None,
+        geometry_output: dict[str, Any] | None,
+    ) -> str | None:
+        """F5: combina a reconciliação da timeline com o ModelState AO VIVO.
+
+        Parseia ``query_geometry`` num ``ModelState`` (F1) e o renderiza como
+        bloco estruturado, anexando-o à reconciliação textual. Best-effort: se
+        a geometria não parsear, devolve a reconciliação original intacta.
+        """
+
+        if not isinstance(geometry_output, dict):
+            return reconciliation
+        # Import tardio para evitar ciclo (model_state importa do executor).
+        from app.modeling.model_state import (
+            model_state_from_query_output,
+            render_model_state_block,
+        )
+
+        live_state = model_state_from_query_output(geometry_output)
+        if live_state is None:
+            return reconciliation
+        block = render_model_state_block(live_state)
+        if not block:
+            return reconciliation
+        if reconciliation:
+            return reconciliation + "\n\n" + block
+        return block
+
+    @staticmethod
+    def _inner_fusion_payload(output: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Delegação p/ ``executor.inner_fusion_payload`` (fonte única).
+
+        Mantida como método para o ``_read_live_timeline`` e os testes; a lógica
+        de desempacotar o envelope HTTP do fusion vive em ``executor`` e é
+        compartilhada com o verifier geométrico (item C).
+        """
+
+        return inner_fusion_payload(output)
+
+    def _apply_rollback_marker(
+        self, plan: ModelingPlan, live_output: dict[str, Any] | None
+    ) -> ModelingPlan:
+        """T3.6: grava a contagem da timeline pré-edição em ``rollback_marker``.
+
+        Fix T4 gate: edits parameter-only (so ``set_parameter`` / read-only)
+        nao geram entrada na timeline, entao rollback via marker seria no-op.
+        Deixa ``rollback_marker=None`` para a UI esconder o botao Reverter.
+        """
+
+        if not isinstance(live_output, dict):
+            return plan
+        count = live_output.get("timeline_count")
+        if not isinstance(count, int):
+            return plan
+        if _is_parameter_only_edit(plan):
+            return plan
+        stamped = plan.model_copy(update={"rollback_marker": count})
+        self.store.upsert_modeling_plan(stamped)
+        return stamped
+
+    def _build_reconciliation_block(self, live_output: dict[str, Any] | None) -> str | None:
+        """T3.2/T3.3: monta o bloco ``<estado-atual-fusion>`` da leitura ao vivo.
+
+        FACTUAL e não-alarmista de propósito: expõe a timeline + parâmetros
+        REAIS como referência e instrui que, se algo divergir do histórico, o
+        estado ao vivo é o atual. **NÃO** declara "edição manual" por contagem
+        — passos registrados × features da timeline divergem por granularidade
+        sketch/feature (seria falso positivo e empurra o planner a operações
+        defensivas redundantes, ex.: um 2º fillet). A reconciliação de fato
+        fica a cargo do planner (LLM).
+        """
+
+        if not isinstance(live_output, dict):
+            return None
+        features = live_output.get("timeline")
+        count = live_output.get("timeline_count")
+        if not isinstance(count, int):
+            count = len(features) if isinstance(features, list) else 0
+        lines = [
+            "<estado-atual-fusion>",
+            "Estado atual do modelo no Fusion (timeline ao vivo). Se algo aqui diferir do "
+            "<modelo-atual> (histórico), considere ESTE o estado real ao planejar.",
+            f"Timeline: {count} feature(s).",
+        ]
+        if isinstance(features, list) and features:
+            named = []
+            for feat in features[:40]:
+                if not isinstance(feat, dict):
+                    continue
+                name = feat.get("name") or "?"
+                ftype = feat.get("type") or ""
+                label = f"{name} ({ftype})" if ftype else str(name)
+                if feat.get("suppressed"):
+                    label += " [suprimida]"
+                named.append(label)
+            if named:
+                lines.append("Features: " + "; ".join(named) + ".")
+        params = live_output.get("parameters")
+        if isinstance(params, list) and params:
+            named_p = []
+            for prm in params[:20]:
+                if isinstance(prm, dict) and prm.get("name"):
+                    expr = prm.get("expression")
+                    label = f"{prm['name']}={expr}" if expr is not None else str(prm["name"])
+                    named_p.append(label)
+            if named_p:
+                lines.append("Parâmetros: " + ", ".join(named_p) + ".")
+        lines.append("</estado-atual-fusion>")
+        return "\n".join(lines)
+
+    def propose_edit_plan(
+        self, chat: ChatSession, *, payload: ModelingPlanCreate, fluid_mode: bool = True
+    ) -> EditPlanOutcome:
+        """Create a mini-plan for a follow-up edit in ``editing``/``failed`` stage.
+
         * Any high-risk step → leave the plan pending, emit
-          ``EDIT_HIGH_RISK_REQUESTED``; the chat card will block on
-          approval before the executor runs.
+          ``EDIT_HIGH_RISK_REQUESTED``; the chat card blocks on approval.
+        * Non-high-risk + ``fluid_mode`` → auto-execute immediately and
+          emit ``EDIT_AUTO_EXECUTED``.
+        * Non-high-risk + not ``fluid_mode`` (DT-006) → leave the plan in
+          ``waiting_approval`` for the in-chat card; the chat stays in its
+          current stage. Mirrors the route's opt-in fluid behavior
+          (chat-flow-redesign): fluid edits are opt-in, not default.
         """
 
         self._require_modeling_chat(chat)
-        if chat.modeling_stage is not ChatModelingStage.editing:
+        # DT-008: aceita edições/retry tanto de ``editing`` quanto de
+        # ``failed`` (uma execução que falhou pode ser corrigida pelo usuário).
+        if chat.modeling_stage not in (ChatModelingStage.editing, ChatModelingStage.failed):
             raise InvalidEditStage(chat.modeling_stage)
 
         edit_payload = payload.model_copy(
@@ -512,7 +866,32 @@ class ModelingChatOrchestrator:
                 ),
             }
         )
-        plan = self.planner.create_plan(edit_payload)
+        # T3.2/T3.3 + T3.6: lê o estado atual do Fusion UMA vez, ANTES de
+        # planejar. Alimenta a reconciliação (o planner parte do modelo real,
+        # não do histórico desatualizado) e o marcador de rollback. Best-effort:
+        # nunca bloqueia a edição (ver _read_live_timeline).
+        software = edit_payload.software_override
+        live_output: dict[str, Any] | None = None
+        reconciliation: str | None = None
+        if software == ModelingSoftware.fusion:
+            parent_plan = self._load_parent_plan(chat.modeling_plan_id)
+            read_context = parent_plan or ModelingPlan(
+                prompt="<leitura de estado>",
+                software_choice=ModelingSoftware.fusion,
+                status=ModelingPlanStatus.approved,
+            )
+            live_output = self._read_live_timeline(software=software, context_plan=read_context)
+            reconciliation = self._build_reconciliation_block(live_output)
+            # F5: reconciliação estruturada — lê a geometria AO VIVO (tokens/raios
+            # reais, F1) e injeta um ModelState atual no contexto do planner.
+            if settings.modeling_live_geometry_reconciliation_enabled:
+                geometry_output = self._read_live_geometry(
+                    software=software, context_plan=read_context
+                )
+                reconciliation = self._build_live_state_block(reconciliation, geometry_output)
+
+        plan = self.planner.create_plan(edit_payload, live_state_block=reconciliation)
+        plan = self._apply_rollback_marker(plan, live_output)
         high_risk = self._plan_has_high_risk(plan)
 
         if high_risk:
@@ -524,6 +903,23 @@ class ModelingChatOrchestrator:
             )
             return EditPlanOutcome(chat=updated, plan=plan, execution=None, requires_approval=True)
 
+        if not fluid_mode:
+            # DT-006: fora do modo fluido, edições não-high-risk também PARAM
+            # no card (waiting_approval) em vez de auto-executar. O chat
+            # permanece no estágio atual (editing/failed); a execução vem do
+            # card (endpoints /approve + /execute).
+            pending = plan.model_copy(
+                update={"status": ModelingPlanStatus.waiting_approval, "updated_at": now_utc()}
+            )
+            self.store.upsert_modeling_plan(pending)
+            self._audit(
+                "modeling.chat.edit_approval_requested",
+                chat_id=chat.id,
+                plan_id=plan.id,
+                stage=chat.modeling_stage.value if chat.modeling_stage else None,
+            )
+            return EditPlanOutcome(chat=chat, plan=pending, execution=None, requires_approval=True)
+
         # Auto-approve every step that the planner left as
         # ``waiting_approval`` (only a non-high-risk plan can reach this
         # branch) so the executor can run end-to-end.
@@ -534,7 +930,7 @@ class ModelingChatOrchestrator:
                 reason="edit_auto_approved",
             ),
         )
-        execution = self.executor.execute_plan(approved)
+        execution = self._run_execution(approved)
 
         updated = self._set_stage(
             chat,
@@ -567,7 +963,7 @@ class ModelingChatOrchestrator:
                 reason="edit_high_risk_approved",
             ),
         )
-        execution = self.executor.execute_plan(approved)
+        execution = self._run_execution(approved)
         updated = self._set_stage(
             chat,
             ChatModelingEvent.EDIT_HIGH_RISK_APPROVED,
@@ -638,55 +1034,28 @@ class ModelingChatOrchestrator:
     def _approve_plan_record(
         self, plan: ModelingPlan, payload: ModelingApprovalRequest
     ) -> ModelingPlan:
-        """Mirror :meth:`ModelingService.approve_plan` without coupling to it.
+        """Aplica + persiste a decisão de aprovação e emite o audit chat-side.
 
-        The orchestrator owns the chat-side state machine; the
-        per-plan mutation (status + step approvals) still lives on the
-        planner/executor side. Duplicating the small block keeps the
-        boundary explicit without re-importing the facade.
+        DT-006: a mutação (status do plano + promoção dos steps) vive em
+        ``policy.apply_plan_approval`` — **fonte única** compartilhada com
+        ``ModelingService.approve_plan``. Aqui só persistimos e emitimos o
+        evento de auditoria (``modeling.plan_approved``/``_rejected``).
         """
 
-        if payload.decision == ModelingApprovalDecision.reject:
-            rejected = plan.model_copy(
-                update={"status": ModelingPlanStatus.rejected, "updated_at": now_utc()}
-            )
-            self.store.upsert_modeling_plan(rejected)
-            self.store.add_audit_event(
-                AuditEvent(
-                    event_type="modeling.plan_rejected",
-                    metadata={"plan_id": rejected.id, "reason": payload.reason},
-                ),
-            )
-            return rejected
-
-        steps = []
-        for step in plan.steps:
-            if step.approval_required:
-                steps.append(
-                    step.model_copy(
-                        update={
-                            "status": _next_step_status_after_approval(step.status),
-                            "approved_at": now_utc(),
-                        }
-                    )
-                )
-            else:
-                steps.append(step)
-        approved = plan.model_copy(
-            update={
-                "status": ModelingPlanStatus.approved,
-                "steps": steps,
-                "updated_at": now_utc(),
-            }
+        result = apply_plan_approval(plan, payload)
+        self.store.upsert_modeling_plan(result)
+        event_type = (
+            "modeling.plan_rejected"
+            if payload.decision == ModelingApprovalDecision.reject
+            else "modeling.plan_approved"
         )
-        self.store.upsert_modeling_plan(approved)
         self.store.add_audit_event(
             AuditEvent(
-                event_type="modeling.plan_approved",
-                metadata={"plan_id": approved.id, "reason": payload.reason},
+                event_type=event_type,
+                metadata={"plan_id": result.id, "reason": payload.reason},
             ),
         )
-        return approved
+        return result
 
     def _set_stage(
         self,
@@ -724,20 +1093,6 @@ class ModelingChatOrchestrator:
 # ---------------------------------------------------------------------------
 
 
-def _next_step_status_after_approval(current_status: Any) -> Any:
-    """Mirror the small subset of statuses we need from contracts.
-
-    Imported lazily to avoid a heavy circular import; the function only
-    cares about the ``waiting_approval`` → ``approved`` transition.
-    """
-
-    from app.core.contracts import ModelingStepStatus
-
-    if current_status == ModelingStepStatus.waiting_approval:
-        return ModelingStepStatus.approved
-    return current_status
-
-
 class NotAModelingChat(ValueError):
     """Raised when an orchestrator method is called on a non-3D chat."""
 
@@ -751,7 +1106,10 @@ class InvalidEditStage(ValueError):
 
     def __init__(self, stage: ChatModelingStage | None) -> None:
         stage_str = stage.value if stage is not None else "<none>"
-        super().__init__(f"propose_edit_plan requires modeling_stage='editing', got {stage_str!r}.")
+        super().__init__(
+            f"propose_edit_plan requires modeling_stage in ('editing', 'failed'), "
+            f"got {stage_str!r}."
+        )
         self.stage = stage
 
 

@@ -24,7 +24,9 @@ class LLMGateway:
     async def stream_chat(
         self,
         model: ModelConfig,
-        messages: list[dict[str, str]],
+        # F4: ``content`` pode ser ``str`` (text-only) OU lista de blocos
+        # multimodais (texto + imagem). Ver ``llm_gateway.multimodal``.
+        messages: list[dict[str, Any]],
         reasoning_summary: Literal["off", "auto"] = "off",
     ) -> AsyncIterator[ProviderStreamEvent]:
         provider = self.providers[model.provider]

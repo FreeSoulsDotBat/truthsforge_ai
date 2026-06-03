@@ -366,9 +366,13 @@ class ChatModelingStage(StrEnum):
     * ``approved``   — user approved the plan; backend will execute every
                        step (including high_risk).
     * ``executing``  — execution in progress.
-    * ``editing``    — primary plan executed; new messages produce
+    * ``editing``    — primary plan executed OK; new messages produce
                        auto-approved mini-plans (or reopen approval if a
                        step is high_risk).
+    * ``failed``     — execution failed (DT-008). Distinct from ``editing``
+                       so the agentic loop and the UI can tell a failed run
+                       from a successful one. The user can retry/edit
+                       (→ ``editing``) or start over (→ ``discovery``).
     * ``completed``  — chat is closed/archived for modeling purposes.
 
     Non-3D chats keep ``modeling_stage = None``.
@@ -379,6 +383,7 @@ class ChatModelingStage(StrEnum):
     approved = "approved"
     executing = "executing"
     editing = "editing"
+    failed = "failed"
     completed = "completed"
 
 
@@ -854,6 +859,77 @@ class ModelingPlanKind(StrEnum):
     edit = "edit"
 
 
+class ModelStateFace(BaseModel):
+    """F1: face do modelo com identidade ESTÁVEL (entityToken, sobrevive a
+    recompute) + geometria útil para o planner mirar mecanismos."""
+
+    token: str | None = None
+    type: str | None = None  # planar | cylindrical | conical | spherical | other
+    area_mm2: float | None = None
+    radius_mm: float | None = None  # cilíndrica/cônica/esférica
+    normal_axis: str | None = None  # +x..-z quando planar
+    center_mm: list[float] | None = None
+
+
+class ModelStateEdge(BaseModel):
+    token: str | None = None
+    length_mm: float | None = None
+    is_circular: bool = False
+    radius_mm: float | None = None  # arestas em arco/círculo (furos/knuckle)
+    adjacent_face_tokens: list[str] = Field(default_factory=list)
+
+
+class ModelStateBody(BaseModel):
+    stable_id: str | None = None
+    name: str | None = None
+    dimensions_mm: list[float] | None = None
+    is_solid: bool | None = None
+    is_closed: bool | None = None
+    surface_area_mm2: float | None = None
+    face_count: int | None = None
+    edge_count: int | None = None
+    faces: list[ModelStateFace] = Field(default_factory=list)
+    edges: list[ModelStateEdge] = Field(default_factory=list)
+
+
+class ModelState(BaseModel):
+    """F1: snapshot estruturado do estado geométrico real do modelo, capturado
+    após execução (read-back via ``fusion.query_geometry``) e injetado no
+    contexto do planner entre etapas/edições. Substitui o contexto puramente
+    textual (nomes de timeline/params) por geometria com tokens estáveis."""
+
+    captured_at: datetime = Field(default_factory=now_utc)
+    source: str = "query_geometry"
+    bodies: list[ModelStateBody] = Field(default_factory=list)
+    timeline_count: int | None = None
+    parameters: dict[str, str] = Field(default_factory=dict)
+
+
+class ModelingSubGoalStatus(StrEnum):
+    pending = "pending"
+    completed = "completed"
+    failed = "failed"
+
+
+class ModelingSubGoal(BaseModel):
+    """F2: unidade replanejável da decomposição hierárquica de um pedido.
+
+    O planejamento hierárquico decompõe a peça em sub-objetivos verificáveis
+    (ex.: "corpo da caixa ocado", "tampa que encaixa", "knuckle macho", "furo
+    do pino") ANTES de gerar os steps finos. Cada sub-objetivo é planejado e
+    executado como um bloco observando o ``ModelState`` real do anterior; o
+    ``acceptance`` é o critério legível de "deu certo"."""
+
+    id: str = Field(default_factory=lambda: new_id("m3d_subgoal"))
+    seq: int = Field(ge=1)
+    title: str
+    description: str = ""
+    acceptance: str = ""
+    status: ModelingSubGoalStatus = ModelingSubGoalStatus.pending
+    block_plan_id: str | None = None
+    """Id do ``ModelingPlan`` (kind=edit) que executou este sub-objetivo."""
+
+
 class ModelingPlan(BaseModel):
     id: str = Field(default_factory=lambda: new_id("m3d_plan"))
     project_id: str | None = None
@@ -874,6 +950,23 @@ class ModelingPlan(BaseModel):
     fallback_reason: str | None = None
     parent_plan_id: str | None = None
     """For ``kind="edit"``, the id of the primary plan it edits."""
+    rollback_marker: int | None = None
+    """T3.6: for fusion ``kind="edit"`` plans, the design timeline feature
+    count captured (best-effort) *before* this edit ran. ``POST
+    /plans/{id}/rollback`` reverts the model to this count via
+    ``fusion.rollback_timeline``. ``None`` when the pre-edit read failed or
+    the software has no timeline (rollback then unavailable for this edit)."""
+    model_state: ModelState | None = None
+    """F1: snapshot geométrico estruturado capturado (best-effort) ao fim da
+    execução via read-back ``fusion.query_geometry``. Injetado no contexto do
+    planner em edições/blocos seguintes (faces/edges com tokens estáveis +
+    medidas), substituindo o contexto textual pobre. ``None`` quando a captura
+    falhou, não há body, ou o software não suporta (JSONB, migration-free)."""
+    sub_goals: list[ModelingSubGoal] = Field(default_factory=list)
+    """F2: decomposição hierárquica (só no plano ``primary`` quando o
+    planejamento hierárquico está ligado). Cada sub-objetivo é executado como
+    um bloco ``kind=edit`` com ``parent_plan_id`` = este plano. Vazio no fluxo
+    one-shot legado."""
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
 
@@ -887,12 +980,16 @@ class ModelingPlanCreate(BaseModel):
     parent_plan_id: str | None = None
     software_override: ModelingSoftware | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=12)
+    # F4: imagens/arquivos anexados pelo usuário (image-to-model). O planner
+    # analisa cada um (vision/Blender) e injeta a descrição no contexto.
+    attached_file_ids: list[str] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def normalize_software_override(self) -> ModelingPlanCreate:
         if self.software_override == ModelingSoftware.auto:
             self.software_override = None
         self.knowledge_base_ids = list(dict.fromkeys(self.knowledge_base_ids))
+        self.attached_file_ids = list(dict.fromkeys(self.attached_file_ids))
         return self
 
 

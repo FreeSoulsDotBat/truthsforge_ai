@@ -2,7 +2,7 @@
 
 ## Observabilidade do módulo de modelagem 3D
 
-O backend emite logs JSON estruturados e persiste eventos de trace em `modeling_trace_events` para todo o fluxo de modelagem 3D (planner → executor → MCP → Fusion/Blender). Ver o plano em `C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md`.
+O backend emite logs JSON estruturados e persiste eventos de trace em `modeling_trace_events` para todo o fluxo de modelagem 3D (planner → executor → MCP → Fusion/Blender). Ver o plano de observabilidade em `specs/005-modeling-3d-fusion/observability-plan.md`.
 
 ### Flags
 
@@ -199,7 +199,8 @@ Para preparar o Git hook local:
 
 Isso configura `core.hooksPath=.githooks`; o hook `.githooks/pre-commit` chama `scripts/quality.ps1` antes de cada commit.
 
-Ou manualmente:
+Ou manualmente (este bloco inclui os builds `build:web`/`build:docs`, que rodam
+no `test-container.ps1`, **não** no `quality.ps1`):
 
 ```powershell
 docker compose --env-file infra\.env -f infra\docker-compose.yml -f infra\docker-compose.dev.yml exec -T backend python -m pytest

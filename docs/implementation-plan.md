@@ -67,13 +67,17 @@ Objetivo: transformar JUDITE de orquestrador simples em coordenadora operacional
 
 Objetivo: consolidar o modulo mais alinhado a arquitetura e remover falsas promessas.
 
-- Manter Blender real como caminho obrigatorio quando configurado.
-- Melhorar UI para diferenciar mock, adapter ausente, execucao real e erro.
-- Melhorar validacoes de malha/printability.
-- Tratar Fusion como obrigatorio para a trilha atual, com spec propria,
-  adapter real pelo Fusion MCP Server local (`/mcp` na porta do aplicativo) e
-  bridge loopback legado como fallback.
-- Registrar versoes de modelos e exports como artifacts.
+- ✅ Blender real quando configurado; Fusion pelo Fusion MCP Server oficial
+  (`/mcp` na porta do aplicativo), bridge loopback legado como fallback.
+- ✅ UI diferencia mock, adapter ausente, execucao real e erro (`transport`).
+- ✅ Validacoes de malha/printability (Blender bmesh + Fusion B-Rep).
+- ✅ Versoes de modelos e exports registrados como artifacts versionados.
+- Replan v4 (spec `005-modeling-3d-fusion`, frentes F1–F6): chat-first integral
+  (ADR-013), motor genérico (ADR-020) com loop agêntico de auto-correção,
+  verificação geométrica/visual, image-to-model, estado rico (ADR-021),
+  reconciliação ao vivo, sanitizer determinístico e servidor MCP standalone
+  (ADR-017). A maioria das capacidades novas entra atrás de flags (default OFF)
+  até o gate do dono no Fusion real.
 
 ## Fase 6 - Mobile, pairing e seguranca
 

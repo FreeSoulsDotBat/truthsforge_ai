@@ -90,6 +90,90 @@ class Settings(BaseModel):
             "TRUTHS_FORGE_FUSION_MCP_URL", "http://127.0.0.1:27182/mcp"
         )
     )
+    # Servidor MCP standalone (ADR-017). Local-first: bind loopback por padrão,
+    # autenticação por token Bearer. O backend consome este servidor quando
+    # ``modeling_mcp_transport == "mcp_http"``. Ver
+    # specs/005-modeling-3d-fusion/micro/fase-1-mcp-standalone.md.
+    modeling_mcp_server_host: str = Field(
+        default_factory=lambda: os.getenv("TRUTHS_FORGE_MCP_SERVER_HOST", "127.0.0.1")
+    )
+    modeling_mcp_server_port: int = Field(
+        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MCP_SERVER_PORT", "8787"))
+    )
+    # Token explícito (env) tem precedência; vazio => gerado e persistido em
+    # ``modeling_dir/mcp_server_token`` por ``auth.load_or_create_token``.
+    modeling_mcp_server_token: str = Field(
+        default_factory=lambda: os.getenv("TRUTHS_FORGE_MCP_SERVER_TOKEN", "")
+    )
+    # URL que o cliente backend usa para alcançar o servidor standalone.
+    modeling_mcp_server_url: str = Field(
+        default_factory=lambda: os.getenv(
+            "TRUTHS_FORGE_MCP_SERVER_URL", "http://127.0.0.1:8787/mcp"
+        )
+    )
+    # Loop agêntico de auto-correção (Fase 2, RF-010/011). Quando ``true``, a
+    # execução do plano passa pelo ModelingAgentLoop (executa→inspeciona→corrige,
+    # teto 5, rollback ao esgotar) em vez do executor linear. Default OFF até o
+    # gate do dono no Fusion real (corretor LLM e read-back dependem do Fusion).
+    modeling_agentic_loop_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_AGENTIC_LOOP_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
+    # Planejamento hierárquico/agêntico (Frente F2, replan v4). Quando ``true``,
+    # o orchestrator decompõe o pedido em sub-objetivos e planeja cada bloco
+    # observando o ModelState real (F1) do bloco anterior (decompõe→executa→
+    # observa→replaneja), em vez do plano one-shot. Reusa o ModelingAgentLoop
+    # por baixo. Default OFF (depende do Fusion real + custo extra de LLM).
+    modeling_hierarchical_planning_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_HIERARCHICAL_PLANNING_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
+    # Sanitizer determinístico pós-LLM (Frente F6 / ex-Fase 9.2, replan v4).
+    # Camada entre planner e executor que remove campos-fantasma e valores de
+    # referência geométrica (ex.: `face:"X.top_face"`, `bounding_box.max_x`) que
+    # os nudges do system prompt não eliminam 100% (Bug J' do gate da Fase 4).
+    # Conservador: só descarta o que NENHUM handler aceita e os nudges proíbem;
+    # planos válidos passam intactos. Default ON (guardrail puro, com telemetria
+    # por aviso); desligue para depurar o comportamento cru do planner.
+    modeling_plan_sanitizer_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_PLAN_SANITIZER_ENABLED", "true").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
+    # Reconciliação por geometria ao vivo na edição (Frente F5, replan v4).
+    # Quando ``true``, antes de planejar uma edição o orchestrator lê a
+    # GEOMETRIA real (``fusion.query_geometry``) além da timeline e injeta um
+    # ModelState ao vivo (tokens/raios reais — F1) no contexto do planner, para
+    # editar o modelo ATUAL e não um snapshot velho (capta mudanças manuais do
+    # usuário). Default OFF: probe extra (custo/latência) e preserva o caminho
+    # da Fase 3 já homologado até o gate do dono.
+    modeling_live_geometry_reconciliation_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_LIVE_GEOMETRY_RECONCILIATION_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
+    # Verificação VISUAL pós-execução (motor genérico, passo 3 — replan v4).
+    # Quando ``true``, após executar o plano o loop RENDERIZA o modelo
+    # (capture_viewport), manda o render + a intenção para a LLM de visão
+    # (gateway multimodal F4), recebe um veredito (corresponde? que diverge?) e,
+    # se divergir, REPLANEJA uma edição corretiva. É o que faz a composição
+    # genérica se auto-corrigir em qualquer produto. Default OFF (render só no
+    # Fusion real + custo de visão). Teto em ``modeling_visual_max_rounds``.
+    modeling_visual_verification_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_VISUAL_VERIFICATION_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
+    modeling_visual_max_rounds: int = Field(
+        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MODELING_VISUAL_MAX_ROUNDS", "2"))
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",
@@ -108,8 +192,8 @@ class Settings(BaseModel):
         )
     )
 
-    # Observabilidade do módulo de modelagem 3D (ver plano em
-    # C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md).
+    # Observabilidade do módulo de modelagem 3D (ver
+    # specs/005-modeling-3d-fusion/observability-plan.md).
     # Quando ``true``, o ``ModelingTracer`` persiste eventos de trace em
     # ``modeling_trace_events``, emite logs JSON estruturados em
     # ``app.modeling.*`` e enriquece eventos SSE com ``trace_id``. Default
@@ -135,9 +219,7 @@ class Settings(BaseModel):
         default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MODELING_TRACE_RETENTION_INFO", "30"))
     )
     modeling_trace_retention_days_error: int = Field(
-        default_factory=lambda: int(
-            os.getenv("TRUTHS_FORGE_MODELING_TRACE_RETENTION_ERROR", "180")
-        )
+        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MODELING_TRACE_RETENTION_ERROR", "180"))
     )
     # Discovery agent (P2 do chat-flow-redesign): antes de propor o plano, um
     # agente LLM avalia se o pedido está claro o suficiente; se não, faz
@@ -152,9 +234,7 @@ class Settings(BaseModel):
     # Limiar de confiança: abaixo dele (ou se o LLM listar perguntas) o agente
     # pergunta em vez de propor o plano. Mais alto = pergunta mais.
     modeling_discovery_confidence_threshold: float = Field(
-        default_factory=lambda: float(
-            os.getenv("TRUTHS_FORGE_MODELING_DISCOVERY_THRESHOLD", "0.7")
-        )
+        default_factory=lambda: float(os.getenv("TRUTHS_FORGE_MODELING_DISCOVERY_THRESHOLD", "0.7"))
     )
 
     @property

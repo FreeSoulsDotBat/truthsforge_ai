@@ -411,7 +411,9 @@ class OpenAIProvider(BaseRemoteProvider):
             payload["temperature"] = model.temperature
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
+            # F6: 180s — planos complexos com orçamento de saída maior demoram
+            # mais (gpt-5-mini gasta tempo em reasoning antes de emitir o JSON).
+            async with httpx.AsyncClient(timeout=180) as client:
                 response = await client.post(
                     "https://api.openai.com/v1/responses",
                     headers=headers,

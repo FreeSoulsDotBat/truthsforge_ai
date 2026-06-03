@@ -21,7 +21,8 @@ dependencies = [
   "pypdf>=5.0.0",
   "pillow>=10.0.0",
   "pytesseract>=0.3.13",
-  "alembic>=1.13.0"
+  "alembic>=1.13.0",
+  "mcp>=1.27.0"
 ]
 
 [project.optional-dependencies]

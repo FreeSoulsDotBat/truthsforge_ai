@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -62,8 +64,13 @@ class _FakePlanner:
 
     store: _FakeStore
     next_steps: list[ModelingPlanStep] = field(default_factory=list)
+    # T3.3: captura o bloco de reconciliação que o orchestrator injeta.
+    last_live_state_block: str | None = None
 
-    def create_plan(self, payload: ModelingPlanCreate) -> ModelingPlan:
+    def create_plan(
+        self, payload: ModelingPlanCreate, *, live_state_block: str | None = None
+    ) -> ModelingPlan:
+        self.last_live_state_block = live_state_block
         steps = list(self.next_steps)
         plan = ModelingPlan(
             project_id=payload.project_id,
@@ -91,11 +98,19 @@ class _FakeExecutor:
 
     store: _FakeStore
     fail: bool = False
+    # T3.2/T3.6: controls the best-effort ``query_timeline`` probe in
+    # ``_read_live_timeline`` (only invoked for fusion edits).
+    probe_count: int | None = 7
+    probe_features: list[dict[str, Any]] | None = None
+    probe_ok: bool = True
+    probe_raises: bool = False
+    # Quando True, embrulha a saída no envelope real do adapter HTTP fusion
+    # (payload do script como JSON stringificado em message/result.message).
+    probe_envelope: bool = False
+    single_step_calls: list[ModelingPlanStep] = field(default_factory=list)
 
     def execute_plan(self, plan: ModelingPlan) -> ModelingExecutionResult:
-        status = (
-            ModelingPlanStatus.failed if self.fail else ModelingPlanStatus.completed
-        )
+        status = ModelingPlanStatus.failed if self.fail else ModelingPlanStatus.completed
         executed = [step.id for step in plan.steps]
         updated = plan.model_copy(update={"status": status})
         self.store.upsert_modeling_plan(updated)
@@ -105,6 +120,30 @@ class _FakeExecutor:
             blocked_step_ids=[],
             events=[f"executed:{name}" for name in (s.tool_name for s in plan.steps)],
             tool_call_ids=[],
+        )
+
+    def _execute_single_step(self, step: ModelingPlanStep, *, plan: ModelingPlan) -> Any:
+        self.single_step_calls.append(step)
+        if self.probe_raises:
+            raise RuntimeError("fusion offline durante a captura")
+        inner: dict[str, Any] = (
+            {} if self.probe_count is None else {"timeline_count": self.probe_count}
+        )
+        if self.probe_features is not None:
+            inner["timeline"] = self.probe_features
+        output: dict[str, Any] = inner
+        if self.probe_envelope:
+            # Replica o envelope HTTP real: payload do script como JSON string.
+            blob = json.dumps({**inner, "ok": True, "tool_name": "fusion.query_timeline"})
+            output = {
+                "ok": True,
+                "input": {},
+                "result": {"message": blob, "success": True},
+                "message": blob,
+                "software": "fusion",
+            }
+        return SimpleNamespace(
+            step=step, output=output, tool_call_id=None, event="probe", ok=self.probe_ok
         )
 
 
@@ -118,12 +157,20 @@ def _make_chat(*, is_modeling_3d: bool = True, stage: Any = None) -> ChatSession
     return chat
 
 
-def _orchestrator(**kwargs: Any) -> tuple[
-    ModelingChatOrchestrator, _FakeStore, _FakePlanner, _FakeExecutor
-]:
+def _orchestrator(
+    **kwargs: Any,
+) -> tuple[ModelingChatOrchestrator, _FakeStore, _FakePlanner, _FakeExecutor]:
     store = _FakeStore()
     planner = _FakePlanner(store=store, next_steps=kwargs.get("planner_steps", []))
-    executor = _FakeExecutor(store=store, fail=kwargs.get("execution_fails", False))
+    executor = _FakeExecutor(
+        store=store,
+        fail=kwargs.get("execution_fails", False),
+        probe_count=kwargs.get("probe_count", 7),
+        probe_features=kwargs.get("probe_features"),
+        probe_ok=kwargs.get("probe_ok", True),
+        probe_raises=kwargs.get("probe_raises", False),
+        probe_envelope=kwargs.get("probe_envelope", False),
+    )
     orch = ModelingChatOrchestrator(store=store, planner=planner, executor=executor)
     return orch, store, planner, executor
 
@@ -204,8 +251,7 @@ def test_ask_clarification_keeps_chat_in_discovery() -> None:
 
     assert updated.modeling_stage is ChatModelingStage.discovery
     assert any(
-        event.event_type == "modeling.chat.clarification_asked"
-        for event in store.audit_events
+        event.event_type == "modeling.chat.clarification_asked" for event in store.audit_events
     )
 
 
@@ -258,7 +304,7 @@ def test_approve_plan_drives_through_executing_to_editing() -> None:
     assert execution.executed_step_ids == [step.id for step in plan.steps]
 
 
-def test_approve_plan_falls_into_editing_when_execution_fails() -> None:
+def test_approve_plan_falls_into_failed_when_execution_fails() -> None:
     orch, store, _, _ = _orchestrator(
         planner_steps=[_safe_step(1, "blender.create_mesh_primitive")],
         execution_fails=True,
@@ -269,7 +315,8 @@ def test_approve_plan_falls_into_editing_when_execution_fails() -> None:
 
     chat, approved_plan, _ = orch.approve_plan(chat, plan.id)
 
-    assert chat.modeling_stage is ChatModelingStage.editing  # failed but moves on
+    # DT-008: execução que falha cai no estágio distinto ``failed``.
+    assert chat.modeling_stage is ChatModelingStage.failed
     assert approved_plan.status is ModelingPlanStatus.failed
 
 
@@ -294,9 +341,7 @@ def test_reject_plan_returns_to_discovery_and_clears_plan_id() -> None:
 
 
 def test_propose_edit_plan_auto_executes_when_no_high_risk() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.editing)
     chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
     store.chats[chat.id] = chat
@@ -313,29 +358,250 @@ def test_propose_edit_plan_auto_executes_when_no_high_risk() -> None:
     assert outcome.plan.status is ModelingPlanStatus.completed
 
 
+def test_propose_edit_plan_captures_rollback_marker_for_fusion() -> None:
+    orch, store, _, executor = _orchestrator(
+        planner_steps=[_safe_step(1, "fusion.extrude_profile")],
+        probe_count=5,
+    )
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    outcome = orch.propose_edit_plan(
+        chat,
+        payload=ModelingPlanCreate(
+            prompt="extrudar base 4mm", software_override=ModelingSoftware.fusion
+        ),
+    )
+
+    # T3.6: a captura roda fusion.query_timeline ANTES da edição (fora de
+    # plan.steps, para o loop nunca a ver) e grava a contagem no plano.
+    # F1 (T1.6): após a edição auto-executar, run_plan_with_optional_loop
+    # captura o ModelState via um probe fusion.query_geometry (read-back).
+    assert [s.tool_name for s in executor.single_step_calls] == [
+        "fusion.query_timeline",
+        "fusion.query_geometry",
+    ]
+    assert outcome.plan.rollback_marker == 5
+    assert store.plans[outcome.plan.id].rollback_marker == 5
+    assert outcome.requires_approval is False
+
+
+def test_propose_edit_plan_skips_rollback_marker_for_parameter_only_edit() -> None:
+    """Fix T4 gate: edits que só mudam parâmetros (fusion.set_parameter) não
+    criam entrada na timeline → rollback via timeline_count seria no-op.
+    O orchestrator deve manter rollback_marker=None nesse caso para a UI
+    esconder o botão Reverter (vide ModelingEditCard.canRollback)."""
+
+    orch, store, _, executor = _orchestrator(
+        planner_steps=[_safe_step(1, "fusion.set_parameter")],
+        probe_count=2,
+    )
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    outcome = orch.propose_edit_plan(
+        chat,
+        payload=ModelingPlanCreate(
+            prompt="ajustar Angulo para 180deg", software_override=ModelingSoftware.fusion
+        ),
+    )
+
+    # A sondagem da timeline rodou (best-effort, ainda útil para reconciliation),
+    # mas o marker NÃO é gravado porque o rollback não tem como reverter
+    # mudanças de parâmetro. F1: o probe query_geometry pós-execução também roda.
+    assert [s.tool_name for s in executor.single_step_calls] == [
+        "fusion.query_timeline",
+        "fusion.query_geometry",
+    ]
+    assert outcome.plan.rollback_marker is None
+    assert store.plans[outcome.plan.id].rollback_marker is None
+
+
+def test_propose_edit_plan_skips_rollback_capture_for_non_fusion() -> None:
+    orch, store, _, executor = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    outcome = orch.propose_edit_plan(chat, payload=ModelingPlanCreate(prompt="bevel 2mm"))
+
+    # Blender não tem timeline: nenhuma sondagem; marcador permanece None.
+    assert executor.single_step_calls == []
+    assert outcome.plan.rollback_marker is None
+
+
+def test_propose_edit_plan_proceeds_when_rollback_capture_fails() -> None:
+    orch, store, _, executor = _orchestrator(
+        planner_steps=[_safe_step(1, "fusion.extrude_profile")],
+        probe_raises=True,
+    )
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    outcome = orch.propose_edit_plan(
+        chat,
+        payload=ModelingPlanCreate(
+            prompt="extrudar base 4mm", software_override=ModelingSoftware.fusion
+        ),
+    )
+
+    # A leitura falhou, mas a edição NÃO pode ser bloqueada por isso (best-effort).
+    assert executor.single_step_calls  # tentou sondar
+    assert outcome.requires_approval is False
+    assert outcome.plan.status is ModelingPlanStatus.completed
+    assert outcome.plan.rollback_marker is None
+
+
+def test_propose_edit_plan_injects_live_state_into_planner_for_fusion() -> None:
+    # T3.2/T3.3: o estado ao vivo do Fusion vira contexto do planner.
+    orch, store, planner, _ = _orchestrator(
+        planner_steps=[_safe_step(1, "fusion.chamfer_edges")],
+        probe_count=2,
+        probe_features=[
+            {"index": 0, "name": "Extrude1", "type": "ExtrudeFeature", "suppressed": False},
+            {"index": 1, "name": "Fillet1", "type": "FilletFeature", "suppressed": False},
+        ],
+    )
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    orch.propose_edit_plan(
+        chat,
+        payload=ModelingPlanCreate(
+            prompt="chanfrar arestas", software_override=ModelingSoftware.fusion
+        ),
+    )
+
+    block = planner.last_live_state_block
+    assert block is not None
+    assert "estado-atual-fusion" in block
+    assert "Extrude1" in block
+    assert "Fillet1" in block
+
+
+def test_propose_edit_plan_passes_no_live_state_for_non_fusion() -> None:
+    orch, store, planner, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    orch.propose_edit_plan(chat, payload=ModelingPlanCreate(prompt="bevel 2mm"))
+
+    assert planner.last_live_state_block is None
+
+
+def test_reconciliation_block_is_factual_without_false_manual_edit_hint() -> None:
+    # T3.2 (revisado): o bloco NÃO declara "edição manual" por contagem
+    # (passos × features divergem por granularidade → falso positivo que
+    # empurrava o planner a operações redundantes, ex.: 2º fillet).
+    orch, store, planner, _ = _orchestrator(
+        planner_steps=[_safe_step(1, "fusion.extrude_profile")],
+        probe_count=5,
+    )
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+    parent = ModelingPlan(
+        id="m3d_plan_parent",
+        prompt="primário",
+        software_choice=ModelingSoftware.fusion,
+        steps=[
+            _safe_step(1, "fusion.add_box").model_copy(
+                update={"status": ModelingStepStatus.completed}
+            ),
+            _safe_step(2, "fusion.extrude_profile").model_copy(
+                update={"status": ModelingStepStatus.completed}
+            ),
+        ],
+    )
+    store.plans["m3d_plan_parent"] = parent
+
+    orch.propose_edit_plan(
+        chat,
+        payload=ModelingPlanCreate(prompt="editar", software_override=ModelingSoftware.fusion),
+    )
+
+    block = planner.last_live_state_block
+    assert block is not None
+    assert "edição manual" not in block.lower()
+    assert "Timeline: 5 feature(s)." in block
+
+
+def test_inner_fusion_payload_parses_http_envelope() -> None:
+    # Regressão (gate 2026-05-25): tools fusion OK devolvem o payload como JSON
+    # stringificado em message/result.message; ler o topo dava None → marcador
+    # vazio + bloco de reconciliação enganoso ("0 features").
+    orch, _, _, _ = _orchestrator()
+    inner = {
+        "ok": True,
+        "timeline_count": 9,
+        "timeline": [{"index": 0, "name": "Sketch_Base", "type": "adsk::fusion::Sketch"}],
+        "parameters": [],
+    }
+    blob = json.dumps(inner)
+    envelope = {
+        "ok": True,
+        "input": {},
+        "result": {"message": blob, "success": True},
+        "message": blob,
+        "software": "fusion",
+    }
+    payload = orch._inner_fusion_payload(envelope)
+    assert payload is not None
+    assert payload["timeline_count"] == 9
+    assert payload["timeline"][0]["name"] == "Sketch_Base"
+    # formato direto (fakes/mock/in_process) continua passando direto
+    assert orch._inner_fusion_payload({"timeline_count": 3})["timeline_count"] == 3
+    assert orch._inner_fusion_payload(None) is None
+
+
+def test_propose_edit_plan_extracts_marker_from_http_envelope() -> None:
+    # Regressão fim-a-fim: com o envelope HTTP real, marcador + reconciliação
+    # têm que sair corretos (o bug do gate deixava marker vazio e bloco "0").
+    orch, store, planner, _ = _orchestrator(
+        planner_steps=[_safe_step(1, "fusion.fillet_edges")],
+        probe_count=9,
+        probe_features=[{"index": 0, "name": "Extrude1", "type": "ExtrudeFeature"}],
+        probe_envelope=True,
+    )
+    chat = _make_chat(stage=ChatModelingStage.editing)
+    chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
+    store.chats[chat.id] = chat
+
+    outcome = orch.propose_edit_plan(
+        chat,
+        payload=ModelingPlanCreate(prompt="arredondar", software_override=ModelingSoftware.fusion),
+    )
+
+    assert outcome.plan.rollback_marker == 9
+    block = planner.last_live_state_block
+    assert block is not None
+    assert "9 feature(s)" in block
+    assert "Extrude1" in block
+
+
 def test_propose_edit_plan_blocks_on_high_risk() -> None:
     orch, store, _, _ = _orchestrator(planner_steps=[_high_risk_step()])
     chat = _make_chat(stage=ChatModelingStage.editing)
     chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
     store.chats[chat.id] = chat
 
-    outcome = orch.propose_edit_plan(
-        chat, payload=ModelingPlanCreate(prompt="aplicar boolean")
-    )
+    outcome = orch.propose_edit_plan(chat, payload=ModelingPlanCreate(prompt="aplicar boolean"))
 
     assert outcome.requires_approval is True
     assert outcome.execution is None
     assert outcome.chat.modeling_stage is ChatModelingStage.editing
     assert any(
-        event.event_type == "modeling.chat.edit_high_risk_requested"
-        for event in store.audit_events
+        event.event_type == "modeling.chat.edit_high_risk_requested" for event in store.audit_events
     )
 
 
 def test_propose_edit_plan_raises_outside_editing_stage() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.discovery)
     store.chats[chat.id] = chat
 
@@ -349,9 +615,7 @@ def test_approve_edit_plan_executes_and_keeps_editing_stage() -> None:
     store.chats[chat.id] = chat
     chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
     store.chats[chat.id] = chat
-    outcome = orch.propose_edit_plan(
-        chat, payload=ModelingPlanCreate(prompt="aplicar boolean")
-    )
+    outcome = orch.propose_edit_plan(chat, payload=ModelingPlanCreate(prompt="aplicar boolean"))
 
     chat, approved, execution = orch.approve_edit_plan(outcome.chat, outcome.plan.id)
 
@@ -365,9 +629,7 @@ def test_reject_edit_plan_returns_to_discovery() -> None:
     chat = _make_chat(stage=ChatModelingStage.editing)
     chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
     store.chats[chat.id] = chat
-    outcome = orch.propose_edit_plan(
-        chat, payload=ModelingPlanCreate(prompt="aplicar boolean")
-    )
+    outcome = orch.propose_edit_plan(chat, payload=ModelingPlanCreate(prompt="aplicar boolean"))
 
     chat, rejected = orch.reject_edit_plan(
         outcome.chat, outcome.plan.id, reason="prefiro outra abordagem"
@@ -383,9 +645,7 @@ def test_reject_edit_plan_returns_to_discovery() -> None:
 
 
 def test_orchestrator_rejects_non_modeling_chats() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(is_modeling_3d=False)
     store.chats[chat.id] = chat
 
@@ -401,9 +661,7 @@ def test_archive_chat_marks_completed_even_from_non_terminal_stage() -> None:
     updated = orch.archive_chat(chat)
 
     assert updated.modeling_stage is ChatModelingStage.completed
-    assert any(
-        event.event_type == "modeling.chat.archived" for event in store.audit_events
-    )
+    assert any(event.event_type == "modeling.chat.archived" for event in store.audit_events)
 
 
 def test_archive_chat_is_noop_for_non_modeling_chat() -> None:
@@ -422,9 +680,7 @@ def test_archive_chat_is_noop_for_non_modeling_chat() -> None:
 
 
 def test_approve_plan_only_advances_to_approved_without_executing() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.discovery)
     store.chats[chat.id] = chat
     chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
@@ -439,9 +695,7 @@ def test_approve_plan_only_advances_to_approved_without_executing() -> None:
 
 
 def test_execute_plan_runs_after_approve_and_lands_in_editing() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.discovery)
     store.chats[chat.id] = chat
     chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
@@ -458,9 +712,7 @@ def test_split_flow_matches_monolithic_approve_plan() -> None:
     """approve_plan_only + execute_plan must land in the same end state as the
     monolithic approve_plan (the agent-tool path)."""
 
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.discovery)
     store.chats[chat.id] = chat
     chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
@@ -473,9 +725,7 @@ def test_split_flow_matches_monolithic_approve_plan() -> None:
 
 
 def test_execute_plan_retry_in_editing_stays_editing() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.discovery)
     store.chats[chat.id] = chat
     chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
@@ -491,9 +741,7 @@ def test_execute_plan_retry_in_editing_stays_editing() -> None:
 
 
 def test_reject_dispatches_to_reject_plan_in_planning() -> None:
-    orch, store, _, _ = _orchestrator(
-        planner_steps=[_safe_step(1, "blender.apply_bevel")]
-    )
+    orch, store, _, _ = _orchestrator(planner_steps=[_safe_step(1, "blender.apply_bevel")])
     chat = _make_chat(stage=ChatModelingStage.discovery)
     store.chats[chat.id] = chat
     chat, plan = orch.propose_plan(chat, payload=ModelingPlanCreate(prompt="cubo"))
@@ -509,9 +757,7 @@ def test_reject_dispatches_to_reject_edit_plan_in_editing() -> None:
     chat = _make_chat(stage=ChatModelingStage.editing)
     chat = chat.model_copy(update={"modeling_plan_id": "m3d_plan_parent"})
     store.chats[chat.id] = chat
-    outcome = orch.propose_edit_plan(
-        chat, payload=ModelingPlanCreate(prompt="aplicar boolean")
-    )
+    outcome = orch.propose_edit_plan(chat, payload=ModelingPlanCreate(prompt="aplicar boolean"))
 
     chat, rejected = orch.reject(outcome.chat, outcome.plan.id, reason="não")
 

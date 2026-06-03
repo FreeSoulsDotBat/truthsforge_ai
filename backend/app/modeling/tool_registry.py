@@ -207,6 +207,18 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Lista bodies/faces/arestas com índice estável + metadata para seleção precisa (G2.2).",
     ),
     _t(
+        "fusion.capture_viewport",
+        _FUSION,
+        _RO,
+        "Renderiza o viewport e devolve a imagem (base64) p/ verificação visual no loop.",
+    ),
+    _t(
+        "fusion.query_timeline",
+        _FUSION,
+        _RO,
+        "Lê a timeline (features/ordem/supressão) + parâmetros atuais p/ reconciliação (T3.1).",
+    ),
+    _t(
         "fusion.validate_printability",
         _FUSION,
         _RO,
@@ -377,6 +389,52 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Varre um profile ao longo de um caminho (Onda E).",
     ),
     _t(
+        "fusion.create_surface_patch",
+        _FUSION,
+        _MUT,
+        "Cria SurfaceBody preenchendo um boundary fechado (sketch ou edge_ids) — Fase 5 T5.1b.",
+    ),
+    _t(
+        "fusion.thicken_surface",
+        _FUSION,
+        _MUT,
+        "Espessa SurfaceBody(ies) gerando Body sólido (ponte surface→solid) — Fase 5 T5.2d.",
+    ),
+    _t(
+        "fusion.stitch_surfaces",
+        _FUSION,
+        _MUT,
+        "Costura 2+ SurfaceBodies; pode fechar volume e virar sólido — Fase 5 T5.2e.",
+    ),
+    _t(
+        "fusion.trim_surface",
+        _FUSION,
+        _MUT,
+        "Apara SurfaceBody com ferramenta (sketch/face); keep=largest — Fase 5 T5.2a.",
+    ),
+    _t(
+        "fusion.extend_surface",
+        _FUSION,
+        _MUT,
+        "Estende SurfaceBody ao longo de arestas livres — Fase 5 T5.2b.",
+    ),
+    _t(
+        "fusion.offset_surface",
+        _FUSION,
+        _MUT,
+        "Cria SurfaceBody paralela a face(s)/superfície(s) por distância — Fase 5 T5.2c.",
+    ),
+    _t(
+        "fusion.unstitch_surface",
+        _FUSION,
+        _MUT,
+        "Quebra body em superfícies individuais por face — inverso do stitch — Fase 5 T5.2f.",
+    ),
+    # Fase 6 (sheet metal) REMOVIDA — a API Python do Fusion não expõe o
+    # workflow (só flangeFeatures read-only; sem convert/bend/unbend/rebend).
+    # Ver DT-011 e micro/fase-6-sheet-metal.md. Reintroduzir só se a Autodesk
+    # expor a API.
+    _t(
         "fusion.move_body",
         _FUSION,
         _MUT,
@@ -413,10 +471,46 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Boolean (join/cut/intersect) entre corpos existentes — high risk (Onda D).",
     ),
     _t(
+        "fusion.thread",
+        _FUSION,
+        _MUT,
+        "Rosca modelada (real) em face cilíndrica — externa/interna (F3).",
+    ),
+    _t(
+        "fusion.make_component",
+        _FUSION,
+        _MUT,
+        "Transforma um corpo em componente (occurrence) p/ montagens/juntas (F3).",
+    ),
+    _t(
+        "fusion.joint",
+        _FUSION,
+        _MUT,
+        "Junta revolute/rigid/slider/cylindrical entre corpos/componentes (F3).",
+    ),
+    _t(
+        "fusion.knuckle_hinge",
+        _FUSION,
+        _ADD,
+        "Macro: dobradiça de knuckles que abre em torno de um pino (F3).",
+    ),
+    _t(
+        "fusion.metric_screw",
+        _FUSION,
+        _ADD,
+        "Macro: parafuso métrico (haste + cabeça + rosca modelada) (F3).",
+    ),
+    _t(
         "fusion.delete_body",
         _FUSION,
         _DESTR,
         "Remove um corpo — destrutivo, exige aprovação (Onda F).",
+    ),
+    _t(
+        "fusion.rollback_timeline",
+        _FUSION,
+        _DESTR,
+        "Rollback da última edição: apaga features da timeline após um ponto (destrutivo; T3.6).",
     ),
     _t(
         "fusion.set_parameter",
@@ -470,6 +564,17 @@ BLOCKED_TOOL_PREFIXES: tuple[str, ...] = (
 )
 
 
+# Macros com forma de PRODUTO (não de feature genérica). Deprecados do planner
+# na virada para o "motor genérico" (2026-06-02): a inteligência mora na
+# composição + verificação visual/geométrica do loop, não em macros por caso —
+# que não escalam (1 macro por produto = milhares). Os handlers seguem no
+# adapter (backward-compat / smoke), mas o LLM não os escolhe mais; ele compõe
+# mecanismos a partir de primitivas + features genéricas (thread/joint/pattern).
+DEPRECATED_PLANNER_TOOLS: frozenset[str] = frozenset(
+    {"fusion.knuckle_hinge", "fusion.metric_screw"}
+)
+
+
 # ---------------------------------------------------------------------------
 # Derived collections. Computed at import time so legacy callers keep working
 # while we migrate to direct registry access in Ondas 2–3.
@@ -487,15 +592,25 @@ def _by_category(category: ToolCategory) -> tuple[str, ...]:
 def _planner_visible() -> tuple[str, ...]:
     """Tools the LLM planner is allowed to choose.
 
-    Excludes ``project_store.*`` (orchestrator-internal) and ``*.run_script``
-    (never exposed to LLM-generated plans even though the descriptor exists
-    for the policy/audit layers).
+    Excludes ``project_store.*`` (orchestrator-internal), ``*.run_script``
+    (never exposed to LLM-generated plans), ``*.rollback_timeline`` (undo do
+    usuário acionado por botão — nunca planejado pelo LLM) e
+    ``*.query_timeline`` (leitura interna do orchestrator p/ reconciliação/
+    rollback — o planner não deve gastar passo com ela).
     """
 
     def visible(entry: ToolDescriptor) -> bool:
         if entry.software is ToolSoftware.project_store:
             return False
         if entry.name.endswith(".run_script"):
+            return False
+        if entry.name.endswith(".rollback_timeline"):
+            return False
+        if entry.name.endswith(".query_timeline"):
+            return False
+        if entry.name.endswith(".capture_viewport"):
+            return False  # probe do loop visual (render→visão), não passo do plano
+        if entry.name in DEPRECATED_PLANNER_TOOLS:
             return False
         return True
 

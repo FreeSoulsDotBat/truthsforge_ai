@@ -168,6 +168,8 @@ export interface ModelingPlanCardActions {
   onApprove?: (planId: string) => Promise<void> | void;
   onReject?: (planId: string, reason: string) => Promise<void> | void;
   onRetry?: (planId: string) => Promise<void> | void;
+  /** T3.6: desfaz a última edição (card de edição). Resolve ``true`` no sucesso. */
+  onRollback?: (planId: string) => Promise<boolean> | void;
   onRevise?: (planId: string) => Promise<void> | void;
   onEditPlan?: (planId: string, payload: ModelingPlanEdit) => Promise<void> | void;
   isBusy?: boolean;
@@ -259,7 +261,11 @@ export function MessageBubble({
             ) : null}
             {!isUser && metadata.modeling_plan ? (
               metadata.modeling_plan.kind === "edit" && metadata.modeling_plan.status !== "waiting_approval" ? (
-                <ModelingEditCard plan={metadata.modeling_plan} />
+                <ModelingEditCard
+                  plan={metadata.modeling_plan}
+                  isBusy={modelingPlanActions?.isBusy}
+                  onRollback={modelingPlanActions?.onRollback}
+                />
               ) : (
                 <ModelingPlanCard
                   plan={metadata.modeling_plan}

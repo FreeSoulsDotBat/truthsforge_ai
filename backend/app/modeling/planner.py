@@ -7,6 +7,7 @@ import re
 import unicodedata
 from typing import Any
 
+from app.core.config import settings
 from app.core.contracts import (
     KnowledgeBase,
     ModelConfig,
@@ -18,8 +19,11 @@ from app.core.contracts import (
     ModelingRiskLevel,
     ModelingSoftware,
     ModelingStepStatus,
+    ModelingSubGoal,
 )
 from app.llm_gateway.gateway import LLMGateway
+from app.modeling import tool_schemas
+from app.modeling.plan_sanitizer import sanitize_tool_arguments
 from app.modeling.tool_registry import PLANNER_TOOLSET
 
 logger = logging.getLogger(__name__)
@@ -441,6 +445,217 @@ async def create_llm_plan_async(
     return _plan_from_llm_payload(payload, parsed)
 
 
+# F2: decomposição hierárquica — a LLM devolve a lista de sub-objetivos
+# verificáveis ANTES dos steps finos (que são planejados bloco a bloco,
+# observando o ModelState real entre eles).
+DECOMPOSITION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["sub_goals"],
+    "properties": {
+        "sub_goals": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["seq", "title", "description", "acceptance"],
+                "properties": {
+                    "seq": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "acceptance": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
+def build_decomposition_messages(payload: ModelingPlanCreate) -> list[dict[str, str]]:
+    """F2: prompt de DECOMPOSIÇÃO — quebra o pedido em sub-objetivos verificáveis,
+    SEM gerar steps/tools (o planejamento fino de cada bloco vem depois, vendo o
+    estado real do modelo)."""
+
+    system_prompt = (
+        "Você é o orquestrador de modelagem 3D da Truth's Forge, no modo de "
+        "PLANEJAMENTO HIERÁRQUICO.\n"
+        "Sua tarefa AQUI é decompor o pedido do usuário em SUB-OBJETIVOS "
+        "sequenciais e verificáveis — NÃO gere ferramentas nem passos ainda.\n\n"
+        "Regras:\n"
+        "- Cada sub-objetivo é uma UNIDADE GEOMÉTRICA construível e verificável "
+        "(ex.: 'corpo da caixa ocado', 'tampa que encaixa', 'nós macho da "
+        "dobradiça', 'nós fêmea', 'furo passante do pino').\n"
+        "- Ordene por DEPENDÊNCIA: um sub-objetivo pode depender de medidas reais "
+        "do anterior. Quando depender, DIGA na description (ex.: 'o furo deve "
+        "casar o diâmetro real do pino criado antes').\n"
+        "- `acceptance`: critério legível e MEDÍVEL de 'deu certo' (ex.: 'existe "
+        "um corpo oco com parede ~2mm', 'a tampa cobre a boca com folga 0.2mm', "
+        "'há um furo cilíndrico Ø igual ao pino').\n"
+        "- Entre 2 e 8 sub-objetivos. Granular o suficiente para verificar cada "
+        "etapa, sem microgerenciar cada sketch.\n"
+        "- Para peças mecânicas (dobradiças/knuckles, parafusos, encaixes, "
+        "suportes articulados), separe a parte fixa, a parte móvel e a "
+        "interface de encaixe/junta em sub-objetivos distintos.\n"
+        "Responda apenas em JSON conforme o schema modeling_decomposition."
+    )
+    user_prompt = payload.prompt.strip()
+    if payload.software_override:
+        user_prompt += f"\n\n(software pedido: {payload.software_override.value})"
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _subgoals_from_payload(parsed: dict[str, Any]) -> list[ModelingSubGoal]:
+    raw = parsed.get("sub_goals") or []
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("Decomposição do LLM precisa conter ao menos um sub-objetivo.")
+    sub_goals: list[ModelingSubGoal] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"Sub-objetivo {index} não é um objeto JSON.")
+        seq = int(item.get("seq") or index)
+        title = str(item.get("title") or f"Sub-objetivo {seq}").strip() or f"Sub-objetivo {seq}"
+        sub_goals.append(
+            ModelingSubGoal(
+                seq=seq,
+                title=title,
+                description=str(item.get("description") or "").strip(),
+                acceptance=str(item.get("acceptance") or "").strip(),
+            )
+        )
+    sub_goals.sort(key=lambda sg: sg.seq)
+    return sub_goals
+
+
+def decompose_request(
+    payload: ModelingPlanCreate,
+    *,
+    gateway: LLMGateway,
+    model: ModelConfig,
+) -> list[ModelingSubGoal]:
+    """F2: chama o LLM para decompor o pedido em sub-objetivos. Levanta exceção
+    do provedor (o chamador decide o fallback — ex.: tratar como bloco único)."""
+
+    messages = build_decomposition_messages(payload)
+    parsed = asyncio.run(
+        gateway.generate_structured(
+            model=model,
+            messages=messages,
+            schema_name="modeling_decomposition",
+            schema=DECOMPOSITION_SCHEMA,
+        )
+    )
+    return _subgoals_from_payload(parsed)
+
+
+# Schema do corretor de passo (Fase 2): a LLM devolve SÓ o passo corrigido.
+CORRECTED_STEP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["tool_name", "input_json"],
+    "properties": {
+        "tool_name": {"type": "string", "enum": list(PLANNER_TOOLSET)},
+        # input_json JSON-encoded como string (mesma convenção do plano).
+        "input_json": {"type": "string"},
+    },
+}
+
+
+def _correction_messages(
+    step: ModelingPlanStep,
+    output: dict[str, Any],
+    attempt: int,
+    max_attempts: int,
+    verification: dict[str, Any] | None,
+) -> list[dict[str, str]]:
+    from app.modeling import tool_schemas
+
+    context = build_correction_context(
+        step, output, attempt=attempt, max_attempts=max_attempts, verification=verification
+    )
+    schema_block = tool_schemas.render_tool_schema(step.tool_name)
+    system = (
+        "Você é um motor de modelagem 3D. UM passo do plano falhou. Produza a "
+        "versão CORRIGIDA somente desse passo, com a MESMA intenção, ajustando "
+        "parâmetros/seleção para resolver o erro. Não recrie o modelo nem "
+        "adicione passos. Responda apenas com o passo corrigido."
+    )
+    user = f"{context}\n\nSchema da tool:\n{schema_block}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _corrected_step_from_payload(
+    step: ModelingPlanStep, parsed: dict[str, Any]
+) -> ModelingPlanStep:
+    tool_name = str(parsed.get("tool_name") or step.tool_name)
+    input_json = _decode_input_json(parsed.get("input_json"))
+    # Reseta o estado de execução; o passo corrigido será re-executado.
+    return step.model_copy(
+        update={
+            "tool_name": tool_name,
+            "input_json": input_json,
+            "status": ModelingStepStatus.approved,
+            "error": None,
+            "output_json": {},
+        }
+    )
+
+
+async def correct_step_async(
+    step: ModelingPlanStep,
+    output: dict[str, Any],
+    attempt: int,
+    *,
+    gateway: LLMGateway,
+    model: ModelConfig,
+    max_attempts: int = 5,
+    verification: dict[str, Any] | None = None,
+) -> ModelingPlanStep:
+    """Fase 2: gera a versão corrigida de UM passo via LLM (Structured Outputs).
+
+    Levanta a exceção do provider; o caller (loop/planner_service) deve tratar
+    e cair para "sem correção" (None) — o loop então esgota e reverte.
+    """
+
+    messages = _correction_messages(step, output, attempt, max_attempts, verification)
+    parsed = await gateway.generate_structured(
+        model=model,
+        messages=messages,
+        schema_name="modeling_corrected_step",
+        schema=CORRECTED_STEP_SCHEMA,
+    )
+    return _corrected_step_from_payload(step, parsed)
+
+
+def correct_step(
+    step: ModelingPlanStep,
+    output: dict[str, Any],
+    attempt: int,
+    *,
+    gateway: LLMGateway,
+    model: ModelConfig,
+    max_attempts: int = 5,
+    verification: dict[str, Any] | None = None,
+) -> ModelingPlanStep:
+    """Wrapper síncrono de :func:`correct_step_async` (mesmo padrão de
+    ``create_llm_plan``)."""
+
+    return asyncio.run(
+        correct_step_async(
+            step,
+            output,
+            attempt,
+            gateway=gateway,
+            model=model,
+            max_attempts=max_attempts,
+            verification=verification,
+        )
+    )
+
+
 def build_edit_context_block(parent_plan: ModelingPlan | None) -> str | None:
     """P5: monta um bloco de contexto para o planner de EDIÇÃO.
 
@@ -465,19 +680,37 @@ def build_edit_context_block(parent_plan: ModelingPlan | None) -> str | None:
             args = ""
         history_lines.append(f"- {step.seq}. {step.title} [{step.tool_name}]{args}")
 
-    # Métricas de corpos: varre as saídas das etapas por chaves conhecidas.
+    # F1 (T1.7): se há ModelState capturado (read-back rico com tokens estáveis
+    # de face/edge, raios, adjacências), ele substitui as métricas pobres
+    # varridas das saídas. Lazy import evita ciclo planner↔model_state↔executor.
+    state_block = ""
+    if getattr(parent_plan, "model_state", None) is not None:
+        try:
+            from app.modeling.model_state import render_model_state_block
+
+            state_block = render_model_state_block(parent_plan.model_state)
+        except Exception:
+            state_block = ""
+
+    # Fallback: varre as saídas das etapas por chaves conhecidas (usado quando
+    # não há ModelState — planos antigos ou captura falhou).
     metrics_lines: list[str] = []
-    for step in parent_plan.steps:
-        output = step.output_json or {}
-        bodies = output.get("bodies")
-        if isinstance(bodies, list):
-            for body in bodies:
-                if isinstance(body, dict) and body.get("name"):
-                    metrics_lines.append(f"- corpo '{body.get('name')}': {json.dumps(body, ensure_ascii=False)}")
-        metrics = output.get("metrics")
-        if isinstance(metrics, dict):
-            for name, data in metrics.items():
-                metrics_lines.append(f"- corpo '{name}': {json.dumps(data, ensure_ascii=False)}")
+    if not state_block:
+        for step in parent_plan.steps:
+            output = step.output_json or {}
+            bodies = output.get("bodies")
+            if isinstance(bodies, list):
+                for body in bodies:
+                    if isinstance(body, dict) and body.get("name"):
+                        metrics_lines.append(
+                            f"- corpo '{body.get('name')}': {json.dumps(body, ensure_ascii=False)}"
+                        )
+            metrics = output.get("metrics")
+            if isinstance(metrics, dict):
+                for name, data in metrics.items():
+                    metrics_lines.append(
+                        f"- corpo '{name}': {json.dumps(data, ensure_ascii=False)}"
+                    )
 
     block = [
         "<modelo-atual>",
@@ -489,10 +722,61 @@ def build_edit_context_block(parent_plan: ModelingPlan | None) -> str | None:
         "Histórico de construção (plano anterior):",
         *history_lines,
     ]
-    if metrics_lines:
+    if state_block:
+        block.extend(
+            ["", "Estado geométrico real (read-back, prefira mirar por token):", state_block]
+        )
+    elif metrics_lines:
         block.extend(["", "Métricas conhecidas dos corpos atuais:", *metrics_lines[:20]])
     block.append("</modelo-atual>")
     return "\n".join(block)
+
+
+def build_correction_context(
+    step: ModelingPlanStep,
+    output: dict[str, Any],
+    *,
+    attempt: int,
+    max_attempts: int,
+    verification: dict[str, Any] | None = None,
+) -> str:
+    """Fase 2 (RF-012/013): monta o contexto de correção do loop agêntico.
+
+    Descreve o passo que falhou (tool + args), o erro retornado pelo adapter e
+    — quando há verificação geométrica (read-back esperado × medido) — a
+    divergência, instruindo a LLM a corrigir **somente este passo** (mesmo
+    objetivo, parâmetros/seleção ajustados). Não recria o modelo.
+    """
+
+    try:
+        args = json.dumps(step.input_json or {}, ensure_ascii=False)
+    except (TypeError, ValueError):
+        args = "{}"
+    error_code = output.get("error_code") or "desconhecido"
+    message = output.get("message") or output.get("error") or "sem mensagem"
+    lines = [
+        "<correcao>",
+        f"O passo {step.seq} '{step.title}' [{step.tool_name}] falhou na "
+        f"iteração {attempt}/{max_attempts} do loop de auto-correção.",
+        f"Args enviados: {args}",
+        f"Erro: {error_code} — {message}",
+    ]
+    if verification:
+        try:
+            verification_text = json.dumps(verification, ensure_ascii=False)
+        except (TypeError, ValueError):
+            verification_text = str(verification)
+        lines.append(f"Verificação geométrica (esperado × medido): {verification_text}")
+    lines.extend(
+        [
+            "Produza uma versão CORRIGIDA somente deste passo, com o MESMO "
+            "objetivo, ajustando parâmetros/seleção para resolver o problema.",
+            "Use a mesma tool quando possível; referencie corpos/sketches pelo "
+            "nome. NÃO recrie o modelo nem adicione passos não relacionados.",
+            "</correcao>",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _build_messages(
@@ -532,14 +816,146 @@ def _build_messages(
         "  `fusion.add_box`, `fusion.add_cylinder`, `fusion.add_cone` criam o corpo\n"
         "  em UM step (sem sketch/revolve manual). Use-as para bola/esfera, caixa,\n"
         "  cilindro e cone — é mais robusto que montar o perfil à mão.\n"
+        "- NOMES DE CORPO: ao criar um corpo (primitivas `add_box`/`add_cylinder`/\n"
+        "  `add_sphere`/`add_cone` E TAMBÉM `extrude_profile`/`revolve_profile`/\n"
+        "  `loft_profiles`/`sweep_profile`) passe SEMPRE um `name` único e\n"
+        '  descritivo (ex.: "BoxOuter", "LidOuter", "Revolvido"). Se o usuário\n'
+        '  pediu um nome específico ("nomeie o corpo \\"Revolvido\\""), use\n'
+        "  EXATAMENTE esse nome. O corpo recebe ESSE nome. Nas tools seguintes\n"
+        "  que operam num corpo (`shell_body`, `fillet_edges`, `chamfer_edges`,\n"
+        "  `hole`, `pattern_*`, `mirror_feature`, `combine_bodies`, `move_body`,\n"
+        "  `export_*`) referencie o corpo em `body` pelo MESMO `name` que você\n"
+        "  deu. NUNCA referencie um corpo por um nome que você não definiu (ex.:\n"
+        '  body="Outer_Box" sem ter criado a primitiva com name="Outer_Box").\n'
+        "- POSICIONAMENTO DE MÚLTIPLOS CORPOS: toda primitiva nasce CENTRADA na\n"
+        "  origem em z=0. Ao criar MAIS DE UM corpo, posicione cada corpo extra\n"
+        "  (`origin_mm=[x,y,z]` na criação ou `fusion.move_body`) — não deixe\n"
+        "  corpos coincidirem na origem por omissão. Decida pela INTENÇÃO:\n"
+        "  - Peças que se CONECTAM/ENCAIXAM (tampa+caixa, eixo+furo, snap-fit):\n"
+        "    mantenha a posição RELATIVA correta do encaixe; NÃO as afaste — a\n"
+        "    geometria da conexão define onde ficam.\n"
+        "  - Peças INDEPENDENTES impressas SEPARADAMENTE (STLs distintos, sem\n"
+        "    relação geométrica): afaste-as no plano XY para não se sobreporem.\n"
+        "  - Na dúvida, PREFIRA manter a relação real do projeto; só afaste\n"
+        "    quando o objetivo for claramente imprimir peças soltas.\n"
+        "- CORRESPONDÊNCIA DE EIXOS: ao dimensionar uma peça que cobre/encaixa em\n"
+        "  outra, preserve os eixos — `width_mm` casa com a largura (X) da base e\n"
+        "  `depth_mm` com a profundidade (Y). Ex.: over-cap de caixa 60(X)x40(Y) →\n"
+        "  width_mm≈64.5, depth_mm≈44.5; NÃO troque os valores entre os eixos.\n"
         "- Só use `fusion.revolve_profile` para formas de revolução NÃO cobertas pelas\n"
         "  primitivas. O meio-perfil deve ficar INTEIRAMENTE de um lado do eixo (não\n"
         "  cruze o eixo de revolução, senão o sólido é inválido).\n"
         "- Para PENTÁGONO/HEXÁGONO e afins use `fusion.add_polygon` (sides=5/6...).\n"
         "- Ordem típica de um corpo composto: create_sketch → add_<forma> → extrude/revolve.\n"
+        "- OCAR um corpo (caixa, recipiente, vaso): use `fusion.shell_body`\n"
+        "  (open_faces=top/bottom/none) — UM passo, calcula as paredes certo. NÃO\n"
+        "  oque na mão com um segundo `add_box`/primitiva + `combine cut`:\n"
+        "  posicionar o corpo interno é propenso a erro (paredes faltando, lado\n"
+        "  aberto errado, topo/fundo finos). Defina a espessura em `thickness_mm`.\n"
+        "- FUROS / RECORTES — NÃO duplique. Escolha UMA forma correta:\n"
+        "  (a) Furo coplanar: desenhe o contorno externo E o furo no MESMO sketch\n"
+        "      (ex.: `add_rectangle` + `add_circle` no mesmo sketch) e faça UMA ÚNICA\n"
+        "      `fusion.extrude_profile` com operation=new_body — o furo já sai pronto\n"
+        "      (o perfil líquido exclui o círculo). NÃO adicione um extrude cut depois:\n"
+        "      ele reextruda o MESMO perfil (a peça inteira) e APAGA o corpo.\n"
+        "  (b) Furo em sketch separado: extrude o corpo (new_body) e DEPOIS use\n"
+        "      `fusion.hole` (PREFERIDO — já seleciona o perfil certo) OU um novo sketch\n"
+        "      na face + `fusion.extrude_profile` com operation=cut. Num cut você DEVE\n"
+        "      identificar o perfil do furo com `profile_diameter_mm` (diâmetro do\n"
+        "      círculo) ou `profile_index`; sem seletor o cut cai no profiles[0] e pode\n"
+        "      consumir a peça.\n"
+        "- VERIFICAÇÃO (read-back): quando criar/alterar um corpo com dimensões\n"
+        "  externas conhecidas (primitivas e `extrude_profile`), declare\n"
+        "  `expected_dimensions_mm: [x, y, z]` (bbox esperado) no MESMO passo. O\n"
+        "  motor mede a geometria real e AUTO-CORRIGE se divergir — ex.: um `cut`\n"
+        "  que consome a peça vira bbox ~0 e dispara correção. Num furo numa placa,\n"
+        "  o bbox externo NÃO muda: use as dimensões da placa.\n"
+        "- VERIFICAÇÃO (superfícies — Fase 5): para tools que produzem ou modificam\n"
+        "  SurfaceBody (`sweep_profile`/`loft_profiles`/`extrude_profile`/\n"
+        "  `revolve_profile` com `as_surface=true`, `create_surface_patch`,\n"
+        "  `stitch_surfaces`), declare `expected_surface_area_mm2` (escalar) e/ou\n"
+        "  `expected_is_closed: true` (bool) quando relevante. ANTES de chamar\n"
+        "  `thicken_surface`, declare `expected_is_closed: true` no passo de\n"
+        "  costura — se ficou aberto, o thicken simétrico falha. O motor mede\n"
+        "  `surface_area_mm2`/`is_closed` no read-back e AUTO-CORRIGE divergência\n"
+        "  (ex.: aumentar `tolerance_mm` do stitch ou inserir patch nas arestas\n"
+        "  livres antes do thicken). Use `query_geometry` para conferir\n"
+        "  `free_edge_count`/`is_closed`/`surface_area_mm2` quando precisar saber.\n"
+        "- PARAMETRIZAÇÃO (modelo editável): quando o usuário pedir um modelo\n"
+        "  PARAMÉTRICO/editável (ou ditar relações entre cotas), crie os parâmetros\n"
+        "  com `fusion.set_parameter` (ex.: `Diameter_mm=20`) e passe os NOMES deles\n"
+        "  nos campos dimensionais (`distance_mm`, `radius_mm`, `height_mm`,\n"
+        "  `angle_deg`...) em vez de números crus — o adapter liga via expressão e\n"
+        "  mudar o parâmetro depois recomputa a geometria. Cotas fixas simples\n"
+        "  podem seguir com números crus.\n"
+        "- PADRÕES SIMÉTRICOS: para múltiplas instâncias da MESMA feature em\n"
+        "  posições simétricas (ex.: 4 furos nos 4 cantos de uma placa), use\n"
+        "  EXATAMENTE a MESMA fórmula em todas as instâncias, variando SÓ os\n"
+        "  sinais entre elas. NUNCA invente termos adicionais entre instâncias\n"
+        "  (ex.: subtrair o diâmetro do furo da posição num canto e não nos\n"
+        "  outros). NUNCA omita campos como `depth_mm` na 2ª+ instância depois\n"
+        "  de tê-los na 1ª — repita o MESMO valor. Exemplo correto para 4\n"
+        "  furos nos cantos de uma placa centrada:\n"
+        '    canto 1: position_mm=["Comprimento/2 - margem", "Largura/2 - margem"]\n'
+        '    canto 2: position_mm=["Comprimento/2 - margem", "-(Largura/2 - margem)"]\n'
+        '    canto 3: position_mm=["-(Comprimento/2 - margem)", "Largura/2 - margem"]\n'
+        '    canto 4: position_mm=["-(Comprimento/2 - margem)", "-(Largura/2 - margem)"]\n'
+        "  Bug pego no gate: o LLM acertou o 1º furo e inventou subtrações\n"
+        "  extras nos próximos, deslocando posições para fora da face.\n"
+        "- REFERÊNCIAS ESTÁVEIS (T4.2): toda tool de criação devolve um\n"
+        "  `stable_id` no payload — uma string curta de 12 chars (UUID).\n"
+        "  Esse id sobrevive a rename pelo usuário E a recompute paramétrico,\n"
+        "  ao contrário do `body_name` (que o usuário pode renomear) e do\n"
+        "  índice (que muda com reorder). Quando precisar referenciar um body\n"
+        "  criado em passos anteriores em edições, PREFIRA o `stable_id`\n"
+        "  ao `body_name`. `_find_body` aceita ambos. Use `query_geometry`\n"
+        "  para listar `stable_id`/`name` correntes dos bodies.\n"
+        "- FACES E ARESTAS POR TOKEN (F1): `query_geometry` devolve `face_token`\n"
+        "  e `edge_token` (entityToken ESTÁVEL, sobrevive a recompute) por\n"
+        "  face/aresta. Para fillet/chamfer/shell/patch/offset que miram faces\n"
+        "  ou arestas específicas, PREFIRA `face_tokens`/`edge_tokens` ao\n"
+        "  índice posicional (`face_ids`/`edge_ids`, que mudam com recompute).\n"
+        "  Use `adjacent_face_tokens` (na aresta) e `radius_mm`/`is_circular`\n"
+        "  para mirar a face/aresta certa — ex.: medir o `radius_mm` do pino\n"
+        "  para casar o furo, ou achar a face cilíndrica de um knuckle.\n"
+        "- MECANISMOS (componha de PRIMITIVAS, não de macros prontos): monte\n"
+        "  peças funcionais COMPONDO primitivas + features genéricas, e posicione\n"
+        "  tudo pela geometria REAL consultada (`query_geometry`/F1) — NUNCA\n"
+        "  chute posição/eixo de quem encosta em outro corpo:\n"
+        "  • PARAFUSO: cilindro (haste) + `thread` is_internal=false; cabeça =\n"
+        "    cilindro OU hexágono (`add_polygon` 6 lados + `extrude_profile`);\n"
+        "    `combine_bodies` join. Para ENCAIXAR num furo, rosqueie o furo com\n"
+        "    `thread` is_internal=true na MESMA designation (ex.: 'M6x1'); o\n"
+        "    furo-guia = diâmetro nominal − passo (M6x1 → furo ~5 mm).\n"
+        "  • DOBRADIÇA / tampa que abre: PRIMEIRO `query_geometry` para achar a\n"
+        "    ARESTA real onde a tampa encosta no corpo (posição e direção). Crie\n"
+        "    os knuckles como cilindros HORIZONTAIS ao longo dessa aresta —\n"
+        "    `add_cylinder` com `axis`='x' ou 'y' (a direção da aresta) e\n"
+        "    `origin_mm`=[x,y,z] na base de cada nó; pode mandar VÁRIOS de uma vez\n"
+        "    em `cylinders`/`knuckles`:[...]. Alterne os nós entre corpo e tampa,\n"
+        "    `combine_bodies` cada grupo no seu corpo, e o pino = cilindro fino\n"
+        "    (mesmo `axis`) passando por todos. Use `joint` revolute só se for\n"
+        "    montagem que abre na tela (move os corpos p/ componentes\n"
+        "    não-combináveis).\n"
+        "  • Features genéricas reutilizáveis: `thread` (rosca real), `joint`\n"
+        "    (cinemática), `pattern_rectangular`/`pattern_circular`/`mirror_feature`\n"
+        "    (replicar), `make_component` (agrupar). Não existem tools de produto\n"
+        "    pronto — a peça é sempre COMPOSTA.\n"
+        "  Para folga/encaixe, meça o `radius_mm` REAL (F1) do macho e dimensione\n"
+        "  a fêmea com clearance — não chute as duas medidas independentes.\n"
+        "- REFERÊNCIAS EM CAMPOS DE TOOL: SEMPRE referencie o corpo pelo\n"
+        "  campo `body` com o NOME do corpo (string). NUNCA use chaves\n"
+        '  inventadas como `face: "X.top_face"`, `target_face`, `surface`,\n'
+        "  nem expressões `<body>.bounding_box.max_x`, `<body>.center`, etc.\n"
+        "  Essas sintaxes NÃO existem nos handlers e fazem o step cair em\n"
+        "  fallback errado. Em `position_mm` use APENAS números crus ou\n"
+        "  expressões com parâmetros JÁ criados via `set_parameter` (ex.:\n"
+        '  `"Comprimento/2 - 15"`, `"-(Largura/2 - 15 mm)"`). Bug pego no\n'
+        '  gate: 1 dos 4 furos veio com `face: "Placa.top_face"` +\n'
+        "  `Placa.bounding_box.max_x - 20 mm`, e o Fusion rejeitou o sketch.\n"
         "\n"
-        "Ferramentas disponíveis:\n"
-        + "\n".join(f"- {tool}" for tool in PLANNER_TOOLSET)
+        "Ferramentas disponíveis (com argumentos/unidades/exemplos quando conhecidos):\n"
+        + tool_schemas.render_tool_schemas(list(PLANNER_TOOLSET))
         + "\n\nResponda apenas em JSON conforme o schema modeling_execution_plan."
     )
     user_prompt = payload.prompt.strip()
@@ -614,6 +1030,10 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
             item.get("approval_required", False)
         )
         input_json = _decode_input_json(item.get("input_json"))
+        # F6 (sanitizer determinístico): remove campos-fantasma e valores de
+        # referência geométrica que os nudges não eliminam, antes do executor.
+        if settings.modeling_plan_sanitizer_enabled and isinstance(input_json, dict):
+            input_json, _sanitize_actions = sanitize_tool_arguments(tool_name, input_json)
         step_software = _step_software(tool_name, software)
         status = (
             ModelingStepStatus.pending

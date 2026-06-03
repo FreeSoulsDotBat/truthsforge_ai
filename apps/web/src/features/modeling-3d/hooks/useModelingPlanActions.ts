@@ -39,6 +39,8 @@ export interface UseModelingPlanActionsResult {
   approve: (planId: string) => Promise<ModelingExecutionResult | null>;
   reject: (planId: string, reason: string) => Promise<ModelingPlan | null>;
   retry: (planId: string) => Promise<ModelingExecutionResult | null>;
+  /** T3.6: desfaz a última edição (rollback da timeline ao ponto pré-edição). */
+  rollback: (planId: string) => Promise<ModelingExecutionResult | null>;
   revise: (planId: string, reason?: string) => Promise<ModelingPlan | null>;
   /** P4: edita o plano antes da aprovação (etapas/rationale). */
   edit: (planId: string, payload: ModelingPlanEdit) => Promise<ModelingPlan | null>;
@@ -102,6 +104,16 @@ export function useModelingPlanActions(): UseModelingPlanActionsResult {
     [wrap]
   );
 
+  const rollback = useCallback(
+    async (planId: string) =>
+      wrap(async () => {
+        const execution = await modeling3dApi.rollbackPlan(planId);
+        setLastExecution(execution);
+        return execution;
+      }),
+    [wrap]
+  );
+
   const revise = useCallback(
     async (planId: string, reason: string = DEFAULT_REVISE_REASON) =>
       wrap(async () => {
@@ -131,5 +143,17 @@ export function useModelingPlanActions(): UseModelingPlanActionsResult {
     setLastExecution(null);
   }, []);
 
-  return { busy, error, lastPlan, lastExecution, approve, reject, retry, revise, edit, reset };
+  return {
+    busy,
+    error,
+    lastPlan,
+    lastExecution,
+    approve,
+    reject,
+    retry,
+    rollback,
+    revise,
+    edit,
+    reset
+  };
 }

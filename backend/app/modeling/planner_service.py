@@ -34,6 +34,7 @@ Além disso, ``logger.warning`` em falhas críticas foi promovido para
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -48,8 +49,10 @@ from app.core.contracts import (
     ModelingPlanCreate,
     ModelingPlanKind,
     ModelingPlannerSource,
+    ModelingSubGoal,
     ModelingTraceLevel,
     ModelingTraceSource,
+    ModelState,
     ProviderName,
 )
 from app.llm_gateway.exceptions import (
@@ -66,9 +69,11 @@ from app.modeling.discovery import heuristic_assessment
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner import (
     build_edit_context_block,
+    correct_step,
     create_heuristic_plan,
     create_llm_plan,
     create_llm_plan_async,
+    decompose_request,
 )
 from app.modeling.policy import apply_modeling_policy
 
@@ -95,6 +100,51 @@ def _llm_error_event_type(exc: LLMProviderError) -> str:
     return "planner.llm_provider_error"
 
 
+def build_attachments_context(
+    store: Any,
+    file_ids: list[str],
+    *,
+    gateway: LLMGateway | None = None,
+) -> str | None:
+    """F4 (image-to-model): analisa os anexos e devolve o bloco de contexto.
+
+    Reusado pela DESCOBERTA (rota do chat 3D) **e** pelo PLANEJAMENTO, para que
+    ambos vejam a imagem — antes, a descoberta perguntava "às cegas" e o plano
+    ignorava o anexo. Cada arquivo é analisado (vision LLM p/ imagem, Blender
+    headless p/ malha) e o ``to_context_text`` vira um bloco
+    ``<anexos-analisados>``. Best-effort: devolve ``None`` em qualquer falha (o
+    chat nunca quebra por causa de um anexo).
+    """
+    ids = [f for f in (file_ids or []) if f]
+    if not ids:
+        return None
+    try:
+        from app.modeling.attachment_analyzer import ModelingAttachmentAnalyzer
+
+        analyzer = ModelingAttachmentAnalyzer(store=store, gateway=gateway)
+    except Exception:  # noqa: BLE001 - análise é best-effort
+        return None
+    blocks: list[str] = []
+    for file_id in ids:
+        try:
+            analysis = analyzer.analyze(file_id)
+        except Exception:  # noqa: BLE001 - um anexo ruim não derruba o resto
+            continue
+        if analysis is not None and analysis.summary:
+            blocks.append(analysis.to_context_text())
+    if not blocks:
+        return None
+    joined = "\n\n---\n".join(blocks)
+    return (
+        "<anexos-analisados>\n"
+        "Análise dos anexos enviados pelo usuário (imagens/3D de referência). "
+        "Use a forma, as features e as proporções descritas ao planejar a peça; "
+        "confirme dimensões absolutas se faltarem.\n"
+        + joined
+        + "\n</anexos-analisados>"
+    )
+
+
 class ModelingPlannerService:
     """Builds, validates and persists modeling plans.
 
@@ -116,10 +166,19 @@ class ModelingPlannerService:
     # public
     # ------------------------------------------------------------------
 
-    def create_plan(self, payload: ModelingPlanCreate) -> ModelingPlan:
-        """Synchronous plan creation. Mirrors ``ModelingService.create_plan``."""
+    def create_plan(
+        self, payload: ModelingPlanCreate, *, live_state_block: str | None = None
+    ) -> ModelingPlan:
+        """Synchronous plan creation. Mirrors ``ModelingService.create_plan``.
 
-        plan, source, fallback_reason = self._build_plan(payload)
+        T3.3: ``live_state_block`` carries the on-demand reconciliation block
+        (live Fusion timeline read by the orchestrator before an edit). It is
+        merged into the edit context so the planner parts from the real model
+        state, not stale history.
+        """
+
+        payload = self._with_attachment_context(payload)
+        plan, source, fallback_reason = self._build_plan(payload, live_state_block=live_state_block)
         plan = plan.model_copy(
             update={"planner_source": source, "fallback_reason": fallback_reason}
         )
@@ -128,11 +187,84 @@ class ModelingPlannerService:
     async def create_plan_async(self, payload: ModelingPlanCreate) -> ModelingPlan:
         """Async plan creation. Mirrors ``ModelingService.create_plan_async``."""
 
+        # F4: análise dos anexos roda em thread p/ não travar o event loop.
+        payload = await asyncio.to_thread(self._with_attachment_context, payload)
         plan, source, fallback_reason = await self._build_plan_async(payload)
         plan = plan.model_copy(
             update={"planner_source": source, "fallback_reason": fallback_reason}
         )
         return self._persist_plan(plan, source, fallback_reason)
+
+    # ------------------------------------------------------------------
+    # F2: decomposição hierárquica + planejamento por bloco
+    # ------------------------------------------------------------------
+
+    def decompose(self, payload: ModelingPlanCreate) -> list[ModelingSubGoal]:
+        """F2 (T2.2): decompõe o pedido em sub-objetivos via LLM. Fallback
+        gracioso: se o modelo não está disponível ou a chamada falha, retorna
+        um único sub-objetivo = o pedido inteiro (degrada para o fluxo de
+        bloco único, equivalente ao plano one-shot)."""
+
+        model = self._resolve_planner_model()
+        if model is None:
+            return [ModelingSubGoal(seq=1, title="Modelo completo", description=payload.prompt)]
+        try:
+            with self._tracer.record_span(
+                "planner.decompose",
+                source=ModelingTraceSource.backend,
+                payload={"model_id": model.id, "prompt_length": len(payload.prompt or "")},
+            ) as span:
+                sub_goals = decompose_request(payload, gateway=self.gateway, model=model)
+                span.attach({"sub_goal_count": len(sub_goals)})
+            self._tracer.record(
+                "planner.decomposed",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.info,
+                message=f"Decomposto em {len(sub_goals)} sub-objetivo(s).",
+                payload={"titles": [sg.title for sg in sub_goals]},
+            )
+            return sub_goals
+        except Exception as exc:  # noqa: BLE001 - fallback intencional
+            self._classify_and_record_llm_error(exc, model)
+            return [ModelingSubGoal(seq=1, title="Modelo completo", description=payload.prompt)]
+
+    def plan_block_for_subgoal(
+        self,
+        sub_goal: ModelingSubGoal,
+        *,
+        base_payload: ModelingPlanCreate,
+        parent_plan_id: str,
+        model_state: ModelState | None,
+        done_titles: list[str] | None = None,
+    ) -> ModelingPlan:
+        """F2 (T2.4): planeja o bloco de UM sub-objetivo como um plano kind=edit
+        com ``parent_plan_id`` = primary, injetando o ``ModelState`` real
+        (read-back do bloco anterior) + a descrição/critério do sub-objetivo no
+        contexto. Reusa ``create_plan`` (build+persist+fallback heurístico)."""
+
+        from app.modeling.model_state import render_model_state_block
+
+        parts = [f"{sub_goal.title}: {sub_goal.description}".strip()]
+        if sub_goal.acceptance:
+            parts.append(f"Critério de aceitação: {sub_goal.acceptance}")
+        block_prompt = "\n".join(parts)
+
+        context_parts: list[str] = []
+        state_block = render_model_state_block(model_state)
+        if state_block:
+            context_parts.append(state_block)
+        if done_titles:
+            context_parts.append("Sub-objetivos já concluídos: " + ", ".join(done_titles))
+        live_block = "\n\n".join(context_parts) or None
+
+        block_payload = base_payload.model_copy(
+            update={
+                "prompt": block_prompt,
+                "kind": ModelingPlanKind.edit,
+                "parent_plan_id": parent_plan_id,
+            }
+        )
+        return self.create_plan(block_payload, live_state_block=live_block)
 
     async def assess_request_async(
         self,
@@ -150,15 +282,11 @@ class ModelingPlannerService:
         """
 
         effective_threshold = (
-            threshold
-            if threshold is not None
-            else settings.modeling_discovery_confidence_threshold
+            threshold if threshold is not None else settings.modeling_discovery_confidence_threshold
         )
         model = self._resolve_planner_model()
         if model is None:
-            return heuristic_assessment(
-                prompt, history, has_existing_model=has_existing_model
-            )
+            return heuristic_assessment(prompt, history, has_existing_model=has_existing_model)
         try:
             with self._tracer.record_span(
                 "discovery.assess",
@@ -210,9 +338,38 @@ class ModelingPlannerService:
             return assessment
         except Exception as exc:  # noqa: BLE001 - fallback is intentional
             self._classify_and_record_llm_error(exc, model)
-            return heuristic_assessment(
-                prompt, history, has_existing_model=has_existing_model
-            )
+            return heuristic_assessment(prompt, history, has_existing_model=has_existing_model)
+
+    def build_corrector(self, *, max_attempts: int = 5):
+        """Fase 2: corretor de passo para o ``ModelingAgentLoop``.
+
+        Resolve o modelo do planner e devolve um callable
+        ``(step, output, attempt) -> ModelingPlanStep | None`` que usa o LLM
+        (``planner.correct_step``) para corrigir o passo. Retorna ``None``
+        quando não há modelo disponível **ou** quando a correção falha — o loop
+        então esgota as iterações e reverte (RF-011).
+        """
+
+        model = self._resolve_planner_model()
+        if model is None:
+            return None
+
+        def corrector(step: Any, output: dict[str, Any], attempt: int) -> Any:
+            try:
+                return correct_step(
+                    step,
+                    output,
+                    attempt,
+                    gateway=self.gateway,
+                    model=model,
+                    max_attempts=max_attempts,
+                    verification=output.get("verification_divergence"),
+                )
+            except Exception as exc:  # noqa: BLE001 - falha de correção não estoura
+                self._classify_and_record_llm_error(exc, model)
+                return None
+
+        return corrector
 
     # ------------------------------------------------------------------
     # internals
@@ -267,23 +424,32 @@ class ModelingPlannerService:
         )
         return plan
 
-    def _resolve_edit_context(self, payload: ModelingPlanCreate) -> str | None:
-        """P5: para planos de edição, monta o contexto do modelo atual a partir
-        do plano-pai (histórico + métricas de corpos). Retorna None quando não
-        é edição ou o pai não está disponível."""
+    def _resolve_edit_context(
+        self, payload: ModelingPlanCreate, *, live_state_block: str | None = None
+    ) -> str | None:
+        """P5/T3.3: para planos de edição, monta o contexto do modelo atual.
+
+        Combina o histórico registrado (``build_edit_context_block`` do
+        plano-pai) com o ``live_state_block`` (leitura ao vivo do Fusion,
+        reconciliação T3.2/T3.3). O bloco ao vivo vai por ÚLTIMO para que a
+        instrução "parta do estado atual" seja a última lida pelo planner.
+        Retorna None quando não é edição e não há leitura ao vivo."""
 
         if payload.kind != ModelingPlanKind.edit or not payload.parent_plan_id:
-            return None
-        if not hasattr(self.store, "get_modeling_plan"):
-            return None
-        try:
-            parent = self.store.get_modeling_plan(payload.parent_plan_id)
-        except Exception:
-            return None
-        return build_edit_context_block(parent)
+            return live_state_block
+        recorded: str | None = None
+        if hasattr(self.store, "get_modeling_plan"):
+            try:
+                parent = self.store.get_modeling_plan(payload.parent_plan_id)
+            except Exception:
+                parent = None
+            recorded = build_edit_context_block(parent)
+        if live_state_block and recorded:
+            return f"{recorded}\n\n{live_state_block}"
+        return live_state_block or recorded
 
     def _build_plan(
-        self, payload: ModelingPlanCreate
+        self, payload: ModelingPlanCreate, *, live_state_block: str | None = None
     ) -> tuple[ModelingPlan, ModelingPlannerSource, str | None]:
         model = self._resolve_planner_model()
         if model is None:
@@ -292,36 +458,56 @@ class ModelingPlannerService:
                 ModelingPlannerSource.heuristic,
                 "planner_model_unavailable",
             )
-        try:
-            knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
-            edit_context = self._resolve_edit_context(payload)
-            with self._tracer.record_span(
-                "planner.llm_request",
-                source=ModelingTraceSource.backend,
-                payload=self._build_llm_request_payload(model, payload),
-            ) as span:
-                plan = create_llm_plan(
-                    payload,
-                    gateway=self.gateway,
-                    model=model,
-                    knowledge_bases=knowledge_bases,
-                    edit_context=edit_context,
+        plan_model = self._planning_model(model)
+        knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
+        edit_context = self._resolve_edit_context(payload, live_state_block=live_state_block)
+        # F6: 1 retry antes do fallback heurístico. Truncação/timeout/resposta
+        # vazia do provedor costumam ser transitórios; ``plan_model`` cobre a
+        # truncação por orçamento de saída curto (causa dos 4 fallbacks do gate
+        # F3 em 2026-06-01).
+        for _attempt in range(2):
+            try:
+                with self._tracer.record_span(
+                    "planner.llm_request",
+                    source=ModelingTraceSource.backend,
+                    payload=self._build_llm_request_payload(plan_model, payload),
+                ) as span:
+                    plan = create_llm_plan(
+                        payload,
+                        gateway=self.gateway,
+                        model=plan_model,
+                        knowledge_bases=knowledge_bases,
+                        edit_context=edit_context,
+                    )
+                    span.attach(
+                        {
+                            "step_count": len(plan.steps),
+                            "kind": plan.kind.value,
+                            "edit_context": bool(edit_context),
+                            "attempt": _attempt + 1,
+                        }
+                    )
+                return plan, ModelingPlannerSource.llm, None
+            except Exception as exc:  # noqa: BLE001 - fallback is intentional
+                if _attempt == 0:
+                    self._tracer.record(
+                        "planner.llm_retry",
+                        source=ModelingTraceSource.backend,
+                        level=ModelingTraceLevel.warn,
+                        message=f"Planner LLM falhou ({exc}); 1 nova tentativa.",
+                    )
+                    continue
+                classified = self._classify_and_record_llm_error(exc, model)
+                return (
+                    create_heuristic_plan(payload),
+                    ModelingPlannerSource.heuristic,
+                    str(classified),
                 )
-                span.attach(
-                    {
-                        "step_count": len(plan.steps),
-                        "kind": plan.kind.value,
-                        "edit_context": bool(edit_context),
-                    }
-                )
-            return plan, ModelingPlannerSource.llm, None
-        except Exception as exc:  # noqa: BLE001 - fallback is intentional
-            classified = self._classify_and_record_llm_error(exc, model)
-            return (
-                create_heuristic_plan(payload),
-                ModelingPlannerSource.heuristic,
-                str(classified),
-            )
+        return (  # pragma: no cover - o loop acima sempre retorna
+            create_heuristic_plan(payload),
+            ModelingPlannerSource.heuristic,
+            "planner_retry_exhausted",
+        )
 
     async def _build_plan_async(
         self, payload: ModelingPlanCreate
@@ -336,33 +522,97 @@ class ModelingPlannerService:
         try:
             knowledge_bases = self._resolve_knowledge_bases(payload.knowledge_base_ids)
             edit_context = self._resolve_edit_context(payload)
-            with self._tracer.record_span(
-                "planner.llm_request",
-                source=ModelingTraceSource.backend,
-                payload=self._build_llm_request_payload(model, payload),
-            ) as span:
-                plan = await create_llm_plan_async(
-                    payload,
-                    gateway=self.gateway,
-                    model=model,
-                    knowledge_bases=knowledge_bases,
-                    edit_context=edit_context,
-                )
-                span.attach(
-                    {
-                        "step_count": len(plan.steps),
-                        "kind": plan.kind.value,
-                        "edit_context": bool(edit_context),
-                    }
-                )
-            return plan, ModelingPlannerSource.llm, None
-        except Exception as exc:  # noqa: BLE001 - fallback is intentional
+            plan_model = self._planning_model(model)
+            for _attempt in range(2):  # F6: 1 retry antes do fallback heurístico
+                try:
+                    with self._tracer.record_span(
+                        "planner.llm_request",
+                        source=ModelingTraceSource.backend,
+                        payload=self._build_llm_request_payload(plan_model, payload),
+                    ) as span:
+                        plan = await create_llm_plan_async(
+                            payload,
+                            gateway=self.gateway,
+                            model=plan_model,
+                            knowledge_bases=knowledge_bases,
+                            edit_context=edit_context,
+                        )
+                        span.attach(
+                            {
+                                "step_count": len(plan.steps),
+                                "kind": plan.kind.value,
+                                "edit_context": bool(edit_context),
+                                "attempt": _attempt + 1,
+                            }
+                        )
+                    return plan, ModelingPlannerSource.llm, None
+                except Exception as exc:  # noqa: BLE001 - fallback is intentional
+                    if _attempt == 0:
+                        self._tracer.record(
+                            "planner.llm_retry",
+                            source=ModelingTraceSource.backend,
+                            level=ModelingTraceLevel.warning,
+                            message=f"Planner LLM falhou ({exc}); 1 nova tentativa.",
+                        )
+                        continue
+                    classified = self._classify_and_record_llm_error(exc, model)
+                    return (
+                        create_heuristic_plan(payload),
+                        ModelingPlannerSource.heuristic,
+                        str(classified),
+                    )
+        except Exception as exc:  # noqa: BLE001 - resolução/retry caem no heurístico
             classified = self._classify_and_record_llm_error(exc, model)
             return (
                 create_heuristic_plan(payload),
                 ModelingPlannerSource.heuristic,
                 str(classified),
             )
+
+    # F6: piso de tokens de saída para a chamada de planejamento.
+    _PLANNING_OUTPUT_TOKEN_FLOOR = 16384
+
+    def _planning_model(self, model: ModelConfig) -> ModelConfig:
+        """Garante orçamento de saída suficiente para o plano (F6).
+
+        Planos complexos truncam o JSON quando ``max_output_tokens`` é curto —
+        pior em modelos de reasoning (gpt-5-mini gasta tokens "pensando" antes
+        de emitir o plano). Os 4 fallbacks do gate F3 (2026-06-01) eram
+        exatamente isto: JSON truncado/vazio. Eleva o teto só para a chamada de
+        planejamento, sem tocar no registro do modelo.
+        """
+        current = model.max_output_tokens or 0
+        if current >= self._PLANNING_OUTPUT_TOKEN_FLOOR:
+            return model
+        return model.model_copy(
+            update={"max_output_tokens": self._PLANNING_OUTPUT_TOKEN_FLOOR}
+        )
+
+    def _with_attachment_context(
+        self, payload: ModelingPlanCreate
+    ) -> ModelingPlanCreate:
+        """F4 (image-to-model): analisa os anexos do pedido e injeta a descrição.
+
+        O frontend envia ``attached_file_ids`` (imagens/3D); cada um é analisado
+        (vision LLM p/ imagem, Blender headless p/ malha) e o ``to_context_text``
+        vira um bloco ``<anexos-analisados>`` no prompt — para o planner modelar
+        a partir do que a imagem mostra, não só do texto. Best-effort: qualquer
+        falha devolve o payload original (o chat nunca quebra por um anexo).
+        """
+        if not payload.attached_file_ids:
+            return payload
+        block = build_attachments_context(
+            self.store, list(payload.attached_file_ids), gateway=self.gateway
+        )
+        if not block:
+            return payload
+        self._tracer.record(
+            "planner.attachments_analyzed",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.info,
+            message="Anexo(s) analisado(s) e injetado(s) no contexto do plano.",
+        )
+        return payload.model_copy(update={"prompt": payload.prompt + "\n\n" + block})
 
     def _classify_and_record_llm_error(
         self, exc: BaseException, model: ModelConfig

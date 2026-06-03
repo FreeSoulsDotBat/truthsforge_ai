@@ -27,7 +27,7 @@ O backend e uma aplicacao FastAPI. Ele expoe rotas REST e streaming SSE para o c
 - `core`: configuracoes e contratos centrais.
 - `llm_gateway`: camada que conversa com OpenAI, Anthropic e Google.
 - `judite`: persona/orquestracao inicial da JUDITE.
-- `agents`: runtime inicial com LangGraph/LangChain quando disponivel, selecao multiagente e politicas.
+- `agents`: pacote reservado para runtime agentico (LangGraph/LangChain), ainda stub; a selecao multiagente vive hoje em `api/routes/chat.py`.
 - `rag`: embeddings locais, VectorStore, Qdrant, filtros e fallback por metadados.
 - `files`: biblioteca de arquivos, upload/download, deduplicacao, parsing e OCR opcional.
 - `prompts`: biblioteca e renderizacao de prompts.
@@ -36,15 +36,17 @@ O backend e uma aplicacao FastAPI. Ele expoe rotas REST e streaming SSE para o c
 - `audit`: eventos de auditoria.
 - `cost_governor`: orcamento, estimativa de custo e uso mensal.
 - `storage`: persistencia em Postgres com fallback JSON.
-- `workers`: filas em memoria para importacao do ChatGPT e indexacao de arquivos, com recuperacao de pendencias.
-- `modeling`: bounded context de modelagem 3D via MCP local, com planner, politica, adapters e execução segura do Blender quando disponível.
+- `workers`: filas para importacao do ChatGPT e indexacao de arquivos (em memoria por padrao; Redis/Valkey opt-in via `TRUTHS_FORGE_QUEUE_BACKEND`), com recuperacao de pendencias.
+- `importers`: parsing e jobs da importacao do ChatGPT (export → sessoes/mensagens).
+- `chat`: helpers de sessao de chat (ex.: limpeza de sessoes vazias).
+- `modeling`: bounded context chat-first de modelagem 3D via MCP local — orchestrator de chat, planner LLM + heuristico, loop agentico de auto-correcao, verificacao geometrica/visual, politica, observabilidade/trace e adapters (Blender headless, Fusion MCP oficial, MCP standalone) com fallback mock.
 
 ## Frontend web
 
 O frontend React e a primeira experiencia do usuario.
 
 - Sidebar esquerda: sessoes (com `ChatModeling3DBadge` para chats 3D), historico paginado, projetos/pastas e novo chat. Todo chat exige titulo nao vazio antes da primeira mensagem (ADR-014): o frontend abre `ChatTitleRequiredDialog`, envia `title` em `POST /api/chat/stream` e o backend valida com HTTP 422 quando `TRUTHS_FORGE_REQUIRE_CHAT_TITLE` esta ativa.
-- Centro: chat com streaming, anexos, MCP 3D ativado por chat (ADR-013) e upload rapido. Chats 3D mostram `ModelingPlanCard` (aprovacao por botoes inline em `apps/web/src/features/modeling-3d/components/`, com banner para etapas high-risk e estados `executing`/`completed`/`failed` com retry+revise) e `ModelingEditCard` (mini-planos auto-aprovados). Anexos (imagem ou arquivo 3D) disparam `analyze_attachment` em background apos o envio. Botao de diagnostico no cabecalho abre `ModelingDiagnosticsModal` read-only.
+- Centro: chat com streaming, anexos, MCP 3D ativado por chat (ADR-013) e upload rapido. Chats 3D mostram `ModelingPlanCard` (aprovacao por botoes inline em `apps/web/src/features/modeling-3d/components/`, com banner para etapas high-risk e estados `executing`/`completed`/`failed` com retry+revise) e `ModelingEditCard` (mini-planos auto-aprovados). Anexos (imagem ou arquivo 3D) disparam a analise profunda (`POST /api/chat/sessions/{id}/attachments/analyze`) apos o envio. Botao de diagnostico no cabecalho abre `ModelingDiagnosticsModal` read-only.
 - Painel direito: contexto, custos, RAG, auditoria, prompts, configuracao, arquivos, bases, projetos e agentes. O painel 3D no dashboard foi removido com ADR-013; toda interacao 3D ocorre no chat.
 - Configuracoes: API keys por provedor, registry editavel de modelos e secao "Modelagem 3D" (Blender path, Fusion MCP URL, transport, timeouts, status de adapters).
 - Arquivos: biblioteca bruta de arquivos enviados, recebidos, gerados ou importados, com paginacao, filtros, preview/download e status de indexacao.
@@ -78,7 +80,7 @@ O SDD segue o padrão **GitHub Spec Kit**. Invariantes em `.specify/memory/const
 
 - Postgres guarda estado transacional em tabelas JSONB: chats, mensagens, modelos, agentes, prompts, projetos, pastas, documentos, arquivos, bases, importacoes, auditoria, politica de custo e modelagem 3D.
 - Qdrant guarda vetores dos documentos indexados.
-- Valkey/Redis esta preparado para cache/fila, mas os workers atuais de importacao/indexacao rodam em memoria no processo do backend.
+- Valkey/Redis serve cache/fila; os workers de importacao/indexacao rodam em memoria por padrao e podem usar Redis/Valkey via `TRUTHS_FORGE_QUEUE_BACKEND=redis|valkey`.
 - `.local/files` guarda documentos locais.
 - `.local/state` guarda segredos cifrados, estado local auxiliar e o discovery default do bridge Fusion quando o backend usa `settings.state_dir`.
 - `.local/imports` guarda uploads de exportacao do ChatGPT.
@@ -90,12 +92,12 @@ O SDD segue o padrão **GitHub Spec Kit**. Invariantes em `.specify/memory/const
 2. Antes da primeira mensagem, o React exige um titulo nao vazio e nao-default via `ChatTitleRequiredDialog`.
 3. Frontend chama `POST /api/chat/stream` com `title`. Backend rejeita com 422 se o titulo estiver ausente ou ainda for `Novo chat`/`New chat`.
 4. Backend resolve agente principal, agente solicitado, agentes de apoio e bases atreladas.
-5. Se `chat.is_modeling_3d=true`, o agente segue a state machine `discovery → planning → approved → executing → editing` (ADR-013). Tools dedicadas (`3d.ask_clarification`, `3d.propose_plan`, `3d.propose_edit_plan`, `3d.request_high_risk_approval`, `3d.analyze_attachment`) controlam transicoes.
+5. Se `chat.is_modeling_3d=true`, o agente segue a state machine `discovery → planning → approved → executing → editing` (com `failed` distinto numa execução que quebra — DT-008) (ADR-013). As transições são dirigidas por capacidades do `ModelingChatOrchestrator` (agente de descoberta, propor plano, propor edição, análise de anexo) — não por tools registradas na allowlist.
 6. Caso contrário, backend escolhe o modelo pelo Model Registry.
 7. Cost Governor estima custo antes da chamada.
 8. LLM Gateway chama o provedor real ou fallback dev. Modos especiais (Deep Research, imagem, resumo oficial) seguem mutuamente exclusivos com chat 3D.
 9. Imagens geradas, anexos e exports 3D viram `PlatformFile` em `Arquivos` e podem ser indexados.
-10. Backend envia tokens via SSE; eventos `modeling_plan`, `modeling_edit` e `modeling_execution` levam estado 3D para a UI.
+10. Backend envia tokens via SSE; o evento `modeling_plan` (com o plano, incluindo edições via `kind=edit`, e o `trace_id`) leva o estado 3D para a UI.
 11. Mensagens, metadados e auditoria sao salvos no store.
 
 ## Fluxo de RAG

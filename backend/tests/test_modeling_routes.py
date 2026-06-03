@@ -330,7 +330,12 @@ def test_chat_stream_asks_clarification_when_ambiguous(monkeypatch) -> None:
     from app.modeling.service import ModelingService
 
     async def _fake_assess(
-        self, prompt, *, history=None, software_override=None, threshold=None,
+        self,
+        prompt,
+        *,
+        history=None,
+        software_override=None,
+        threshold=None,
         has_existing_model=False,
     ):
         return ModelingDiscoveryAssessment(
@@ -387,8 +392,15 @@ def _mock_assess(monkeypatch, *, intent: str, ready: bool = True):
     from app.core.contracts import ModelingDiscoveryAssessment
     from app.modeling.service import ModelingService
 
-    async def _fake(self, prompt, *, history=None, software_override=None,
-                    threshold=None, has_existing_model=False):
+    async def _fake(
+        self,
+        prompt,
+        *,
+        history=None,
+        software_override=None,
+        threshold=None,
+        has_existing_model=False,
+    ):
         return ModelingDiscoveryAssessment(
             ready_to_plan=ready,
             confidence=0.95,
@@ -401,9 +413,11 @@ def _mock_assess(monkeypatch, *, intent: str, ready: bool = True):
     monkeypatch.setattr(ModelingService, "assess_request_async", _fake)
 
 
-def test_chat_stream_edit_proposes_edit_plan_without_executing(monkeypatch) -> None:
-    """P3: follow-up classificado como edição vira plano kind=edit e PARA no
-    card (modo fluido desligado). Não executa."""
+def test_chat_stream_edit_auto_executes_even_with_fluid_off(monkeypatch) -> None:
+    """Decisão do dono (T3.4, 2026-05-25): edição não-high-risk auto-executa por
+    PADRÃO, MESMO com o modo fluido desligado — só para no card se houver etapa
+    high-risk/destrutiva. Sobrepõe a DT-006 no caminho de edição (antes parava em
+    waiting_approval quando o fluido estava off)."""
 
     from app.modeling.blender_adapter import BlenderAdapter
 
@@ -428,8 +442,8 @@ def test_chat_stream_edit_proposes_edit_plan_without_executing(monkeypatch) -> N
     plan_event = _sse_event(response.text, "modeling_plan")
     assert plan_event is not None
     plan = plan_event["plan"]
-    assert plan["status"] == "waiting_approval"
-    assert all(step["status"] == "pending" for step in plan["steps"])
+    # Antes (DT-006, fluido off) parava em waiting_approval; agora auto-executa.
+    assert plan["status"] == "completed"
 
     persisted = client.get(f"/api/3d/plans/{plan['id']}").json()
     assert persisted["kind"] == "edit"

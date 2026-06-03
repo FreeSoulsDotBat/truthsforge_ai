@@ -23,11 +23,19 @@ services:
       TRUTHS_FORGE_MONTHLY_BUDGET_BRL: ${TRUTHS_FORGE_MONTHLY_BUDGET_BRL:-200}
       TRUTHS_FORGE_MAX_IMPORT_BYTES: ${TRUTHS_FORGE_MAX_IMPORT_BYTES:-5368709120}
       TRUTHS_FORGE_FUSION_MCP_URL: ${TRUTHS_FORGE_FUSION_MCP_URL:-http://host.docker.internal:27182/mcp}
-      # Observabilidade do módulo de modelagem 3D
-      # (ver backend/app/modeling/observability.py + plano em
-      # C:\Users\Jonatan\.claude\plans\para-que-seja-mais-immutable-puffin.md).
+      # Observabilidade + loop agêntico do módulo de modelagem 3D
+      # (ver backend/app/modeling/observability.py e agent_loop.py).
       TRUTHS_FORGE_MODELING_OBSERVABILITY_ENABLED: ${TRUTHS_FORGE_MODELING_OBSERVABILITY_ENABLED:-true}
       TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE: ${TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE:-false}
+      TRUTHS_FORGE_MODELING_AGENTIC_LOOP_ENABLED: ${TRUTHS_FORGE_MODELING_AGENTIC_LOOP_ENABLED:-false}
+      # Frentes de capacidade (replan v4) — repassadas ao container para que as
+      # flags do .env tenham efeito (ver docs/3d-modeling-debug.md §5). Sem isto,
+      # ligar a flag no .env NÃO chega ao backend (bug já visto com o loop).
+      TRUTHS_FORGE_MODELING_HIERARCHICAL_PLANNING_ENABLED: ${TRUTHS_FORGE_MODELING_HIERARCHICAL_PLANNING_ENABLED:-false}
+      TRUTHS_FORGE_MODELING_LIVE_GEOMETRY_RECONCILIATION_ENABLED: ${TRUTHS_FORGE_MODELING_LIVE_GEOMETRY_RECONCILIATION_ENABLED:-false}
+      TRUTHS_FORGE_MODELING_PLAN_SANITIZER_ENABLED: ${TRUTHS_FORGE_MODELING_PLAN_SANITIZER_ENABLED:-true}
+      TRUTHS_FORGE_MODELING_VISUAL_VERIFICATION_ENABLED: ${TRUTHS_FORGE_MODELING_VISUAL_VERIFICATION_ENABLED:-false}
+      TRUTHS_FORGE_MODELING_VISUAL_MAX_ROUNDS: ${TRUTHS_FORGE_MODELING_VISUAL_MAX_ROUNDS:-2}
       WATCHFILES_FORCE_POLLING: "true"
       WATCHFILES_POLL_DELAY_MS: "250"
     extra_hosts:
@@ -40,7 +48,12 @@ services:
       postgres:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
+        # RAG é best-effort/lazy: o backend não deve falhar o boot porque o
+        # Qdrant está em recovery lento (storage é bind mount no Windows → WAL
+        # replay rasteja). service_started deixa o dev.ps1 subir; o RAG fica
+        # degradado só até o Qdrant ficar pronto. postgres/valkey seguem
+        # service_healthy (são caminho crítico do backend).
+        condition: service_started
       valkey:
         condition: service_healthy
     healthcheck:
