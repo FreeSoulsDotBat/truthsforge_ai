@@ -170,6 +170,11 @@ def test_planner_toolset_matches_allowlist() -> None:
         "fusion.thread",
         "fusion.make_component",
         "fusion.joint",
+        # F7 (posicionamento paramétrico — placement declarativo; o resolver de
+        # backend as expande em componente/combine/junta antes do dispatch).
+        "fusion.place_body",
+        "fusion.align_axis",
+        "fusion.distribute_along",
         # knuckle_hinge / metric_screw: DEPRECADOS do planner (macros de produto,
         # não escalam). Seguem no adapter, mas o LLM não os escolhe — ver
         # DEPRECATED_PLANNER_TOOLS e test_deprecated_macros_excluded_from_planner.

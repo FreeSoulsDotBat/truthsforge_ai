@@ -42,6 +42,7 @@ __all__ = [
     "SpatialRefError",
     "is_spatial_ref",
     "parse_at_expr",
+    "strip_at_refs",
     "resolve_point",
     "resolve_axis",
     "resolve_scalar",
@@ -122,6 +123,19 @@ def parse_at_expr(s: str) -> tuple[str, str, list[Any]]:
     if m is None:
         raise SpatialRefError(f"referência @ malformada: {s!r}")
     return m.group("kind"), m.group("id"), _parse_chain(m.group("chain"))
+
+
+def strip_at_refs(text: str) -> str:
+    """Remove todas as referências @ válidas de ``text`` (substitui por espaço).
+
+    Usado pelo ``plan_sanitizer`` (F6) para não confundir um @-ref VÁLIDO
+    (ex.: ``@body('Placa').bbox.max_z``) com uma referência geométrica crua
+    PROIBIDA (ex.: ``Placa.bbox.max_z``) — só a forma sem ``@`` deve cair.
+    """
+
+    if not isinstance(text, str):
+        return text
+    return _AT_RE.sub(" ", text)
 
 
 def _parse_chain(chain: str) -> list[Any]:

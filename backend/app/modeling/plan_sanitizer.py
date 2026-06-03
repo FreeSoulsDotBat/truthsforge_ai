@@ -24,6 +24,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from app.modeling.spatial_ref import strip_at_refs
+
 logger = logging.getLogger(__name__)
 
 # Campos que NENHUM handler do adapter aceita e que os nudges proíbem. Carregam
@@ -75,7 +77,9 @@ class SanitizeAction:
 
 def _value_has_geom_ref(value: Any) -> bool:
     if isinstance(value, str):
-        return bool(_GEOM_REF_RE.search(value))
+        # F7: @-refs válidas (@token('..')/@body('..').bbox.max_z) são poupadas —
+        # só a forma CRUA sem @ (Placa.bbox.max_z) é referência proibida.
+        return bool(_GEOM_REF_RE.search(strip_at_refs(value)))
     if isinstance(value, (list, tuple)):
         return any(_value_has_geom_ref(item) for item in value)
     return False

@@ -608,6 +608,127 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
             ),
         },
     ),
+    "fusion.place_body": ToolSchema(
+        summary=(
+            "F7 — posiciona um corpo por REFERÊNCIA declarativa (sem coordenada "
+            "crua): ancora uma face do corpo numa face de destino (mate flush ou "
+            "coaxial). O resolver de posicionamento expande em make_component + "
+            "junta paramétrica que sobrevive a recompute."
+        ),
+        args={
+            "body": ArgSpec(
+                "Corpo a posicionar (nome ou stable_id).",
+                type="string",
+                unit=None,
+                example="Tampa",
+            ),
+            "anchor": ArgSpec(
+                "Face DO corpo que encosta no destino — @token('<face>') ou {face:'<token>'} (F1).",
+                type="string",
+                unit=None,
+                example="@token('TAMPA_BOTTOM')",
+            ),
+            "target": ArgSpec(
+                "Face de DESTINO onde ancorar — @token('<face>') (F1).",
+                type="string",
+                unit=None,
+                example="@token('CAIXA_TOP')",
+            ),
+            "mate": ArgSpec(
+                "flush (faces coplanares) | coaxial (eixos alinhados). Default flush.",
+                type="string",
+                unit=None,
+                required=False,
+                example="flush",
+            ),
+            "offset_mm": ArgSpec(
+                "Folga/afastamento entre as faces (mm).",
+                required=False,
+                example=0.0,
+            ),
+        },
+    ),
+    "fusion.align_axis": ToolSchema(
+        summary=(
+            "F7 — alinha o eixo de um corpo a uma FACE cilíndrica de destino "
+            "(furo/pino); o resolver expande numa junta revolute/cilíndrica. "
+            "Use para o eixo de uma dobradiça."
+        ),
+        args={
+            "body": ArgSpec(
+                "Corpo cujo eixo será alinhado.",
+                type="string",
+                unit=None,
+                example="Tampa",
+            ),
+            "target": ArgSpec(
+                "Face cilíndrica de destino — @token('<face do furo/pino>') (F1).",
+                type="string",
+                unit=None,
+                example="@token('CAIXA_BORE')",
+            ),
+            "body_axis": ArgSpec(
+                "Eixo do corpo a alinhar (x|y|z). Default z.",
+                type="string",
+                unit=None,
+                required=False,
+                example="x",
+            ),
+        },
+    ),
+    "fusion.distribute_along": ToolSchema(
+        summary=(
+            "F7 — distribui N primitivas (ex.: knuckles de dobradiça) ao longo de "
+            "uma ARESTA, com espaçamento/encaixe e alternância opcional entre dois "
+            "corpos-pai (combine-DENTRO de cada parte imprimível)."
+        ),
+        args={
+            "edge": ArgSpec(
+                "Aresta-guia — edge_token (F1) ao longo do qual distribuir.",
+                type="string",
+                unit=None,
+                example="@token('E_HINGE') ou 'E_HINGE'",
+            ),
+            "count": ArgSpec(
+                "Quantidade de nós a distribuir.",
+                type="number",
+                unit=None,
+                example=5,
+            ),
+            "prototype": ArgSpec(
+                "Primitiva a replicar: {primitive:'cylinder', diameter_mm, height_mm, name}.",
+                type="object",
+                unit=None,
+                example={
+                    "primitive": "cylinder",
+                    "diameter_mm": 5,
+                    "height_mm": 8,
+                    "name": "Knuckle",
+                },
+            ),
+            "spacing_mm": ArgSpec(
+                "Passo entre nós (mm); a fileira é centrada na aresta. Sem isto, "
+                "use fit p/ preencher uniformemente.",
+                required=False,
+                example=10.0,
+            ),
+            "fit": ArgSpec(
+                "true = distribui uniformemente incluindo as pontas da aresta.",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=True,
+            ),
+            "alternate": ArgSpec(
+                "[CorpoA, CorpoB] — alterna os nós entre dois pais; cada grupo "
+                "funde (combine-DENTRO) com seu corpo.",
+                type="array",
+                unit=None,
+                required=False,
+                example=["Caixa", "Tampa"],
+            ),
+        },
+    ),
     "fusion.knuckle_hinge": ToolSchema(
         summary=(
             "MACRO: dobradiça de nós (knuckles) que abre em torno de um pino "

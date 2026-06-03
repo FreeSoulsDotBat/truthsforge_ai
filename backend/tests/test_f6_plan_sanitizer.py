@@ -65,6 +65,24 @@ def test_detects_geom_ref_in_scalar_and_center() -> None:
     assert any(a.kind == "drop_geom_ref_value" for a in a2)
 
 
+def test_spares_valid_f7_at_refs_but_still_drops_raw_geom_refs() -> None:
+    # F7: @-ref VÁLIDA sobrevive (o resolver de posicionamento a resolve depois);
+    # a mesma referência na forma CRUA (sem @) continua sendo descartada.
+    spared = {
+        "diameter_mm": 6,
+        "origin_mm": ["@body('Placa').bbox.max_z - 20", 0, 0],
+        "axis": "@edge('E1').direction",
+        "target": "@token('CAIXA_TOP')",
+    }
+    cleaned, actions = sanitize_tool_arguments("fusion.add_cylinder", spared)
+    assert cleaned == spared and actions == []  # nada removido
+
+    raw = {"position_mm": ["Placa.bbox.max_z - 20", 0]}
+    cleaned_raw, actions_raw = sanitize_tool_arguments("fusion.add_cylinder", raw)
+    assert "position_mm" not in cleaned_raw  # forma crua ainda cai
+    assert any(a.kind == "drop_geom_ref_value" for a in actions_raw)
+
+
 def test_remaps_alias_axis_line_to_axis() -> None:
     cleaned, actions = sanitize_tool_arguments(
         "fusion.revolve_profile", {"sketch": "s", "axis_line": "y"}

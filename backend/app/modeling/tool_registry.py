@@ -489,6 +489,27 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Junta revolute/rigid/slider/cylindrical entre corpos/componentes (F3).",
     ),
     _t(
+        "fusion.place_body",
+        _FUSION,
+        _ADD,
+        "Posiciona um corpo por referência declarativa (ancora face→face, mate "
+        "flush/coaxial); o resolver F7 expande em componente + junta (F7).",
+    ),
+    _t(
+        "fusion.align_axis",
+        _FUSION,
+        _ADD,
+        "Alinha o eixo de um corpo a uma face cilíndrica de destino; o resolver "
+        "F7 expande em junta revolute/cilíndrica (F7).",
+    ),
+    _t(
+        "fusion.distribute_along",
+        _FUSION,
+        _ADD,
+        "Distribui N primitivas (ex.: knuckles) ao longo de uma aresta, com "
+        "alternância e combine-DENTRO; resolvido no backend F7 (F7).",
+    ),
+    _t(
         "fusion.knuckle_hinge",
         _FUSION,
         _ADD,
