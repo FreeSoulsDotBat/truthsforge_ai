@@ -35,6 +35,7 @@ from app.modeling.artifacts import ModelingArtifactService
 from app.modeling.mcp_client import LocalMCPClient
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.snapshot_service import ModelingSnapshotService
+from app.modeling.spatial_ref import SpatialRefError
 
 
 def _unwrap_inner_fusion_result(output: dict[str, Any]) -> dict[str, Any]:
@@ -341,6 +342,17 @@ class ModelingExecutorService:
             plan_id=plan.id,
         )
 
+        # F7 (P5): resolução de posicionamento paramétrico ANTES do dispatch
+        # (atrás de flag; probe só quando o passo carrega ref/é declarativo).
+        # Inline → reescreve args; tool declarativa → expande e executa cada
+        # concreto. Flag OFF / passo sem ref = no-op (caminho atual intacto).
+        try:
+            step, expanded_steps = self._maybe_resolve_spatial(step, plan=plan)
+        except SpatialRefError as exc:
+            return self._spatial_failure_outcome(step, plan, exc)
+        if expanded_steps is not None:
+            return self._run_expanded_steps(step, expanded_steps, plan)
+
         started_at = time.perf_counter()
         output = self._dispatch_step(step, plan=plan)
         duration_ms = int((time.perf_counter() - started_at) * 1000)
@@ -403,6 +415,152 @@ class ModelingExecutorService:
             tool_call_id=tool_call.id if tool_call is not None else None,
             event=event,
             ok=step_ok,
+        )
+
+    # ------------------------------------------------------------------
+    # F7: resolução de posicionamento paramétrico (pré-dispatch, flag-gated)
+    # ------------------------------------------------------------------
+
+    def _maybe_resolve_spatial(
+        self, step: ModelingPlanStep, *, plan: ModelingPlan
+    ) -> tuple[ModelingPlanStep, list[ModelingPlanStep] | None]:
+        """Resolve refs/placement do passo antes do dispatch (Frente F7).
+
+        Retorna ``(step, expandidos)``: no-op/inline → ``(step', None)``; tool
+        declarativa F7 → ``(step, [passos concretos])``. Probe ``query_geometry``
+        e resolução só rodam quando o passo realmente carrega ref ou é
+        declarativo — flag OFF é no-op puro (caminho de coordenada absoluta).
+        """
+
+        from app.core.config import settings
+
+        if not settings.modeling_spatial_resolution_enabled:
+            return step, None
+
+        from app.modeling.spatial_resolver import (
+            F7_PLACEMENT_TOOLS,
+            materialize_steps,
+            needs_resolution,
+            resolve_step,
+        )
+        from app.modeling.tool_registry import is_read_only
+
+        if not needs_resolution(
+            step.tool_name, step.input_json, read_only=is_read_only(step.tool_name)
+        ):
+            return step, None
+
+        # Probe ao vivo: o resolver precisa da geometria REAL (tokens/bbox/pontas)
+        # dos corpos já criados nos passos anteriores. capture_model_state é
+        # best-effort (None se não-fusion/falha); refs sem estado caem em
+        # SpatialRefError (erro tipado), não em mis-place.
+        from app.modeling.model_state import capture_model_state
+
+        state = capture_model_state(self, plan)
+        concrete, actions = resolve_step(step.tool_name, dict(step.input_json or {}), state)
+        self._tracer.record(
+            "executor.spatial_resolved",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.info,
+            message=f"F7: {step.tool_name} → {len(concrete)} passo(s) concreto(s)",
+            payload={
+                "step_id": step.id,
+                "tool_name": step.tool_name,
+                "concrete_tools": [c.tool_name for c in concrete],
+                "actions": [a.detail for a in actions],
+                "had_state": state is not None,
+            },
+            plan_id=plan.id,
+        )
+        # Inline (1→1, mesma tool): só reescreve os args resolvidos.
+        if step.tool_name not in F7_PLACEMENT_TOOLS and len(concrete) == 1:
+            return step.model_copy(update={"input_json": dict(concrete[0].input_json)}), None
+        # Declarativa (1→N): materializa os passos concretos para execução.
+        return step, materialize_steps(step, concrete)
+
+    def _run_expanded_steps(
+        self,
+        original: ModelingPlanStep,
+        concrete: list[ModelingPlanStep],
+        plan: ModelingPlan,
+    ) -> _StepOutcome:
+        """Executa os passos concretos de uma tool declarativa F7 em sequência e
+        agrega num único ``_StepOutcome`` (para o chamador, a placement é 1
+        passo). Para no primeiro que falhar — os seguintes dependem dele."""
+
+        outcomes: list[_StepOutcome] = []
+        for concrete_step in concrete:
+            # Concretos não são F7 nem carregam ref → _maybe_resolve_spatial é
+            # no-op para eles (sem recursão/probe).
+            oc = self._execute_single_step(concrete_step, plan=plan)
+            outcomes.append(oc)
+            if not oc.ok:
+                break
+
+        ok = bool(outcomes) and all(o.ok for o in outcomes)
+        n_ok = sum(1 for o in outcomes if o.ok)
+        last = outcomes[-1] if outcomes else None
+        agg_output: dict[str, Any] = {
+            "ok": ok,
+            "tool_name": original.tool_name,
+            "transport": "backend",
+            "mcp_server": "spatial_resolver",
+            "expanded": [{"tool_name": o.step.tool_name, "ok": o.ok} for o in outcomes],
+            "message": (last.output.get("message") if last else "F7: sem passos concretos"),
+        }
+        status = ModelingStepStatus.completed if ok else ModelingStepStatus.failed
+        updated = original.model_copy(
+            update={
+                "status": status,
+                "output_json": agg_output,
+                "error": None if ok else "F7: passo concreto falhou",
+                "completed_at": now_utc(),
+            }
+        )
+        return _StepOutcome(
+            step=updated,
+            output=agg_output,
+            tool_call_id=(last.tool_call_id if last is not None else None),
+            event=f"{original.seq}. {original.tool_name} → {n_ok}/{len(concrete)} passo(s) concreto(s)",
+            ok=ok,
+        )
+
+    def _spatial_failure_outcome(
+        self, step: ModelingPlanStep, plan: ModelingPlan, exc: SpatialRefError
+    ) -> _StepOutcome:
+        """Converte um erro de resolução F7 num passo FALHO claro (nunca chuta)."""
+
+        code = getattr(exc, "code", "fusion.spatial_ref_unresolved")
+        output: dict[str, Any] = {
+            "ok": False,
+            "tool_name": step.tool_name,
+            "transport": "backend",
+            "mcp_server": "spatial_resolver",
+            "error_code": code,
+            "message": str(exc),
+        }
+        self._tracer.record(
+            "executor.step_error",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.error,
+            message=f"Step {step.seq} F7 não resolvido: {exc}",
+            payload={"step_id": step.id, "tool_name": step.tool_name, "error_code": code},
+            plan_id=plan.id,
+        )
+        updated = step.model_copy(
+            update={
+                "status": ModelingStepStatus.failed,
+                "output_json": output,
+                "error": str(exc),
+                "completed_at": now_utc(),
+            }
+        )
+        return _StepOutcome(
+            step=updated,
+            output=output,
+            tool_call_id=None,
+            event=f"{step.seq}. {step.tool_name} não resolvido (F7)",
+            ok=False,
         )
 
     # ------------------------------------------------------------------

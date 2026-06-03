@@ -11,6 +11,10 @@ from __future__ import annotations
 import pytest
 
 from app.core.contracts import (
+    ModelingPlanStep,
+    ModelingRiskLevel,
+    ModelingSoftware,
+    ModelingStepStatus,
     ModelState,
     ModelStateBody,
     ModelStateEdge,
@@ -20,6 +24,8 @@ from app.modeling.spatial_ref import SpatialRefError
 from app.modeling.spatial_resolver import (
     F7_PLACEMENT_TOOLS,
     expand_placement,
+    materialize_steps,
+    needs_resolution,
     resolve_inline_refs,
     resolve_step,
 )
@@ -269,3 +275,43 @@ def test_resolve_step_routes_f7_to_expansion_and_others_to_inline() -> None:
         "fusion.align_axis", {"body": "Tampa", "target": "@token('CAIXA_BORE')"}, st
     )
     assert steps2[0].tool_name == "fusion.joint"
+
+
+# --------------------------------------------------------------------------- #
+# needs_resolution / materialize_steps (apoio do wiring P5)                   #
+# --------------------------------------------------------------------------- #
+def test_needs_resolution_gates_on_f7_tool_or_ref() -> None:
+    assert needs_resolution("fusion.place_body", {}) is True
+    assert needs_resolution("fusion.add_cylinder", {"origin_mm": "@token('F').center"}) is True
+    box_args = {"center_mm": ["@body('P').bbox.max_z", 0, 0]}
+    assert needs_resolution("fusion.add_box", box_args) is True
+    # Coordenada absoluta / sem ref → não precisa (no-op, sem probe).
+    assert needs_resolution("fusion.add_cylinder", {"origin_mm": [1, 2, 3], "axis": "+z"}) is False
+    # Read-only (probe query_geometry) → nunca resolve (evita recursão).
+    assert needs_resolution("fusion.query_geometry", {}, read_only=True) is False
+
+
+def test_materialize_steps_inherits_seq_software_risk_with_fresh_ids() -> None:
+    original = ModelingPlanStep(
+        seq=7,
+        title="Monta tampa",
+        software=ModelingSoftware.fusion,
+        tool_name="fusion.place_body",
+        risk_level=ModelingRiskLevel.medium,
+        approval_required=False,
+        status=ModelingStepStatus.approved,
+        input_json={"body": "Tampa"},
+    )
+    concrete, _ = expand_placement(
+        "fusion.place_body",
+        {"body": "Tampa", "anchor": "@token('TAMPA_BOTTOM')", "target": "@token('CAIXA_TOP')"},
+        _state(),
+    )
+    steps = materialize_steps(original, concrete)
+    assert [s.tool_name for s in steps] == ["fusion.make_component", "fusion.joint"]
+    assert all(s.seq == 7 and s.software is ModelingSoftware.fusion for s in steps)
+    assert all(s.risk_level is ModelingRiskLevel.medium for s in steps)
+    assert all(s.status is ModelingStepStatus.approved and not s.approval_required for s in steps)
+    # IDs novos e distintos (não colidem em tool_calls).
+    ids = [s.id for s in steps]
+    assert len(set(ids)) == len(ids) and original.id not in ids

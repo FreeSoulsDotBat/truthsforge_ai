@@ -799,6 +799,47 @@ def build_correction_context(
     return "\n".join(lines)
 
 
+def _f7_placement_nudge() -> str:
+    """Bloco de posicionamento PARAMÉTRICO (Frente F7) — só quando a flag
+    ``modeling_spatial_resolution_enabled`` está ON.
+
+    Ensina as tools declarativas (``place_body``/``align_axis``/
+    ``distribute_along``), as referências ``@`` (que o resolver de backend troca
+    por números reais) e o modelo de montagem combine-DENTRO/junta-ENTRE. Vazio
+    com a flag OFF — aí o caminho de coordenada absoluta vigente segue valendo e
+    essas tools nem aparecem como escolha útil. A forma CRUA sem ``@`` continua
+    proibida (consistente com o sanitizer F6) nas duas pontas.
+    """
+
+    if not settings.modeling_spatial_resolution_enabled:
+        return ""
+    return (
+        "- POSICIONAMENTO PARAMÉTRICO (F7 — PREFIRA isto para montagens, encaixes\n"
+        "  e mecanismos em vez de chutar `origin_mm`/`center_mm` de quem encosta\n"
+        "  em outro corpo): DECLARE a relação espacial e o backend a resolve pela\n"
+        "  geometria REAL (tokens F1) em componentes + juntas nativas que\n"
+        "  sobrevivem a recompute. Tools:\n"
+        "  • `place_body` {body, anchor:@token('<face do corpo>'),\n"
+        "    target:@token('<face destino>'), mate:'flush'|'coaxial', offset_mm}:\n"
+        "    encosta/alinha um corpo a outro CASANDO FACES (vira componente+junta).\n"
+        "  • `align_axis` {body, target:@token('<face cilíndrica do furo/pino>'),\n"
+        "    body_axis}: eixo de dobradiça — junta revolute na face do furo.\n"
+        "  • `distribute_along` {edge:'<edge_token>', count, prototype:{primitive:\n"
+        "    'cylinder', diameter_mm, height_mm, name}, fit|spacing_mm,\n"
+        "    alternate:[CorpoA, CorpoB]}: distribui N nós ao longo da ARESTA e\n"
+        "    funde cada grupo no seu corpo — knuckles de dobradiça num passo só.\n"
+        "  • MONTAGEM: COMBINE-DENTRO (os nós da caixa fundem COM a caixa = 1\n"
+        "    sólido imprimível) e JUNTA-ENTRE (o movimento vem de uma junta entre\n"
+        "    os componentes caixa↔tampa). NUNCA combine corpos que devem se mover\n"
+        "    um em relação ao outro.\n"
+        "  • REFERÊNCIAS @ (agora VÁLIDAS em `origin_mm`/`center_mm`/`position_mm`/\n"
+        "    `translation_mm`/`axis`): `@token('<face>').center.z`,\n"
+        "    `@edge('<e>').along(0.2)`, `@body('<corpo>').bbox.max_z - 20`. São\n"
+        "    resolvidas no backend para números reais — ancore à geometria em vez\n"
+        "    de chutar. (A forma CRUA sem `@` — `Placa.bbox.max_z` — segue PROIBIDA.)\n"
+    )
+
+
 def _build_messages(
     payload: ModelingPlanCreate,
     knowledge_bases: list[KnowledgeBase],
@@ -973,7 +1014,8 @@ def _build_messages(
         '  `"Comprimento/2 - 15"`, `"-(Largura/2 - 15 mm)"`). Bug pego no\n'
         '  gate: 1 dos 4 furos veio com `face: "Placa.top_face"` +\n'
         "  `Placa.bounding_box.max_x - 20 mm`, e o Fusion rejeitou o sketch.\n"
-        "\n"
+        + _f7_placement_nudge()
+        + "\n"
         "Ferramentas disponíveis (com argumentos/unidades/exemplos quando conhecidos):\n"
         + tool_schemas.render_tool_schemas(list(PLANNER_TOOLSET))
         + "\n\nResponda apenas em JSON conforme o schema modeling_execution_plan."

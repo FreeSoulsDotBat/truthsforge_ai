@@ -36,7 +36,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.core.contracts import ModelState
+from app.core.contracts import ModelingPlanStep, ModelingStepStatus, ModelState
 from app.modeling.spatial_ref import (
     SpatialRefError,
     find_body,
@@ -54,9 +54,11 @@ __all__ = [
     "F7_PLACEMENT_TOOLS",
     "ConcreteStep",
     "ResolveAction",
+    "needs_resolution",
     "resolve_inline_refs",
     "expand_placement",
     "resolve_step",
+    "materialize_steps",
 ]
 
 F7_PLACEMENT_TOOLS: frozenset[str] = frozenset(
@@ -347,6 +349,20 @@ def expand_placement(
 # --------------------------------------------------------------------------- #
 # Entrada única para o executor (P5)                                          #
 # --------------------------------------------------------------------------- #
+def needs_resolution(tool_name: str, args: Any, *, read_only: bool = False) -> bool:
+    """``True`` se o passo precisa do resolver F7: tool declarativa OU args com
+    referência espacial. ``read_only`` (probe ``query_geometry`` etc.) → ``False``
+    (não dispara probe nem recursão — o executor pula a resolução)."""
+
+    if read_only:
+        return False
+    if tool_name in F7_PLACEMENT_TOOLS:
+        return True
+    if not isinstance(args, dict):
+        return False
+    return any(is_spatial_ref(v) or _has_at(v) for v in args.values())
+
+
 def resolve_step(
     tool_name: str, args: Any, state: ModelState | None
 ) -> tuple[list[ConcreteStep], list[ResolveAction]]:
@@ -360,3 +376,27 @@ def resolve_step(
         return expand_placement(tool_name, args, state)
     new_args, actions = resolve_inline_refs(tool_name, args, state)
     return [ConcreteStep(tool_name, new_args, "")], actions
+
+
+def materialize_steps(
+    original: ModelingPlanStep, concrete_steps: list[ConcreteStep]
+) -> list[ModelingPlanStep]:
+    """Materializa ``ConcreteStep`` → ``ModelingPlanStep`` concretos, herdando
+    seq/software/risk do passo declarativo (já aprovado; os concretos auto-
+    executam na sequência). IDs novos por passo (não colidem em tool_calls)."""
+
+    out: list[ModelingPlanStep] = []
+    for c in concrete_steps:
+        out.append(
+            ModelingPlanStep(
+                seq=original.seq,
+                title=c.title or original.title,
+                software=original.software,
+                tool_name=c.tool_name,
+                risk_level=original.risk_level,
+                approval_required=False,
+                status=ModelingStepStatus.approved,
+                input_json=dict(c.input_json),
+            )
+        )
+    return out

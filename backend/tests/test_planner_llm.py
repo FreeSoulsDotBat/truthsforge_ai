@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from app.core.contracts import (
     KnowledgeBase,
     ModelCapability,
@@ -384,6 +386,51 @@ def test_planner_system_prompt_nudges_parametric_modeling() -> None:
     content = system["content"]
     assert "PARAMETRIZAÇÃO" in content
     assert "set_parameter" in content
+
+
+def _f7_system_prompt() -> str:
+    payload = ModelingPlanCreate(prompt="caixa com tampa que abre (dobradiça)")
+    response = {
+        "software_choice": "fusion",
+        "confidence": 0.7,
+        "rationale": "ok",
+        "assumptions": [],
+        "risks": [],
+        "steps": [
+            {
+                "seq": 1,
+                "title": "Box",
+                "tool_name": "fusion.add_box",
+                "risk_level": "low",
+                "approval_required": False,
+                "input_json": "{}",
+            }
+        ],
+    }
+    gateway = _FakeGateway(response=response)
+    create_llm_plan(payload, gateway=gateway, model=_planner_model())
+    system = next(msg for msg in gateway.received_messages[-1] if msg["role"] == "system")
+    return system["content"]
+
+
+def test_planner_f7_placement_nudge_is_flag_gated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F7 (P5): o bloco de posicionamento paramétrico (place_body/@-refs) só entra
+    no system prompt com a flag ON — com OFF, o caminho de coordenada absoluta
+    segue e as tools declarativas nem são ensinadas (evita o stub de erro)."""
+
+    from app.modeling import planner as planner_mod
+
+    monkeypatch.setattr(
+        planner_mod.settings, "modeling_spatial_resolution_enabled", False, raising=False
+    )
+    assert "POSICIONAMENTO PARAMÉTRICO (F7" not in _f7_system_prompt()
+
+    monkeypatch.setattr(
+        planner_mod.settings, "modeling_spatial_resolution_enabled", True, raising=False
+    )
+    on = _f7_system_prompt()
+    assert "POSICIONAMENTO PARAMÉTRICO (F7" in on
+    assert "place_body" in on and "distribute_along" in on and "COMBINE-DENTRO" in on
 
 
 def test_create_llm_plan_rejects_tool_outside_allowlist() -> None:

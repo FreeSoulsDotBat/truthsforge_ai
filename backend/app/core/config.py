@@ -212,6 +212,23 @@ class Settings(BaseModel):
     modeling_visual_max_rounds: int = Field(
         default_factory=lambda: _env_int("TRUTHS_FORGE_MODELING_VISUAL_MAX_ROUNDS", 2)
     )
+    # Posicionamento PARAMÉTRICO declarativo (Frente F7, ADR-022). Quando
+    # ``true``, antes de despachar um passo que carrega referência espacial
+    # (``@token('F').center``, objeto ``{edge:.., point:along}``) OU uma das tools
+    # declarativas (``place_body``/``align_axis``/``distribute_along``), o executor
+    # captura a geometria real (probe ``query_geometry``) e RESOLVE no backend
+    # (``spatial_resolver``): refs inline viram números; tools declarativas viram
+    # componentes + combine-DENTRO + juntas-ENTRE nativas. Tira a matemática de
+    # posição do LLM (filosofia do sanitizer F6). Default OFF: probe extra
+    # (custo/latência) + montagem API-blind a confirmar nos gates Fusion (P1/P6);
+    # com OFF, o caminho de coordenada absoluta vigente segue intacto e as tools
+    # declarativas erram claro (``fusion.spatial_not_resolved``), nunca mis-place.
+    modeling_spatial_resolution_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_SPATIAL_RESOLUTION_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",
