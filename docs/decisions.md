@@ -208,6 +208,20 @@ Isso respeita **RF-023** (sem script livre/shell/destrutivo no caminho feliz) na
 
 **Consequências.** Backward-compat total (flags OFF = comportamento atual; campos aditivos). Custo: 1 probe `query_geometry` por plano + chamadas LLM extras no modo hierárquico. **Sem rede neural** — a robustez vem de estado rico + orquestração agêntica + verificação geométrica + (F3) biblioteca de macros paramétricas. Implementação nas frentes **F1** (`micro/fase-F1-estado-rico.md`) e **F2** (`micro/fase-F2-planejamento-agentico.md`).
 
+## ADR-022 - Posicionamento paramétrico: referência espacial declarativa + montagem nativa (Front F7)
+
+**Status: Aceito (2026-06-03).** Referências: P1 (peças mecânicas), spec 005 Front F7; micro `micro/fase-F7-posicionamento.md`; débito `tech-debt-posicionamento.md`.
+
+**Contexto.** Mesmo com o motor genérico (composição + loop visual) validado no Fusion real, o **posicionamento relativo de corpos** continua frágil: todo placement é **coordenada absoluta em mm** que o LLM **calcula na mão** (cada primitiva nasce na origem; mecanismos exigem ler a geometria e codificar `origin_mm`/`axis` de cada peça). Gates: knuckles no lado errado, pino flutuando, tampa solta, corpos fora de lugar, referência a corpos inexistentes. O nudge até **proíbe** as refs declarativas naturais (`Placa.top_face`, `bbox.max_x`) porque nenhum handler as suporta. É um **limite arquitetural** (o "onde colocar"), não um bug — não fecha com fixes incrementais. Decisão do dono: refatorar como Front F7.
+
+**Decisão.**
+1. **Camada de referência espacial declarativa.** Gramática que referencia geometria por **token estável** (F1) + ponto/eixo semântico (face center/normal, edge along/midpoint/direction, body bbox/center), em forma objeto e `@`-string nos campos existentes — **fazendo as refs hoje-proibidas FUNCIONAREM** (`@token('<face>').center.z`, `@edge('<edge>').along(0.2)`, `@body('X').bbox.max_z`). Fora da gramática → `fusion.spatial_ref_unresolved` (nunca chuta).
+2. **Resolver determinístico no BACKEND** (pré-pass sobre `ModelState`, não in-script). Tools Fusion são one-shot sem `adsk` vivo entre passos; o backend reusa o probe `query_geometry` já validado (seam de `capture_model_state`). Resolver sobre `ModelState` é 100% testável em mock (como `plan_sanitizer`); in-script seria API-blind. A matemática de coordenada sai do LLM e vai p/ código determinístico (filosofia do sanitizer F6). (`fusion.place_body` in-script = follow-up só se a latência do probe doer.)
+3. **Placement PARAMÉTRICO via montagem nativa** (escolha do dono): o resolver emite **componentes + joints** (rigid/planar p/ fixo, revolute p/ movimento) das JointGeometry resolvidas dos tokens — **sobrevive a recompute**, ao contrário de transform assado. (Rejeitado o 1º corte "baked" — o dono priorizou robustez paramétrica desde já; o custo é complexidade + API-blind, mitigado gateando a fundação de montagem antes.)
+4. **Modelo assembly-aware — combine-DENTRO, joint-ENTRE.** Os nós da caixa combinam com a caixa (1 sólido imprimível) DENTRO do componente; o movimento vem de um joint ENTRE componentes. Reconcilia a tensão combine×joint que quebrou o gate da dobradiça (que combinou ENTRE componentes).
+
+**Consequências.** Aditivo + flag `modeling_spatial_resolution_enabled` (default OFF; OFF = caminho absoluto atual intacto, step declarativo → erro claro). Reusa `_joint`/`_joint_geo_from_ref`/`_make_component`/`_pattern_*`/`_combine_bodies` + o probe + o loop visual. **Risco dominante:** a fundação de montagem (joint/make_component) é **API-blind** (escrita na F3 sem gate) — TODO o approach se apoia nela, então ela é **gateada no Fusion (P1) ANTES** da camada declarativa. Endereça `tech-debt-posicionamento.md` §3.1 (posicionamento/ancoragem) e §3.5 (combine×joint). Supersede a abordagem de coordenada absoluta como caminho principal de placement relativo.
+
 ## DT-011 / DT-012 - Bloqueios de plataforma (sheet metal e sculpt)
 
 **Status: Confirmado no Fusion real (2026-05-29).**
