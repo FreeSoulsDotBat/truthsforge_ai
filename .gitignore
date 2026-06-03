@@ -32,3 +32,18 @@ apps/desktop/src-tauri/target/
 
 # Relatório gerável do mapa de arquitetura (não versionar)
 architecture-map.html
+
+# Lixo de dados/teste que NUNCA deve ir pro repo. Em 2026-06-03 um runner
+# escreveu num path absoluto tratado como relativo → criou
+# "C：/Users/.../AppData/Local/Temp/tf_clean/..." DENTRO da árvore e um git add
+# pegou 62 arquivos (incl. secret.key/dev-store.json). Rede de segurança:
+**/AppData/
+**/Local/Temp/
+tf_clean*/
+tf_diag*/
+tf_official*/
+**/dev-store.json
+**/secret.key
+# Diretórios-fantasma de path absoluto vazado (C： com colon fullwidth e cia.).
+C:/
+[A-Z]:/
