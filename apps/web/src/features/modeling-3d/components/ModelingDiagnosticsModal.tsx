@@ -38,6 +38,8 @@ function traceSourceLabel(source: ModelingTraceEvent["source"]): string {
       return "Fusion";
     case "blender":
       return "Blender";
+    default:
+      return String(source).toUpperCase();
   }
 }
 
@@ -48,6 +50,15 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, traceId, onC
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  // Mantém os valores mais recentes para o effect de abertura sem precisar
+  // listá-los nas deps (evita re-disparar focus/overflow/recordEvent a cada
+  // mudança de planId/traceId/recordEvent).
+  const openEffectRef = useRef({ recordEvent, planId, traceId });
+  // Atualiza os valores mais recentes FORA do render: um effect sem deps roda
+  // a cada commit. (eslint proíbe mutar ref.current durante o render.)
+  useEffect(() => {
+    openEffectRef.current = { recordEvent, planId, traceId };
+  });
 
   // Estado local: filtros visuais aplicados aos trace events (no client).
   // Decisão: filtrar no cliente em vez de re-requisitar com querystring —
@@ -62,13 +73,16 @@ export function ModelingDiagnosticsModal({ open, planId, projectId, traceId, onC
     closeRef.current?.focus();
     document.body.classList.add("overflow-hidden");
     // Registra evento UI no trace — abre confirma que o usuário viu o
-    // diagnóstico (útil para correlacionar com tickets de bug).
-    recordEvent("ui.diagnostics_modal_opened", { planId, traceId });
+    // diagnóstico (útil para correlacionar com tickets de bug). Usa os
+    // valores via ref para registrar uma única vez por abertura, sem
+    // re-disparar (e roubar foco) a cada mudança de planId/traceId.
+    const { recordEvent: record, planId: pid, traceId: tid } = openEffectRef.current;
+    record("ui.diagnostics_modal_opened", { planId: pid, traceId: tid });
     return () => {
       document.body.classList.remove("overflow-hidden");
       previouslyFocusedRef.current?.focus?.();
     };
-  }, [open, planId, traceId, recordEvent]);
+  }, [open]);
 
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {

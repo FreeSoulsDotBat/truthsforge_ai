@@ -72,8 +72,11 @@ export function useModelingPlanActions(): UseModelingPlanActionsResult {
   const approve = useCallback(
     async (planId: string) =>
       wrap(async () => {
-        const approved = await modeling3dApi.approvePlan(planId);
-        setLastPlan(approved);
+        // fe-modeling-3: não persistir estado parcial (approved/running) antes
+        // da execução concluir. Se executePlan falhar, `wrap` retorna null e o
+        // card permanece em waiting_approval em vez de divergir para um estado
+        // pós-aprovação que sugeriria sucesso e induziria re-execução.
+        await modeling3dApi.approvePlan(planId);
         const execution = await modeling3dApi.executePlan(planId);
         setLastPlan(execution.plan);
         setLastExecution(execution);

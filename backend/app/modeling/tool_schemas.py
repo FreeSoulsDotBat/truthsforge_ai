@@ -889,6 +889,11 @@ def tool_schema(tool_name: str) -> ToolSchema | None:
 
 def render_tool_schema(tool_name: str) -> str:
     """Renderiza uma linha-bloco legível pela LLM para uma tool."""
+    # Tools depreciadas (fora de PLANNER_TOOLSET) não podem ser renderizadas:
+    # senão um corretor/editor de passo poderia reintroduzi-las via schema órfão.
+    # Alinha render_tool_schema com tool_registry.DEPRECATED_PLANNER_TOOLS.
+    if tool_name in tool_registry.DEPRECATED_PLANNER_TOOLS:
+        return f"- {tool_name}: (tool depreciada — indisponível)"
     schema = TOOL_SCHEMAS.get(tool_name)
     if schema is None:
         descriptor = tool_registry.descriptor(tool_name)

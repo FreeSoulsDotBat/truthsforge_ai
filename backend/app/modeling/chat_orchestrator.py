@@ -227,8 +227,14 @@ class ModelingChatOrchestrator:
                 )
                 break
 
+        # No modo hierárquico a verdade da execução vive nos block_plan_ids dos
+        # sub-objetivos; os steps one-shot do primary eram só fallback e NUNCA
+        # rodaram. Limpa-os para o primary não persistir 'completed' com todos
+        # os steps presos em 'pending' (estado inconsistente p/ quem renderiza
+        # progresso a partir de plan.steps).
         updated = primary.model_copy(
             update={
+                "steps": [],
                 "sub_goals": sub_goals,
                 "status": final_status,
                 "model_state": current_state,

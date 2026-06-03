@@ -136,7 +136,7 @@ def render_model_state_block(state: ModelState | None) -> str:
         ranked_edges = sorted(b.edges, key=lambda e: (not e.is_circular, -(e.radius_mm or 0.0)))
         shown = 0
         for e in ranked_edges:
-            if not e.token or not e.is_circular:
+            if not e.token or not e.is_circular or e.radius_mm is None:
                 continue
             lines.append(f"    aresta[circular raio={e.radius_mm:g}mm] token={e.token}")
             shown += 1

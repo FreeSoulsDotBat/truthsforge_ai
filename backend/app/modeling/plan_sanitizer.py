@@ -40,6 +40,15 @@ GHOST_KEYS: frozenset[str] = frozenset(
     }
 )
 
+# Exceções por tool: chaves que SÃO canônicas para certas tools e portanto NÃO
+# devem ser tratadas como fantasma. ``surface``/``surface_ref`` são o seletor de
+# corpo primário das tools de superfície da Fase 5 (ver tool_schemas.py); apagá-
+# las cegamente quebra fusion.trim_surface / fusion.unstitch_surface no adapter.
+GHOST_KEY_EXCEPTIONS: dict[str, frozenset[str]] = {
+    "fusion.trim_surface": frozenset({"surface", "surface_ref"}),
+    "fusion.unstitch_surface": frozenset({"surface", "surface_ref"}),
+}
+
 # Aliases de NOME que carregam um valor válido — remapear (não descartar) para a
 # chave canônica quando esta ainda não veio.
 ALIAS_REMAP: dict[str, str] = {
@@ -105,9 +114,11 @@ def sanitize_tool_arguments(tool_name: str, args: Any) -> tuple[Any, list[Saniti
                     )
                 )
 
-    # 2) campos-fantasma (sem valor aproveitável em nenhum handler).
+    # 2) campos-fantasma (sem valor aproveitável em nenhum handler), exceto os
+    #    que são canônicos para a tool em questão (ver GHOST_KEY_EXCEPTIONS).
+    allowed = GHOST_KEY_EXCEPTIONS.get(tool_name, frozenset())
     for key in list(cleaned.keys()):
-        if key in GHOST_KEYS:
+        if key in GHOST_KEYS and key not in allowed:
             cleaned.pop(key, None)
             actions.append(
                 SanitizeAction(

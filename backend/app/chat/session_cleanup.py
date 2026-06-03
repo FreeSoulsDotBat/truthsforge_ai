@@ -139,13 +139,18 @@ def delete_chat_session_with_files(
         and hasattr(store, "delete_platform_file")
     ):
         related_file_ids = session_related_file_ids(store, session)
-        referenced_elsewhere = other_sessions_file_ids(store, session_id)
-        referenced_by_knowledge_base = knowledge_base_file_ids(store)
-        removable_file_ids = sorted(
-            file_id
-            for file_id in related_file_ids
-            if file_id not in referenced_elsewhere and file_id not in referenced_by_knowledge_base
-        )
+        # Os scans abaixo sao O(sessoes x mensagens) + O(documentos). So fazem
+        # sentido se ha candidatos a remover; quando a sessao nao referencia
+        # nenhum arquivo, evitamos materializar/varrer todas as sessoes e docs.
+        if related_file_ids:
+            referenced_elsewhere = other_sessions_file_ids(store, session_id)
+            referenced_by_knowledge_base = knowledge_base_file_ids(store)
+            removable_file_ids = sorted(
+                file_id
+                for file_id in related_file_ids
+                if file_id not in referenced_elsewhere
+                and file_id not in referenced_by_knowledge_base
+            )
 
     if not hasattr(store, "delete_chat_session") or not store.delete_chat_session(session_id):
         raise HTTPException(status_code=404, detail="Sessão não encontrada.")

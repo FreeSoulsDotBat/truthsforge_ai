@@ -34,6 +34,11 @@ def get_tool_permission(tool_id: str, agent_id: str | None = None) -> ToolPermis
     return evaluate_tool_permission(tool, _agent_by_id(agent_id))
 
 
+# SEGURANÇA (api-rest-005): /execute aciona o runtime de tools (escrita/execução)
+# e NÃO tem autenticação — por design local-first (AGENTS.md). PRESSUPOSTO: bind
+# loopback-only. Se o backend for exposto além do loopback, esta rota precisa de
+# um gate (token local/Origin) antes da exposição. O runtime já aplica a policy
+# de aprovação humana (add autoexecuta; alter/delete exigem aprovação).
 @router.post("/execute", response_model=ToolExecutionResult)
 def execute_tool(payload: ToolExecutionRequest) -> ToolExecutionResult:
     return execute_tool_request(payload, agent=_agent_by_id(payload.agent_id), store=get_store())

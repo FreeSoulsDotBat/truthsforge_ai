@@ -83,7 +83,8 @@ class ModelingPrintabilityService:
         payload: ModelingPrintabilityRequest, output: dict[str, Any]
     ) -> ModelingPrintabilityReport:
         result = output.get("result") if isinstance(output.get("result"), dict) else {}
-        is_real_run = output.get("transport") == "stdio" and output.get("ok")
+        transport_is_stdio = output.get("transport") == "stdio"
+        is_real_run = transport_is_stdio and output.get("ok")
         if is_real_run and result:
             raw_issues = result.get("issues") or []
             issues = [
@@ -103,9 +104,34 @@ class ModelingPrintabilityService:
                 issues=issues,
                 metrics=dict(result.get("metrics") or {}),
                 recommendations=recommendations,
-                risk_score=float(result.get("risk_score") or 0.0),
+                risk_score=ModelingPrintabilityService._clamp_risk_score(
+                    result.get("risk_score")
+                ),
                 summary=str(result.get("message") or "Printability validada."),
                 report_json={**result, "recommendations": recommendations},
+            )
+        if transport_is_stdio:
+            # Blender ESTAVA conectado mas a execução do tool falhou (ok=False).
+            # Não é falta de configuração: reporta a falha de validação real em
+            # vez da mensagem enganosa "Blender não está conectado".
+            error_code = str(output.get("error_code") or "blender.validation_failed")
+            error_message = str(
+                output.get("message") or "Validação de printability falhou no Blender."
+            )
+            return ModelingPrintabilityReport(
+                project_id=payload.project_id,
+                plan_id=payload.plan_id,
+                step_id=payload.step_id,
+                file_id=payload.file_id,
+                checks_executed=list(payload.checks),
+                issues=[],
+                metrics={},
+                recommendations=[
+                    "Revisar o erro de validação do Blender antes de aprovar export/impressão."
+                ],
+                risk_score=1.0,
+                summary=f"Validação de printability falhou ({error_code}): {error_message}",
+                report_json=output,
             )
         return ModelingPrintabilityReport(
             project_id=payload.project_id,
@@ -130,11 +156,30 @@ class ModelingPrintabilityService:
         )
 
     @staticmethod
+    def _clamp_risk_score(value: Any) -> float:
+        """Normaliza risk_score vindo de adapter externo para [0.0, 1.0].
+
+        Um Blender customizado pode devolver valor não-normalizado/negativo ou
+        não numérico; o contrato exige ``ge=0.0, le=1.0``. Clampamos em vez de
+        deixar o ``ModelingPrintabilityReport`` estourar ValidationError (500).
+        """
+        try:
+            score = float(value or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, min(1.0, score))
+
+    @staticmethod
     def _normalize_issue(item: dict[str, Any]) -> dict[str, Any]:
         recommendation = item.get("recommendation")
         if not isinstance(recommendation, str) or not recommendation.strip():
             recommendation = ModelingPrintabilityService._recommendation_for_issue(item)
-        return {**item, "recommendation": recommendation}
+        # severity vem crua do adapter; mapeia valores fora do enum para 'warning'
+        # para não derrubar o ModelingPrintabilityIssue (Literal estrito).
+        severity = item.get("severity")
+        if severity not in {"info", "warning", "error"}:
+            severity = "warning"
+        return {**item, "recommendation": recommendation, "severity": severity}
 
     @staticmethod
     def _recommendation_for_issue(issue: dict[str, Any]) -> str:

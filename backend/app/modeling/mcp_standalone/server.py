@@ -9,10 +9,12 @@ contrato consumido pelo executor do backend.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import anyio
+import mcp.types as types
 from mcp.server.lowlevel import Server
 
 from app.core.contracts import (
@@ -91,9 +93,20 @@ def build_server(adapter: FusionDesktopAdapter | None = None) -> Server:
         return fusion_tools
 
     @server.call_tool()
-    async def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
         # ``adapter.execute`` é síncrono e pode bloquear em I/O (HTTP/socket).
         # Roda em thread para não travar o event loop do servidor.
-        return await anyio.to_thread.run_sync(execute_fusion_tool, adapter, name, arguments)
+        envelope = await anyio.to_thread.run_sync(
+            execute_fusion_tool, adapter, name, arguments
+        )
+        # Deriva ``isError`` do envelope para que clientes MCP genéricos
+        # interpretem falhas do Fusion como erro; mantém o envelope completo
+        # em ``structuredContent`` (contrato consumido pelo executor interno).
+        is_error = envelope.get("ok") is False
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=json.dumps(envelope))],
+            structuredContent=envelope,
+            isError=is_error,
+        )
 
     return server

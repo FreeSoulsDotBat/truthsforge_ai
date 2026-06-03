@@ -225,9 +225,20 @@ def import_chatgpt_from_existing_file(
     return job
 
 
+MAX_IMPORT_JOBS = 200
+
+
 @router.get("/chatgpt/jobs", response_model=list[ChatGPTImportJob])
-def list_chatgpt_import_jobs() -> list[ChatGPTImportJob]:
-    return get_store().list_import_jobs()
+def list_chatgpt_import_jobs(limit: int = 200, offset: int = 0) -> list[ChatGPTImportJob]:
+    # Jobs acumulam sem limite; capa o slice (mais recentes primeiro).
+    normalized_limit = max(1, min(int(limit), MAX_IMPORT_JOBS))
+    normalized_offset = max(0, int(offset))
+    jobs = sorted(
+        get_store().list_import_jobs(),
+        key=lambda job: job.created_at,
+        reverse=True,
+    )
+    return jobs[normalized_offset : normalized_offset + normalized_limit]
 
 
 @router.get("/chatgpt/jobs/{job_id}", response_model=ChatGPTImportJob)

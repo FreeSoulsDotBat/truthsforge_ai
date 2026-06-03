@@ -194,11 +194,21 @@ class FusionDesktopAdapter:
         if not isinstance(raw, dict):
             return None
         host = self._host_override() or str(raw.get("host") or "127.0.0.1")
-        port = int(raw.get("port") or 0)
+        try:
+            port = int(raw.get("port") or 0)
+        except (TypeError, ValueError):
+            # Arquivo de discovery corrompido (ex.: add-in que caiu no meio da
+            # escrita) — trata como ausência de discovery em vez de explodir.
+            return None
         token = str(raw.get("token") or "")
         if not port or not token:
             return None
-        return FusionBridgeDiscovery(host=host, port=port, token=token, pid=raw.get("pid"))
+        raw_pid = raw.get("pid")
+        try:
+            pid = int(raw_pid) if raw_pid is not None else None
+        except (TypeError, ValueError):
+            pid = None
+        return FusionBridgeDiscovery(host=host, port=port, token=token, pid=pid)
 
     # ----------------------------------------------- health-check accounting
 
@@ -583,20 +593,45 @@ class FusionDesktopAdapter:
     def _decode_autodesk_http_response(response: httpx.Response) -> dict[str, Any]:
         content_type = response.headers.get("content-type", "")
         if "text/event-stream" not in content_type:
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                # Corpo não-JSON (ex.: página de erro HTML de um proxy) num
+                # HTTP 200 — re-mapeia para o tipo que os callers já tratam.
+                raise FusionBridgeError(
+                    "Fusion MCP devolveu corpo não-JSON."
+                ) from exc
             if not isinstance(payload, dict):
                 raise FusionBridgeError("Fusion MCP devolveu JSON sem objeto raiz.")
             return payload
 
+        # MCP streamable HTTP pode emitir notificações (progresso/log) antes do
+        # frame final; pegar o primeiro data: válido confundiria a checagem de
+        # id no caller, então selecionamos o frame de resposta (com id/result/
+        # error) e ignoramos notificações (objetos com 'method').
+        fallback: dict[str, Any] | None = None
         for line in response.text.splitlines():
             if not line.startswith("data:"):
                 continue
             raw = line.removeprefix("data:").strip()
             if not raw or raw == "[DONE]":
                 continue
-            payload = json.loads(raw)
-            if isinstance(payload, dict):
+            try:
+                payload = json.loads(raw)
+            except ValueError as exc:
+                raise FusionBridgeError(
+                    "Fusion MCP devolveu SSE com data não-JSON."
+                ) from exc
+            if not isinstance(payload, dict):
+                continue
+            if "method" in payload and "id" not in payload:
+                # Notificação JSON-RPC (sem id) — não é a resposta final.
+                continue
+            if "result" in payload or "error" in payload or "id" in payload:
                 return payload
+            fallback = fallback or payload
+        if fallback is not None:
+            return fallback
         raise FusionBridgeError("Fusion MCP SSE não trouxe payload data JSON.")
 
     @staticmethod

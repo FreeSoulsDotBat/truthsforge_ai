@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from threading import Lock, Thread
 from time import monotonic
@@ -8,6 +9,8 @@ from app.core.contracts import JobStatus, PlatformFileIndexingStatus, now_utc
 from app.rag.indexing import ensure_document_for_platform_file, process_platform_file_index
 from app.storage.store import get_store
 from app.workers.job_queue import create_job_queue
+
+logger = logging.getLogger(__name__)
 
 # Queue backend chosen by settings.queue_backend (memory|redis|valkey). The
 # WORKER stays an in-process thread; only the QUEUE can move to Valkey/Redis
@@ -132,7 +135,11 @@ def _worker_loop() -> None:
                         _queue.requeue(file_id, INDEX_PRIORITY_BACKGROUND + attempts)
                         retry_scheduled = True
             except Exception:
-                pass
+                # Erro inesperado FORA da indexacao (que ja captura suas proprias
+                # falhas): nao deve derrubar a thread. Loga para diagnostico em
+                # vez de mascarar; o item sera reavaliado pela varredura
+                # periodica (recover/backfill) se o documento seguir pending.
+                logger.exception("Falha inesperada ao indexar platform file %s", file_id)
         finally:
             if not retry_scheduled:
                 _queue.release(file_id)

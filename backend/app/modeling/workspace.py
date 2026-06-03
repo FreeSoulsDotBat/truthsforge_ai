@@ -74,10 +74,31 @@ def copy_into_snapshot(workspace: Path, snapshot_files_dir: Path) -> list[Path]:
 
 
 def restore_from_snapshot(snapshot_files_dir: Path, workspace: Path) -> list[Path]:
-    """Copy snapshot file tree back into the workspace, overwriting existing files."""
+    """Mirror the snapshot file tree back into the workspace.
+
+    The restore é um espelhamento real (clear-then-copy): primeiro remove do
+    workspace os arquivos elegíveis a snapshot que NÃO constam no snapshot
+    (rollback completo — sem deixar arquivos criados após o snapshot), depois
+    copia/sobrescreve o conteúdo do snapshot. Arquivos efêmeros do runner em
+    uso (``*.job.json``/``*.result.json``/``manifest.json``) ficam intactos.
+    """
     if not snapshot_files_dir.is_dir():
         return []
     workspace.mkdir(parents=True, exist_ok=True)
+
+    # Conjunto de paths relativos presentes no snapshot.
+    snapshot_relatives = {
+        source.relative_to(snapshot_files_dir)
+        for source in snapshot_files_dir.rglob("*")
+        if source.is_file()
+    }
+
+    # Limpa do workspace os arquivos que não pertencem ao snapshot, preservando
+    # os arquivos efêmeros do runner (mesma exclusão de iter_workspace_files).
+    for existing in iter_workspace_files(workspace):
+        if existing.relative_to(workspace) not in snapshot_relatives:
+            existing.unlink(missing_ok=True)
+
     restored: list[Path] = []
     for source in snapshot_files_dir.rglob("*"):
         if not source.is_file():
@@ -87,6 +108,20 @@ def restore_from_snapshot(snapshot_files_dir: Path, workspace: Path) -> list[Pat
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
         restored.append(target)
+
+    # Remove diretórios que ficaram vazios após a limpeza (best-effort).
+    for directory in sorted(
+        (p for p in workspace.rglob("*") if p.is_dir()),
+        key=lambda p: len(p.parts),
+        reverse=True,
+    ):
+        try:
+            next(directory.iterdir())
+        except StopIteration:
+            directory.rmdir()
+        except OSError:
+            continue
+
     return restored
 
 

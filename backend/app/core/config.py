@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -7,12 +8,49 @@ from pydantic import BaseModel, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
+logger = logging.getLogger(__name__)
+
 
 def _resolve_from_project_root(value: str) -> Path:
     path = Path(value)
     if path.is_absolute():
         return path
     return (PROJECT_ROOT / path).resolve()
+
+
+def _env_int(name: str, default: int) -> int:
+    """Lê um env como ``int``, caindo no default (com warning) se mal-formado.
+
+    Evita que um valor inválido (ex.: ``DIMENSIONS=abc``) derrube o import do
+    módulo de config — e, com ele, todo o boot do backend — com um traceback
+    opaco em ``Settings()``.
+    """
+
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Env %s=%r inválido (esperado inteiro); usando default %r.", name, raw, default
+        )
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """Lê um env como ``float``, caindo no default (com warning) se mal-formado."""
+
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Env %s=%r inválido (esperado número); usando default %r.", name, raw, default
+        )
+        return default
 
 
 class Settings(BaseModel):
@@ -43,7 +81,7 @@ class Settings(BaseModel):
         )
     )
     rag_embedding_dimensions: int = Field(
-        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_RAG_EMBEDDING_DIMENSIONS", "384"))
+        default_factory=lambda: _env_int("TRUTHS_FORGE_RAG_EMBEDDING_DIMENSIONS", 384)
     )
     rag_ocr_languages: str = Field(
         default_factory=lambda: os.getenv("TRUTHS_FORGE_RAG_OCR_LANGUAGES", "por+eng")
@@ -61,7 +99,7 @@ class Settings(BaseModel):
         default_factory=lambda: os.getenv("TRUTHS_FORGE_QUEUE_BACKEND", "memory").lower()
     )
     storage_backend: str = Field(
-        default_factory=lambda: os.getenv("TRUTHS_FORGE_STORAGE_BACKEND", "auto")
+        default_factory=lambda: os.getenv("TRUTHS_FORGE_STORAGE_BACKEND", "auto").lower()
     )
     allow_dev_llm: bool = Field(
         default_factory=lambda: (
@@ -69,18 +107,18 @@ class Settings(BaseModel):
         )
     )
     monthly_budget_brl: float = Field(
-        default_factory=lambda: float(os.getenv("TRUTHS_FORGE_MONTHLY_BUDGET_BRL", "200"))
+        default_factory=lambda: _env_float("TRUTHS_FORGE_MONTHLY_BUDGET_BRL", 200)
     )
     max_import_bytes: int = Field(
-        default_factory=lambda: int(
-            os.getenv("TRUTHS_FORGE_MAX_IMPORT_BYTES", str(5 * 1024 * 1024 * 1024))
+        default_factory=lambda: _env_int(
+            "TRUTHS_FORGE_MAX_IMPORT_BYTES", 5 * 1024 * 1024 * 1024
         )
     )
     blender_executable: str | None = Field(
         default_factory=lambda: os.getenv("TRUTHS_FORGE_BLENDER_EXECUTABLE") or None
     )
     modeling_subprocess_timeout_seconds: int = Field(
-        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MODELING_TIMEOUT_SECONDS", "90"))
+        default_factory=lambda: _env_int("TRUTHS_FORGE_MODELING_TIMEOUT_SECONDS", 90)
     )
     modeling_mcp_transport: str = Field(
         default_factory=lambda: os.getenv("TRUTHS_FORGE_MCP_TRANSPORT", "in_process").lower()
@@ -98,7 +136,7 @@ class Settings(BaseModel):
         default_factory=lambda: os.getenv("TRUTHS_FORGE_MCP_SERVER_HOST", "127.0.0.1")
     )
     modeling_mcp_server_port: int = Field(
-        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MCP_SERVER_PORT", "8787"))
+        default_factory=lambda: _env_int("TRUTHS_FORGE_MCP_SERVER_PORT", 8787)
     )
     # Token explícito (env) tem precedência; vazio => gerado e persistido em
     # ``modeling_dir/mcp_server_token`` por ``auth.load_or_create_token``.
@@ -172,7 +210,7 @@ class Settings(BaseModel):
         )
     )
     modeling_visual_max_rounds: int = Field(
-        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MODELING_VISUAL_MAX_ROUNDS", "2"))
+        default_factory=lambda: _env_int("TRUTHS_FORGE_MODELING_VISUAL_MAX_ROUNDS", 2)
     )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
@@ -216,10 +254,10 @@ class Settings(BaseModel):
     )
     # Reservas para job de retention futuro (não implementado nesta iteração).
     modeling_trace_retention_days_info: int = Field(
-        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MODELING_TRACE_RETENTION_INFO", "30"))
+        default_factory=lambda: _env_int("TRUTHS_FORGE_MODELING_TRACE_RETENTION_INFO", 30)
     )
     modeling_trace_retention_days_error: int = Field(
-        default_factory=lambda: int(os.getenv("TRUTHS_FORGE_MODELING_TRACE_RETENTION_ERROR", "180"))
+        default_factory=lambda: _env_int("TRUTHS_FORGE_MODELING_TRACE_RETENTION_ERROR", 180)
     )
     # Discovery agent (P2 do chat-flow-redesign): antes de propor o plano, um
     # agente LLM avalia se o pedido está claro o suficiente; se não, faz
@@ -234,7 +272,7 @@ class Settings(BaseModel):
     # Limiar de confiança: abaixo dele (ou se o LLM listar perguntas) o agente
     # pergunta em vez de propor o plano. Mais alto = pergunta mais.
     modeling_discovery_confidence_threshold: float = Field(
-        default_factory=lambda: float(os.getenv("TRUTHS_FORGE_MODELING_DISCOVERY_THRESHOLD", "0.7"))
+        default_factory=lambda: _env_float("TRUTHS_FORGE_MODELING_DISCOVERY_THRESHOLD", 0.7)
     )
 
     @property

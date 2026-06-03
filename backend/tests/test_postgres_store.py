@@ -1,81 +1,122 @@
 import psycopg
+import psycopg_pool
 import pytest
 from psycopg.rows import dict_row
 
 from app.storage import postgres_store
 from app.storage.postgres_store import PostgresStore
 
+_DATABASE_URL = "postgresql://forge:forge@postgres:5432/truths_forge_ai"
+
 
 def make_store() -> PostgresStore:
     store = PostgresStore.__new__(PostgresStore)
-    store.database_url = "postgresql://forge:forge@postgres:5432/truths_forge_ai"
+    store.database_url = _DATABASE_URL
+    store._pool = None
     return store
 
 
-def test_postgres_connect_retries_transient_dns_failure(monkeypatch) -> None:
-    attempts: list[tuple[str, object]] = []
-    connection = object()
+class _FakePool:
+    """Pool de mentira: `wait()` levanta a exceção pré-programada (ou nada)."""
 
-    def fake_connect(database_url: str, row_factory: object) -> object:
-        attempts.append((database_url, row_factory))
-        if len(attempts) < 3:
-            raise psycopg.OperationalError(
-                "failed to resolve host 'postgres': [Errno -3] Temporary failure in name resolution"
-            )
-        return connection
+    def __init__(self, wait_error: Exception | None) -> None:
+        self._wait_error = wait_error
+        self.closed = False
 
+    def wait(self, timeout: float) -> None:
+        if self._wait_error is not None:
+            raise self._wait_error
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _patch_pool_factory(monkeypatch, wait_errors: list[Exception | None]):
+    """Faz `psycopg_pool.ConnectionPool(...)` devolver um _FakePool por tentativa,
+    cujo `wait()` levanta `wait_errors[i]`. Registra kwargs e pools criados.
+
+    storage-002: o retry de boot agora envolve a ABERTURA do pool (ConnectionPool +
+    wait()), não mais um `psycopg.connect` por operação.
+    """
+
+    created_kwargs: list[dict] = []
+    pools: list[_FakePool] = []
+    errors = iter(wait_errors)
+
+    def fake_pool(**kwargs) -> _FakePool:
+        created_kwargs.append(kwargs)
+        pool = _FakePool(next(errors))
+        pools.append(pool)
+        return pool
+
+    monkeypatch.setattr(postgres_store.psycopg_pool, "ConnectionPool", fake_pool)
+    return created_kwargs, pools
+
+
+def test_postgres_pool_open_retries_transient_dns_failure(monkeypatch) -> None:
+    transient = psycopg.OperationalError(
+        "failed to resolve host 'postgres': [Errno -3] Temporary failure in name resolution"
+    )
+    created, pools = _patch_pool_factory(monkeypatch, [transient, transient, None])
     sleeps: list[float] = []
-    monkeypatch.setattr(postgres_store.psycopg, "connect", fake_connect)
     monkeypatch.setattr(postgres_store, "sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(postgres_store, "_POSTGRES_CONNECT_ATTEMPTS", 3)
 
-    assert make_store()._connect() is connection
-    assert attempts == [
-        ("postgresql://forge:forge@postgres:5432/truths_forge_ai", dict_row),
-        ("postgresql://forge:forge@postgres:5432/truths_forge_ai", dict_row),
-        ("postgresql://forge:forge@postgres:5432/truths_forge_ai", dict_row),
-    ]
+    pool = make_store()._open_pool()
+
+    assert pool is pools[2]  # 3a tentativa abre com sucesso
+    assert len(created) == 3
+    assert all(kwargs["conninfo"] == _DATABASE_URL for kwargs in created)
+    assert created[0]["kwargs"]["row_factory"] is dict_row
+    assert pools[0].closed and pools[1].closed  # pools que falharam são fechados
+    assert not pools[2].closed
     assert sleeps == [postgres_store._POSTGRES_CONNECT_RETRY_DELAY_SECONDS] * 2
 
 
-def test_postgres_connect_raises_after_retry_budget(monkeypatch) -> None:
-    attempts: list[str] = []
-
-    def fake_connect(database_url: str, row_factory: object) -> object:
-        attempts.append(database_url)
-        raise psycopg.OperationalError("connection refused")
-
+def test_postgres_pool_open_raises_after_retry_budget(monkeypatch) -> None:
+    refused = psycopg.OperationalError("connection refused")
+    created, pools = _patch_pool_factory(monkeypatch, [refused, refused])
     sleeps: list[float] = []
-    monkeypatch.setattr(postgres_store.psycopg, "connect", fake_connect)
     monkeypatch.setattr(postgres_store, "sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(postgres_store, "_POSTGRES_CONNECT_ATTEMPTS", 2)
 
     with pytest.raises(psycopg.OperationalError, match="connection refused"):
-        make_store()._connect()
+        make_store()._open_pool()
 
-    assert attempts == [
-        "postgresql://forge:forge@postgres:5432/truths_forge_ai",
-        "postgresql://forge:forge@postgres:5432/truths_forge_ai",
-    ]
+    assert len(created) == 2
+    assert all(pool.closed for pool in pools)
     assert sleeps == [postgres_store._POSTGRES_CONNECT_RETRY_DELAY_SECONDS]
 
 
-def test_postgres_connect_does_not_retry_authentication_failure(monkeypatch) -> None:
-    attempts: list[str] = []
-
-    def fake_connect(database_url: str, row_factory: object) -> object:
-        attempts.append(database_url)
-        raise psycopg.OperationalError("password authentication failed for user forge")
-
+def test_postgres_pool_open_does_not_retry_authentication_failure(monkeypatch) -> None:
+    auth = psycopg.OperationalError("password authentication failed for user forge")
+    created, pools = _patch_pool_factory(monkeypatch, [auth])
     sleeps: list[float] = []
-    monkeypatch.setattr(postgres_store.psycopg, "connect", fake_connect)
     monkeypatch.setattr(postgres_store, "sleep", lambda seconds: sleeps.append(seconds))
 
     with pytest.raises(psycopg.OperationalError, match="password authentication failed"):
-        make_store()._connect()
+        make_store()._open_pool()
 
-    assert attempts == ["postgresql://forge:forge@postgres:5432/truths_forge_ai"]
+    assert len(created) == 1  # erro não-retryável: falha na 1a tentativa
+    assert pools[0].closed
     assert sleeps == []
+
+
+def test_postgres_pool_open_retries_pool_timeout(monkeypatch) -> None:
+    # PoolTimeout durante a janela de boot é sempre retryável (storage-002).
+    created, pools = _patch_pool_factory(
+        monkeypatch, [psycopg_pool.PoolTimeout("pool open timed out"), None]
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr(postgres_store, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(postgres_store, "_POSTGRES_CONNECT_ATTEMPTS", 3)
+
+    pool = make_store()._open_pool()
+
+    assert pool is pools[1]
+    assert len(created) == 2
+    assert pools[0].closed and not pools[1].closed
+    assert sleeps == [postgres_store._POSTGRES_CONNECT_RETRY_DELAY_SECONDS]
 
 
 def test_get_max_trace_sequence_uses_aggregate_query(monkeypatch) -> None:

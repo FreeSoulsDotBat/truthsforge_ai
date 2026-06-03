@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 60
 STDERR_TAIL_BYTES = 4000
+# Janela curta para o filho encerrar antes de drenarmos seu stderr; impede que
+# ``stderr.read()`` (que bloqueia até EOF) trave o lock num processo pendurado.
+STDERR_DRAIN_TIMEOUT_SECONDS = 5
 
 
 class StdioServerError(RuntimeError):
@@ -144,22 +147,40 @@ class StdioMCPClient:
             except (BrokenPipeError, OSError) as exc:
                 raise self._build_dead_process_error(exc) from exc
 
-            line = self._proc.stdout.readline()
-            if not line:
-                raise self._build_dead_process_error(RuntimeError("EOF inesperado no stdout."))
-
-            try:
-                response = decode_message(line)
-            except ProtocolError as exc:
-                raise StdioServerError(
-                    f"Servidor '{self.name}' devolveu mensagem inválida: {exc}"
-                ) from exc
-
-        if response.get("id") != request_id:
-            raise StdioServerError(
-                f"Servidor '{self.name}' devolveu id divergente: "
-                f"esperado {request_id}, recebido {response.get('id')!r}."
-            )
+            # O framing JSON-RPC é uma linha por mensagem, sem comprimento. Linhas
+            # de log/print espúrias emitidas ao stdout do servidor (ou por libs que
+            # ele importa) desincronizariam o protocolo se tratássemos a primeira
+            # linha como resposta. Por isso lemos em loop, ignorando linhas que não
+            # decodificam ou cujo id não bate, até achar a resposta correta ou EOF.
+            response: dict[str, Any] | None = None
+            while True:
+                line = self._proc.stdout.readline()
+                if not line:
+                    raise self._build_dead_process_error(
+                        RuntimeError("EOF inesperado no stdout.")
+                    )
+                if not line.strip():
+                    continue
+                try:
+                    candidate = decode_message(line)
+                except ProtocolError as exc:
+                    logger.debug(
+                        "Servidor '%s' emitiu linha não-JSON-RPC no stdout (ignorada): %s",
+                        self.name,
+                        exc,
+                    )
+                    continue
+                if candidate.get("id") != request_id:
+                    logger.debug(
+                        "Servidor '%s' emitiu mensagem com id divergente (ignorada): "
+                        "esperado %s, recebido %r.",
+                        self.name,
+                        request_id,
+                        candidate.get("id"),
+                    )
+                    continue
+                response = candidate
+                break
         if "error" in response:
             error = response["error"] or {}
             raise StdioServerError(
@@ -191,7 +212,21 @@ class StdioMCPClient:
     def _build_dead_process_error(self, original: Exception) -> StdioServerError:
         stderr_tail = ""
         if self._proc and self._proc.stderr:
+            # ``stderr.read()`` (sem tamanho) bloqueia até EOF, e um stdout vazio NÃO
+            # garante que o filho saiu (ele pode ter fechado/half-closed o stdout e
+            # continuar vivo ou travado). Confirmamos que o processo realmente morreu
+            # — concedendo uma janela curta para encerrar — antes de drenar o stderr,
+            # evitando travar o lock indefinidamente num filho pendurado.
             try:
+                if self._proc.poll() is None:
+                    try:
+                        self._proc.wait(timeout=STDERR_DRAIN_TIMEOUT_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        self._proc.kill()
+                        try:
+                            self._proc.wait(timeout=STDERR_DRAIN_TIMEOUT_SECONDS)
+                        except subprocess.TimeoutExpired:
+                            pass
                 stderr_tail = self._proc.stderr.read()[-STDERR_TAIL_BYTES:]
             except OSError:
                 stderr_tail = ""

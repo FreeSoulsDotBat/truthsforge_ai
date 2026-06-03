@@ -22,6 +22,7 @@ cobre a correção; o loop não pausa para aprovar a correção.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -106,14 +107,16 @@ class ModelingAgentLoop:
             current = step
             outcome = self.executor._execute_single_step(current, plan=plan)
             attempt = 0
-            while self._needs_correction(current, outcome) and attempt < self.max_iterations:
+            # Computa a divergência geométrica UMA vez por iteração e reaproveita
+            # tanto na condição de correção quanto no payload do corretor (o
+            # verifier desempacota o envelope + json.loads; rodá-lo 2x por passo
+            # é desperdício no caminho quente do loop).
+            divergence = self._compute_divergence(current, outcome)
+            while (not outcome.ok or bool(divergence)) and attempt < self.max_iterations:
                 attempt += 1
                 # Tool OK mas geometria divergente (verifier): injeta a
                 # divergência no output p/ o corretor enxergar (o
                 # build_correction_context formata "esperado × medido").
-                divergence = None
-                if outcome.ok and self.verifier is not None:
-                    divergence = self.verifier(current, outcome.output)
                 self._tracer.record(
                     "agent_loop.correction_attempt",
                     source=ModelingTraceSource.backend,
@@ -137,6 +140,7 @@ class ModelingAgentLoop:
                     break
                 current = corrected
                 outcome = self.executor._execute_single_step(current, plan=plan)
+                divergence = self._compute_divergence(current, outcome)
 
             executed_step_ids.append(step.id)
             suffix = f" (após {attempt} correção(ões))" if attempt else ""
@@ -145,7 +149,7 @@ class ModelingAgentLoop:
                 tool_call_ids.append(outcome.tool_call_id)
             next_steps.append(outcome.step)
 
-            if self._needs_correction(current, outcome):
+            if not outcome.ok or bool(divergence):
                 # Esgotou as iterações sem sucesso → PARA + rollback (RF-011).
                 blocked_step_ids.append(step.id)
                 aborted = True
@@ -200,16 +204,19 @@ class ModelingAgentLoop:
     # helpers
     # ------------------------------------------------------------------
 
-    def _needs_correction(self, step: ModelingPlanStep, outcome: Any) -> bool:
-        if not outcome.ok:
-            return True
-        # Verificação geométrica (read-back esperado × medido). Só quando
-        # injetada — depende do Fusion real (gate do dono).
-        if self.verifier is not None:
-            divergence = self.verifier(step, outcome.output)
-            if divergence:
-                return True
-        return False
+    def _compute_divergence(
+        self, step: ModelingPlanStep, outcome: Any
+    ) -> dict[str, Any] | None:
+        """Divergência geométrica (read-back esperado × medido) ou ``None``.
+
+        Só roda o verifier quando a tool teve sucesso (em falha de tool a
+        correção já dispara por ``outcome.ok``) e quando há verifier injetado —
+        depende do Fusion real (gate do dono). O resultado é reaproveitado na
+        condição do loop e no payload do corretor (evita rodar o verifier 2x)."""
+
+        if not outcome.ok or self.verifier is None:
+            return None
+        return self.verifier(step, outcome.output)
 
     def _do_rollback(self, plan: ModelingPlan) -> None:
         if self.rollback is None:
@@ -385,7 +392,24 @@ def run_plan_with_optional_loop(
     (card → ``POST /plans/{id}/execute``). Sem isto a flag só valia no fluxo de
     chat e o caminho do card executava SEMPRE linear — o loop não corrigia nada
     apesar de "ligado".
+
+    Caminho SÍNCRONO por contrato: o corretor LLM despacha via ``asyncio.run``
+    (``planner.correct_step``), que estoura ``RuntimeError`` se houver event loop
+    ativo na thread. Os call sites atuais rodam fora do loop (rotas ``def`` em
+    threadpool; chat via ``asyncio.to_thread``). Falhamos cedo e com mensagem
+    clara caso um chamador async invoque isto direto — em vez de o corretor
+    engolir o erro e abortar o plano sem motivo aparente (mdl-exec-7).
     """
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass  # sem loop ativo: caminho síncrono esperado.
+    else:
+        raise RuntimeError(
+            "run_plan_with_optional_loop deve ser chamado fora de um event loop "
+            "ativo (o corretor usa asyncio.run); despache via asyncio.to_thread."
+        )
 
     if settings.modeling_agentic_loop_enabled:
         loop = ModelingAgentLoop(
@@ -404,9 +428,34 @@ def run_plan_with_optional_loop(
         result = loop.run(plan)
     else:
         result = executor.execute_plan(plan)
-    _maybe_capture_model_state(executor, getattr(result, "plan", None) or plan)
-    _maybe_visual_correction(executor, planner, getattr(result, "plan", None) or plan)
+    executed_plan = getattr(result, "plan", None) or plan
+    # A correção visual (quando ligada) pode rodar replan + re-execução e mudar
+    # a geometria/persistir novos planos. Roda ANTES da captura do model_state
+    # para o read-back refletir o estado pós-correção, não o anterior.
+    _maybe_visual_correction(executor, planner, executed_plan)
+    _maybe_capture_model_state(executor, executed_plan)
+    # Recarrega o plano da store para que o result devolvido ao chamador
+    # (trace/audit/frontend) reflita o estado final real após correção visual e
+    # captura de model_state, em vez do snapshot stale de antes dessas etapas.
+    refreshed = _reload_plan(executor, executed_plan)
+    if refreshed is not None and refreshed is not result.plan:
+        result = result.model_copy(update={"plan": refreshed})
     return result
+
+
+def _reload_plan(
+    executor: ModelingExecutorService, plan: ModelingPlan
+) -> ModelingPlan | None:
+    """Recarrega o plano da store (best-effort); ``None`` se indisponível."""
+
+    store = getattr(executor, "store", None)
+    if store is None or not hasattr(store, "get_modeling_plan"):
+        return None
+    try:
+        return store.get_modeling_plan(plan.id)
+    except Exception as exc:  # noqa: BLE001 - recarga é best-effort
+        logger.debug("recarga do plano %s pós-execução falhou: %s", plan.id, exc)
+        return None
 
 
 def _maybe_visual_correction(

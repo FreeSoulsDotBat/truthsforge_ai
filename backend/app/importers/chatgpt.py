@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
@@ -18,6 +19,8 @@ from app.core.contracts import (
     ChatSessionWithMessages,
 )
 from app.files.library import is_image_file
+
+logger = logging.getLogger(__name__)
 
 MAX_IMPORT_BYTES = 5 * 1024 * 1024 * 1024
 CHUNK_SIZE = 1024 * 1024
@@ -51,6 +54,13 @@ def _iter_json_array_object_strings(
         if not chunk:
             break
         processed_bytes += len(chunk)
+        # Teto sobre bytes REALMENTE descomprimidos: o file_size do header do ZIP
+        # pode estar subdimensionado (zip-bomb), então não confiamos só nele.
+        if processed_bytes > MAX_IMPORT_BYTES:
+            limit_gb = MAX_IMPORT_BYTES / 1024 / 1024 / 1024
+            raise ChatGPTImportError(
+                f"conversas do export maior que {limit_gb:.0f} GB ao descomprimir."
+            )
         if progress:
             progress(
                 min(processed_bytes, total_bytes or processed_bytes), total_bytes, "Lendo conversas"
@@ -121,7 +131,13 @@ def _iter_conversations_from_text_handle(
     for raw_object in _iter_json_array_object_strings(
         handle, total_bytes=total_bytes, progress=progress
     ):
-        item = json.loads(raw_object)
+        try:
+            item = json.loads(raw_object)
+        except json.JSONDecodeError as exc:
+            # Um objeto de conversa malformado não deve abortar o export inteiro:
+            # pula a conversa corrompida e segue a contabilização por-conversa.
+            logger.warning("Objeto de conversa ChatGPT malformado ignorado: %s", exc)
+            continue
         if isinstance(item, dict):
             yield item
 
@@ -256,8 +272,8 @@ def _ordered_nodes(conversation: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(
         nodes,
         key=lambda node: (
-            node.get("message", {}).get("create_time") is None,
-            node.get("message", {}).get("create_time") or 0,
+            (node.get("message") or {}).get("create_time") is None,
+            (node.get("message") or {}).get("create_time") or 0,
         ),
     )
 
@@ -296,7 +312,9 @@ def _conversation_entries(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
         if entry.compress_size <= 0:
             continue
         compression_ratio = entry.file_size / entry.compress_size
-        if entry.file_size > 100 * 1024 * 1024 and compression_ratio > MAX_ZIP_COMPRESSION_RATIO:
+        # Razão de compressão é checada INCONDICIONALMENTE (independente do tamanho
+        # descomprimido), pois uma zip-bomb pequena ainda explode em memória/CPU.
+        if compression_ratio > MAX_ZIP_COMPRESSION_RATIO:
             raise ChatGPTImportError("ZIP com taxa de compressão suspeita para importação segura.")
     return conversation_entries
 

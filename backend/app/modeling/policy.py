@@ -68,13 +68,15 @@ def apply_plan_approval(plan: ModelingPlan, payload: ModelingApprovalRequest) ->
 
     steps = []
     for step in plan.steps:
-        if step.approval_required:
-            next_status = (
-                ModelingStepStatus.approved
-                if step.status == ModelingStepStatus.waiting_approval
-                else step.status
+        if step.approval_required and step.status == ModelingStepStatus.waiting_approval:
+            # Só carimba approved_at quando a transição real waiting_approval ->
+            # approved acontece; assim a função volta a ser idempotente e steps
+            # pending/failed não recebem um approved_at contraditório.
+            steps.append(
+                step.model_copy(
+                    update={"status": ModelingStepStatus.approved, "approved_at": now_utc()}
+                )
             )
-            steps.append(step.model_copy(update={"status": next_status, "approved_at": now_utc()}))
         else:
             steps.append(step)
     return plan.model_copy(

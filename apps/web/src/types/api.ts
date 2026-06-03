@@ -172,6 +172,10 @@ export interface ChatModeling3DContext {
   enabled: boolean;
   mode?: ModelingExecutionMode;
   software_override?: ModelingSoftware | null;
+  // P3: opt-in por chat. null/undefined = não alterar a preferência atual da
+  // sessão; true/false atualiza o ``modeling_fluid_mode`` da ChatSession.
+  // Alinhado com backend/app/core/contracts.py::ChatModeling3DContext.
+  fluid_mode?: boolean | null;
 }
 
 export interface ModelingApprovalRequest {

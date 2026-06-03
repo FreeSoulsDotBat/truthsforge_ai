@@ -422,7 +422,7 @@ class ChatSession(BaseModel):
         runs, normalise empty strings here so the model loads cleanly.
         """
 
-        if isinstance(value, str) and not value.strip():
+        if value is None or (isinstance(value, str) and not value.strip()):
             return "Sem título"
         return value
 
@@ -544,16 +544,12 @@ class ChatStreamRequest(BaseModel):
     agent_ids: list[str] = Field(default_factory=list)
     project_id: str | None = None
     folder_id: str | None = None
-    project_scope_mode: Literal["project_only", "project_plus_global", "global_only"] = (
-        "global_only"
-    )
     context_project_ids: list[str] = Field(default_factory=list)
-    context_document_ids: list[str] = Field(
-        default_factory=list, max_length=MAX_CONTEXT_DOCUMENT_IDS
-    )
-    context_knowledge_base_ids: list[str] = Field(
-        default_factory=list, max_length=MAX_CONTEXT_KNOWLEDGE_BASE_IDS
-    )
+    # max_length é validado APÓS o dedup em ``validate_response_modes`` (não no
+    # Field), senão um payload com duplicatas que caberia no limite após dedup
+    # seria rejeitado com 422 sobre a contagem crua.
+    context_document_ids: list[str] = Field(default_factory=list)
+    context_knowledge_base_ids: list[str] = Field(default_factory=list)
     reasoning_override: Literal["default", "long"] = "default"
     deep_research: bool = False
     deep_research_max_tool_calls: int = Field(default=20, ge=1, le=100)
@@ -561,12 +557,8 @@ class ChatStreamRequest(BaseModel):
     image_model_id: str | None = None
     reasoning_summary: Literal["off", "auto"] = "off"
     multi_agent_mode: bool = False
-    attached_document_ids: list[str] = Field(
-        default_factory=list, max_length=MAX_CHAT_ATTACHMENT_DOCUMENT_IDS
-    )
-    attached_file_ids: list[str] = Field(
-        default_factory=list, max_length=MAX_CHAT_ATTACHMENT_FILE_IDS
-    )
+    attached_document_ids: list[str] = Field(default_factory=list)
+    attached_file_ids: list[str] = Field(default_factory=list)
     modeling_3d: ChatModeling3DContext = Field(default_factory=ChatModeling3DContext)
 
     @model_validator(mode="after")
@@ -575,6 +567,24 @@ class ChatStreamRequest(BaseModel):
         self.context_knowledge_base_ids = list(dict.fromkeys(self.context_knowledge_base_ids))
         self.attached_document_ids = list(dict.fromkeys(self.attached_document_ids))
         self.attached_file_ids = list(dict.fromkeys(self.attached_file_ids))
+        # Limites aplicados após o dedup (ver nota nos Fields).
+        if len(self.context_document_ids) > MAX_CONTEXT_DOCUMENT_IDS:
+            raise ValueError(
+                f"context_document_ids excede o máximo de {MAX_CONTEXT_DOCUMENT_IDS}."
+            )
+        if len(self.context_knowledge_base_ids) > MAX_CONTEXT_KNOWLEDGE_BASE_IDS:
+            raise ValueError(
+                "context_knowledge_base_ids excede o máximo de "
+                f"{MAX_CONTEXT_KNOWLEDGE_BASE_IDS}."
+            )
+        if len(self.attached_document_ids) > MAX_CHAT_ATTACHMENT_DOCUMENT_IDS:
+            raise ValueError(
+                f"attached_document_ids excede o máximo de {MAX_CHAT_ATTACHMENT_DOCUMENT_IDS}."
+            )
+        if len(self.attached_file_ids) > MAX_CHAT_ATTACHMENT_FILE_IDS:
+            raise ValueError(
+                f"attached_file_ids excede o máximo de {MAX_CHAT_ATTACHMENT_FILE_IDS}."
+            )
         if self.deep_research and self.response_mode == "image":
             raise ValueError("Deep Research e geração de imagem são modos mutuamente exclusivos.")
         if self.reasoning_summary != "off" and self.response_mode != "text":
@@ -979,10 +989,11 @@ class ModelingPlanCreate(BaseModel):
     kind: ModelingPlanKind = ModelingPlanKind.primary
     parent_plan_id: str | None = None
     software_override: ModelingSoftware | None = None
-    knowledge_base_ids: list[str] = Field(default_factory=list, max_length=12)
+    # max_length validado após o dedup em ``normalize_software_override``.
+    knowledge_base_ids: list[str] = Field(default_factory=list)
     # F4: imagens/arquivos anexados pelo usuário (image-to-model). O planner
     # analisa cada um (vision/Blender) e injeta a descrição no contexto.
-    attached_file_ids: list[str] = Field(default_factory=list, max_length=8)
+    attached_file_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def normalize_software_override(self) -> ModelingPlanCreate:
@@ -990,6 +1001,10 @@ class ModelingPlanCreate(BaseModel):
             self.software_override = None
         self.knowledge_base_ids = list(dict.fromkeys(self.knowledge_base_ids))
         self.attached_file_ids = list(dict.fromkeys(self.attached_file_ids))
+        if len(self.knowledge_base_ids) > 12:
+            raise ValueError("knowledge_base_ids excede o máximo de 12.")
+        if len(self.attached_file_ids) > 8:
+            raise ValueError("attached_file_ids excede o máximo de 8.")
         return self
 
 

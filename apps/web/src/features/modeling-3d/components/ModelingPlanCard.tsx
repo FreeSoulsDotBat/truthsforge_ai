@@ -219,6 +219,10 @@ export function ModelingPlanCard({
         setEditError(`Etapa ${index + 1}: JSON inválido no campo de argumentos.`);
         return;
       }
+      if (typeof inputJson !== "object" || inputJson === null || Array.isArray(inputJson)) {
+        setEditError(`Etapa ${index + 1}: argumentos devem ser um objeto JSON.`);
+        return;
+      }
       steps.push({
         id: draft.id,
         title: draft.title.trim() || `Etapa ${index + 1}`,

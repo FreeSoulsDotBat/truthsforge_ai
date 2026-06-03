@@ -24,7 +24,7 @@ from app.core.contracts import (
 from app.llm_gateway.gateway import LLMGateway
 from app.modeling import tool_schemas
 from app.modeling.plan_sanitizer import sanitize_tool_arguments
-from app.modeling.tool_registry import PLANNER_TOOLSET
+from app.modeling.tool_registry import PLANNER_TOOLSET, requires_approval
 
 logger = logging.getLogger(__name__)
 
@@ -516,7 +516,8 @@ def _subgoals_from_payload(parsed: dict[str, Any]) -> list[ModelingSubGoal]:
     for index, item in enumerate(raw, start=1):
         if not isinstance(item, dict):
             raise ValueError(f"Sub-objetivo {index} não é um objeto JSON.")
-        seq = int(item.get("seq") or index)
+        raw_seq = item.get("seq")
+        seq = int(raw_seq) if raw_seq is not None else index
         title = str(item.get("title") or f"Sub-objetivo {seq}").strip() or f"Sub-objetivo {seq}"
         sub_goals.append(
             ModelingSubGoal(
@@ -591,7 +592,26 @@ def _corrected_step_from_payload(
     step: ModelingPlanStep, parsed: dict[str, Any]
 ) -> ModelingPlanStep:
     tool_name = str(parsed.get("tool_name") or step.tool_name)
+    # Re-valida a allowlist: uma "correção" não pode introduzir tool fora do
+    # PLANNER_TOOLSET (defesa-em-profundidade caso o enum do Structured Output
+    # não seja estritamente honrado pelo provider).
+    if tool_name not in PLANNER_TOOLSET:
+        raise ValueError(
+            f"tool_name '{tool_name}' fora da allowlist do planner; "
+            "correção de passo rejeitada."
+        )
     input_json = _decode_input_json(parsed.get("input_json"))
+    # Re-aplica o gate de aprovação: o passo corrigido é re-executado de imediato
+    # pelo agent_loop SEM passar por apply_modeling_policy. Se a "correção"
+    # trocar o tool por um destrutivo/high-risk (ex.: delete_body,
+    # combine_bodies), ela NÃO pode auto-executar — rejeitamos a correção para
+    # preservar o human-in-the-loop exigido pela constituição. O loop então cai
+    # em "sem correção" e reverte, em vez de contornar o gate de aprovação.
+    if requires_approval(tool_name, step.risk_level):
+        raise ValueError(
+            f"correção trocaria o passo para tool '{tool_name}' que exige "
+            "aprovação humana; correção rejeitada (sem auto-execução)."
+        )
     # Reseta o estado de execução; o passo corrigido será re-executado.
     return step.model_copy(
         update={
@@ -999,10 +1019,21 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
         raise ValueError(f"software_choice inválido vindo do LLM: {parsed.get('software_choice')}")
     software = ModelingSoftware(raw_software)
     if payload.software_override and payload.software_override != software:
-        # User explicitly chose; honor it and drop steps that target the wrong host.
-        software = payload.software_override
+        # Usuário forçou um host (software_override) e o LLM escolheu OUTRO como
+        # software_choice: o plano ignorou a escolha explícita. Rejeitamos para
+        # que o caller (planner_service._build_plan) caia no plano heurístico,
+        # que respeita o override via choose_software — em vez de aceitar um
+        # plano do host errado e violar silenciosamente o pedido do usuário.
+        # (Não filtramos por step: um plano legítimo pode misturar hosts, ex.:
+        # validar a mesh em blender.validate_mesh dentro de um plano fusion.)
+        raise ValueError(
+            f"LLM escolheu '{software.value}', mas o usuário forçou "
+            f"'{payload.software_override.value}'; plano rejeitado "
+            "(fallback heurístico respeita o override)."
+        )
 
-    confidence = float(parsed.get("confidence") or 0.7)
+    raw_confidence = parsed.get("confidence")
+    confidence = float(raw_confidence) if raw_confidence is not None else 0.7
     confidence = max(0.0, min(1.0, confidence))
     rationale = str(parsed.get("rationale") or "").strip()
     assumptions = [str(item) for item in (parsed.get("assumptions") or []) if str(item).strip()]
@@ -1015,7 +1046,8 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
     for index, item in enumerate(raw_steps, start=1):
         if not isinstance(item, dict):
             raise ValueError(f"Etapa {index} do plano não é um objeto JSON.")
-        seq = int(item.get("seq") or index)
+        raw_seq = item.get("seq")
+        seq = int(raw_seq) if raw_seq is not None else index
         title = str(item.get("title") or f"Etapa {seq}").strip() or f"Etapa {seq}"
         tool_name = str(item.get("tool_name") or "").strip()
         if not tool_name:
@@ -1034,6 +1066,10 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
         # referência geométrica que os nudges não eliminam, antes do executor.
         if settings.modeling_plan_sanitizer_enabled and isinstance(input_json, dict):
             input_json, _sanitize_actions = sanitize_tool_arguments(tool_name, input_json)
+        # Cada step mantém o host do seu próprio prefixo (o executor roteia por
+        # prefixo). Não rejeitamos cross-host aqui: é legítimo (ex.: validação de
+        # mesh em blender dentro de um plano fusion). O conflito de override já
+        # foi tratado acima rejeitando o plano inteiro.
         step_software = _step_software(tool_name, software)
         status = (
             ModelingStepStatus.pending

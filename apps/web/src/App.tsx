@@ -76,6 +76,7 @@ import {
   KnowledgeDashboard,
   ProjectsDashboard
 } from "./features/dashboard/dashboard-sections";
+import { WarningBanner } from "./components/ui/WarningBanner";
 import { EnableModeling3DDialog, ModelingDiagnosticsModal } from "./features/modeling-3d/components";
 import { isModeling3DChat } from "./features/modeling-3d/chat-domain";
 import { useModeling3dChat, useModelingPlanActions } from "./features/modeling-3d/hooks";
@@ -1205,7 +1206,6 @@ function App() {
           agent_ids: runtimeSupportAgents.map((agent) => agent.id),
           project_id: chatProjectId,
           folder_id: activeSessionFolderId,
-          project_scope_mode: chatProjectScopeMode,
           context_project_ids: normalizedContextProjectIds,
           context_document_ids: normalizedContextDocumentIds,
           context_knowledge_base_ids: normalizedContextKnowledgeBaseIds,
@@ -2299,6 +2299,18 @@ function App() {
                   documentsCount={documents.length}
                   monthlySpendBrl={costUsage?.estimated_spend_brl ?? null}
                 />
+
+                {activeSessionIsModeling3D && modelingPlanActionsRuntime.error && (
+                  <div className="border-t border-forge-line-soft bg-forge-ink px-3 pt-3">
+                    <div className="mx-auto max-w-3xl">
+                      <WarningBanner
+                        tone="err"
+                        title="A ação do plano 3D falhou."
+                        body={modelingPlanActionsRuntime.error}
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <form onSubmit={handleSubmit} className="border-t border-forge-line-soft bg-forge-ink p-3">
                   <div className="mx-auto max-w-3xl rounded-lg border border-forge-line bg-forge-panel p-3 shadow-soft">

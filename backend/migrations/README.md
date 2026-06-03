@@ -8,9 +8,9 @@ refatoração 3D chat-first:
 |---|---|---|
 | `001_initial_baseline` | 1.4 | Espelha o estado atual produzido por `PostgresStore.init_schema()`. Idempotente (todas as DDLs usam `CREATE … IF NOT EXISTS`). |
 | `002_chats_title_not_null` | 2 | `chats.title NOT NULL` + backfill `"Sem título - YYYY-MM-DD"` (ADR-014). |
-| `003_chats_modeling_fields` | 2 | `is_modeling_3d BOOL`, `modeling_software_preference TEXT`, `modeling_stage TEXT`, `modeling_plan_id UUID`. |
-| `004_modeling_plans_kind` | 1.4 | Índices em `payload->>'kind'` e `payload->>'parent_plan_id'` para queries de planos `primary` vs `edit`. |
-| `005_drop_legacy_modes` | pós-Onda-3 | Drop opcional dos campos `mode` e `approval_required` no payload do plano. |
+| `003_chats_modeling_fields` | 2 | Índices funcionais sobre `payload JSONB` (`payload->>'is_modeling_3d'`, `payload->>'modeling_stage'`, `payload->>'modeling_plan_id'`). **Não cria colunas** — os campos vivem dentro do `payload` (ADR-004). |
+| `004_modeling_plans_kind` | 1.4 | Índices em `payload->>'kind'` e `payload->>'parent_plan_id'` para queries de planos `primary` vs `edit`. **Revisão `head` atual.** |
+| `005_drop_legacy_modes` | pós-Onda-3 | **Planejada / não implementada.** Drop opcional dos campos `mode` e `approval_required` no payload do plano. Quando criada, encadear `down_revision` a partir de `004`. |
 
 ## Convivência com `init_schema()`
 

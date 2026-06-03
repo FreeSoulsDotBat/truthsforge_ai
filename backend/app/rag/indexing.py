@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -21,6 +22,8 @@ from app.files.processor import (
 )
 from app.rag.embeddings import embed_text, embedding_backend_name, embedding_model_name
 from app.rag.vector_store import QdrantVectorStore
+
+logger = logging.getLogger(__name__)
 
 DOCUMENT_COLLECTION = "truths_forge_documents"
 EXTRACTABLE_SOURCE_TYPES = {"markdown", "txt", "csv", "html", "pdf", "docx", "image", "unknown"}
@@ -250,38 +253,52 @@ async def index_document_content(document: Document, content: str) -> Document:
     chunks = chunk_text(content)
     if not chunks:
         chunks = [content.strip()]
+    # Descarta chunks vazios/só-whitespace: embed_text("") devolve um vetor de norma
+    # zero, que o Qdrant rejeita em coleções Cosine com HTTP 400 ao fazer upsert.
+    chunks = [chunk for chunk in chunks if chunk and chunk.strip()]
     vector_store = QdrantVectorStore()
     await vector_store.delete_document_chunks(DOCUMENT_COLLECTION, document.id)
-    payloads = [
-        {
-            "id": f"{document.id}:{index}",
-            "vector": embed_text(chunk),
-            "payload": {
-                "document_id": document.id,
-                "title": document.title,
-                "content": chunk,
-                "summary": summarize_chunk(chunk),
-                "chunk_index": index,
-                "project_id": document.project_id,
-                "category_id": document.category_id,
-                "folder_id": document.folder_id,
-                "pinned": document.pinned,
-                "tags": document.tags,
-                "source_type": document.source_type,
-                "created_at": document.created_at.isoformat(),
-                "updated_at": document.updated_at.isoformat(),
-                "file_id": (
-                    document.metadata.get("file_id")
-                    if isinstance(document.metadata, dict)
-                    else None
-                ),
-            },
-        }
-        for index, chunk in enumerate(chunks)
-    ]
-    await vector_store.upsert_chunks(DOCUMENT_COLLECTION, payloads)
+    payloads = []
+    for index, chunk in enumerate(chunks):
+        vector = embed_text(chunk)
+        # Pula vetores de norma zero (rejeitados pela métrica Cosine do Qdrant).
+        if not any(vector):
+            logger.warning(
+                "Chunk %s do documento %s gerou vetor de norma zero; ignorado na indexação.",
+                index,
+                document.id,
+            )
+            continue
+        payloads.append(
+            {
+                "id": f"{document.id}:{index}",
+                "vector": vector,
+                "payload": {
+                    "document_id": document.id,
+                    "title": document.title,
+                    "content": chunk,
+                    "summary": summarize_chunk(chunk),
+                    "chunk_index": index,
+                    "project_id": document.project_id,
+                    "category_id": document.category_id,
+                    "folder_id": document.folder_id,
+                    "pinned": document.pinned,
+                    "tags": document.tags,
+                    "source_type": document.source_type,
+                    "created_at": document.created_at.isoformat(),
+                    "updated_at": document.updated_at.isoformat(),
+                    "file_id": (
+                        document.metadata.get("file_id")
+                        if isinstance(document.metadata, dict)
+                        else None
+                    ),
+                },
+            }
+        )
+    if payloads:
+        await vector_store.upsert_chunks(DOCUMENT_COLLECTION, payloads)
     metadata = dict(document.metadata) if isinstance(document.metadata, dict) else {}
-    metadata["chunk_count"] = len(chunks)
+    metadata["chunk_count"] = len(payloads)
     metadata["embedding_backend"] = embedding_backend_name()
     metadata["embedding_model"] = embedding_model_name()
     metadata["embedding_dimensions"] = len(payloads[0]["vector"]) if payloads else 0
@@ -393,7 +410,14 @@ def delete_documents_for_platform_file(store, file_id: str) -> list[str]:
         try:
             asyncio.run(delete_document_vectors(document.id))
         except Exception:
-            pass
+            # Vetores podem ficar órfãos no Qdrant (indisponível/timeout/4xx);
+            # logamos para diagnóstico em vez de engolir silenciosamente.
+            logger.warning(
+                "Falha ao remover vetores do documento %s (file_id=%s); "
+                "vetores podem ter ficado órfãos.",
+                document.id,
+                file_id,
+            )
         deleted = store.delete_document(document.id)
         if deleted is not None:
             deleted_ids.append(deleted.id)

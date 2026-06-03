@@ -75,8 +75,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
     return dedent(
         f"""
+        import ast
         import json
         import math
+        import operator
         import tempfile
         import traceback
         from pathlib import Path
@@ -160,18 +162,60 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return root.xYConstructionPlane
 
 
+        _SAFE_BINOPS = {{
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.Mod: operator.mod,
+            ast.Pow: operator.pow,
+            ast.FloorDiv: operator.floordiv,
+        }}
+        _SAFE_UNARYOPS = {{
+            ast.UAdd: operator.pos,
+            ast.USub: operator.neg,
+        }}
+
+
+        def _safe_arith_eval(expr, namespace):
+            # Avaliador aritmetico restrito (substitui eval()): aceita apenas
+            # numeros, nomes do ``namespace`` (params do design) e operadores
+            # +-*/ ** % //. Rejeita Atributo/Chamada/Indexacao/etc., fechando o
+            # escape classico de eval-com-__builtins__-vazio.
+            tree = ast.parse(expr, mode="eval")
+
+            def _ev(node):
+                if isinstance(node, ast.Expression):
+                    return _ev(node.body)
+                if isinstance(node, ast.Constant):
+                    if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+                        raise ValueError("constante nao numerica")
+                    return float(node.value)
+                if isinstance(node, ast.Name):
+                    if node.id not in namespace:
+                        raise ValueError("nome desconhecido: " + node.id)
+                    return float(namespace[node.id])
+                if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_BINOPS:
+                    return _SAFE_BINOPS[type(node.op)](_ev(node.left), _ev(node.right))
+                if isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_UNARYOPS:
+                    return _SAFE_UNARYOPS[type(node.op)](_ev(node.operand))
+                raise ValueError("expressao nao permitida")
+
+            return float(_ev(tree))
+
+
         def _eval_param(value, design, default=None):
             # Fix #10: resolve valor para mm aceitando 4 formatos:
             #   (a) int/float       -> assume mm, retorna direto
             #   (b) "49" / "49.5"  -> parse direto como mm
             #   (c) "param_name"   -> lookup em userParameters
             #                         (com prefixo opcional "-" para negar)
-            #   (d) "a + b - c"    -> eval em namespace dos params (mm)
+            #   (d) "a + b - c"    -> avaliador aritmetico restrito (mm)
             #
             # Fusion API armazena userParameters em cm internamente; multiplicamos
-            # por 10 ao expor em mm. Para expressoes compostas usamos eval com
-            # __builtins__ vazio (sandboxed) e namespace so com nomes/valores
-            # dos parametros do design.
+            # por 10 ao expor em mm. Para expressoes compostas usamos um
+            # avaliador aritmetico restrito por AST (_safe_arith_eval), com
+            # namespace so com nomes/valores dos parametros do design.
             if value is None:
                 return default
             if isinstance(value, (int, float)):
@@ -197,13 +241,14 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 if param is not None:
                     sign = -1.0 if s.startswith("-") else 1.0
                     return sign * float(param.value) * 10.0
-            # Expressao composta: eval em namespace fechado (sem builtins).
+            # Expressao composta: avaliador aritmetico restrito via AST
+            # (sem eval()), namespace so com nomes/valores dos parametros (mm).
             namespace = {{}}
             for i in range(design.userParameters.count):
                 p = design.userParameters.item(i)
                 namespace[p.name] = float(p.value) * 10.0
             try:
-                return float(eval(s, {{"__builtins__": {{}}}}, namespace))
+                return _safe_arith_eval(s, namespace)
             except Exception:
                 return default
 
@@ -3673,10 +3718,19 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             # que vinha como traceback opaco. STEP funciona com design vazio
             # porque exporta a estrutura mesmo sem geometria.
             design = _design()
-            target = str(args.get("target") or "preview." + fmt)
-            target_path = Path(target)
-            if not target_path.is_absolute():
-                target_path = Path(tempfile.gettempdir()) / target_path
+            # Fix (mdl-adapters-004): o ``target`` vem do JSON do modelo/usuario
+            # e era usado direto, permitindo '..' (traversal) ou caminho
+            # absoluto -> escrita arbitraria no host. Sanitizamos como o runner
+            # do Blender (_safe_export_name): so o nome do arquivo, sem NUL,
+            # com a extensao forcada, sempre dentro do diretorio temporario.
+            raw_target = str(args.get("target") or "preview." + fmt)
+            suffix = "." + fmt
+            candidate = Path(raw_target).name.replace("\\x00", "").strip()
+            if not candidate:
+                candidate = "preview" + suffix
+            if not candidate.lower().endswith(suffix.lower()):
+                candidate = candidate + suffix
+            target_path = Path(tempfile.gettempdir()) / candidate
             target_path.parent.mkdir(parents=True, exist_ok=True)
             export_manager = design.exportManager
             if fmt == "step":

@@ -167,55 +167,6 @@ def _knowledge_base_document_index(
     return indexed
 
 
-async def _search_project_context(
-    *,
-    message: str,
-    project_ids: set[str],
-    selected_document_ids: set[str],
-    max_documents: int,
-    folder_ids: set[str],
-) -> list[dict[str, str]]:
-    if not message.strip():
-        return []
-    vector_store = QdrantVectorStore()
-    try:
-        results = await vector_store.search(
-            DOCUMENT_COLLECTION,
-            embed_text(message),
-            max(8, min(80, max_documents * 4)),
-        )
-    except Exception:
-        return []
-
-    snippets: list[dict[str, str]] = []
-    for item in results:
-        raw_payload = item.get("payload") or {}
-        raw_project_id = str(raw_payload.get("project_id") or "")
-        if project_ids and raw_project_id not in project_ids:
-            continue
-        raw_folder_id = raw_payload.get("folder_id")
-        if folder_ids and str(raw_folder_id or "") not in folder_ids:
-            continue
-        raw_document_id = str(raw_payload.get("document_id") or "")
-        if selected_document_ids and raw_document_id not in selected_document_ids:
-            continue
-        content = str(raw_payload.get("content") or "").strip()
-        if not content:
-            continue
-        snippets.append(
-            {
-                "title": str(raw_payload.get("title") or "Documento"),
-                "content": content,
-                "project_id": str(raw_payload.get("project_id") or ""),
-                "folder_id": str(raw_folder_id or ""),
-                "score": f"{float(item.get('score', 0)):.3f}",
-            }
-        )
-        if len(snippets) >= max_documents:
-            break
-    return snippets
-
-
 async def _search_knowledge_base_context(
     *,
     message: str,
@@ -334,6 +285,5 @@ __all__ = [
     "_mentioned_folder_ids",
     "_normalize_knowledge_base_ids",
     "_search_knowledge_base_context",
-    "_search_project_context",
     "_select_context_documents",
 ]

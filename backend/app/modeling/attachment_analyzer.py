@@ -223,6 +223,25 @@ class ModelingAttachmentAnalyzer:
                 error="storage_path_missing",
             )
 
+        # Reverifica contra o tamanho REAL no disco: ``size_bytes`` pode vir 0/None
+        # (desconhecido) e burlar ``_is_within_size_limit``, levando a uma leitura
+        # pesada de um arquivo grande. Esta é a barreira efetiva antes do trabalho.
+        try:
+            real_size = path.stat().st_size
+        except OSError:
+            real_size = 0
+        if real_size > self.max_bytes:
+            return AttachmentAnalysis(
+                file_id=file_id,
+                filename=platform_file.filename,
+                kind=kind,
+                ok=False,
+                summary=(
+                    f"Arquivo excede o limite de {self.max_bytes // (1024 * 1024)} MB para análise."
+                ),
+                error="attachment_too_large",
+            )
+
         try:
             if kind == "image":
                 return self._analyze_image(platform_file, path)
@@ -366,8 +385,9 @@ class ModelingAttachmentAnalyzer:
                     chunks.append(event.content)
             return "".join(chunks)
 
-        timeout = max(self.timeout_seconds, 60)
-        return await asyncio.wait_for(_run(), timeout=timeout)
+        # Honra o timeout configurado (docstring: default 15 s); não força um
+        # piso de 60 s que ignorava o valor configurado.
+        return await asyncio.wait_for(_run(), timeout=self.timeout_seconds)
 
     # ------------------------------------------------------------------
     # internals — mesh / blend
