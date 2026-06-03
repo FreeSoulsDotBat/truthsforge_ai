@@ -886,6 +886,11 @@ class ModelStateEdge(BaseModel):
     length_mm: float | None = None
     is_circular: bool = False
     radius_mm: float | None = None  # arestas em arco/círculo (furos/knuckle)
+    # F7: pontas/direção de arestas retas (None em circulares). O resolver de
+    # posicionamento ancora "along(fraction)" e deriva eixo de junta daqui.
+    start_point_mm: list[float] | None = None
+    end_point_mm: list[float] | None = None
+    direction: list[float] | None = None  # vetor unitário (end - start)
     adjacent_face_tokens: list[str] = Field(default_factory=list)
 
 
@@ -893,6 +898,10 @@ class ModelStateBody(BaseModel):
     stable_id: str | None = None
     name: str | None = None
     dimensions_mm: list[float] | None = None
+    # F7: bbox absoluto (min/max em mm). dimensions_mm é só o tamanho; o
+    # resolver ancora por "bbox.max_z"/"corner"/"center" a partir destes.
+    bbox_min_mm: list[float] | None = None
+    bbox_max_mm: list[float] | None = None
     is_solid: bool | None = None
     is_closed: bool | None = None
     surface_area_mm2: float | None = None

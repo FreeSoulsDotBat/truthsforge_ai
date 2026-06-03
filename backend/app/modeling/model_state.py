@@ -73,6 +73,9 @@ def model_state_from_query_output(output: dict[str, Any] | None) -> ModelState |
                 length_mm=e.get("length_mm"),
                 is_circular=bool(e.get("is_circular")),
                 radius_mm=e.get("radius_mm"),
+                start_point_mm=e.get("start_point_mm"),
+                end_point_mm=e.get("end_point_mm"),
+                direction=e.get("direction"),
                 adjacent_face_tokens=[
                     t for t in e.get("adjacent_face_tokens", []) if isinstance(t, str)
                 ],
@@ -85,6 +88,8 @@ def model_state_from_query_output(output: dict[str, Any] | None) -> ModelState |
                 stable_id=rb.get("stable_id"),
                 name=rb.get("name"),
                 dimensions_mm=rb.get("dimensions_mm"),
+                bbox_min_mm=rb.get("bbox_min_mm"),
+                bbox_max_mm=rb.get("bbox_max_mm"),
                 is_solid=rb.get("is_solid"),
                 is_closed=rb.get("is_closed"),
                 surface_area_mm2=rb.get("surface_area_mm2"),

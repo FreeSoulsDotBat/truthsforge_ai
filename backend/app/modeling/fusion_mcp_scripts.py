@@ -3315,6 +3315,28 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     pass
                 return False, None
 
+            def _edge_endpoints_mm(edge):
+                # F7 (P2): (start_mm, end_mm, direction_unit) de uma aresta reta.
+                # Generaliza _edge_z_range p/ os 3 eixos. Arestas circulares/sem
+                # vertices -> (None, None, None) (eixo vem do centro/raio). O
+                # resolver de posicionamento (spatial_ref) deriva daqui o eixo de
+                # junta/distribuicao e o ponto "along(fraction)".
+                try:
+                    sv = edge.startVertex.geometry
+                    ev = edge.endVertex.geometry
+                except Exception:
+                    return None, None, None
+                if sv is None or ev is None:
+                    return None, None, None
+                start = [round(sv.x * 10.0, 2), round(sv.y * 10.0, 2), round(sv.z * 10.0, 2)]
+                end = [round(ev.x * 10.0, 2), round(ev.y * 10.0, 2), round(ev.z * 10.0, 2)]
+                dx, dy, dz = ev.x - sv.x, ev.y - sv.y, ev.z - sv.z
+                mag = (dx * dx + dy * dy + dz * dz) ** 0.5
+                if mag <= 1e-9:
+                    return start, end, None
+                direction = [round(dx / mag, 4), round(dy / mag, 4), round(dz / mag, 4)]
+                return start, end, direction
+
             bodies_out = []
             for bi in range(root.bRepBodies.count):
                 body = root.bRepBodies.item(bi)
@@ -3358,6 +3380,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     except Exception:
                         length_mm = 0.0
                     is_circular, edge_radius_mm = _edge_circle_mm(e)
+                    edge_start_mm, edge_end_mm, edge_direction = _edge_endpoints_mm(e)
                     # Adjacencia edge->faces (tokens): "que faces esta aresta
                     # separa" — o LLM usa para mirar a face certa a partir de
                     # uma aresta conhecida.
@@ -3376,6 +3399,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         "length_mm": round(length_mm, 2),
                         "is_circular": is_circular,
                         "radius_mm": edge_radius_mm,
+                        # F7 (P2): pontas/direcao para o resolver ancorar/distribuir.
+                        "start_point_mm": edge_start_mm,
+                        "end_point_mm": edge_end_mm,
+                        "direction": edge_direction,
                         "adjacent_face_tokens": adj_face_tokens,
                     }})
                 # T5.3a (Fase 5): expor is_solid/is_closed/surface_area_mm2 e
@@ -3414,6 +3441,18 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                         round((bbox.maxPoint.x - bbox.minPoint.x) * 10.0, 2),
                         round((bbox.maxPoint.y - bbox.minPoint.y) * 10.0, 2),
                         round((bbox.maxPoint.z - bbox.minPoint.z) * 10.0, 2),
+                    ],
+                    # F7 (P2): bbox absoluto (min/max) p/ o resolver ancorar por
+                    # "bbox.max_z"/"corner"; dimensions_mm e so o tamanho.
+                    "bbox_min_mm": [
+                        round(bbox.minPoint.x * 10.0, 2),
+                        round(bbox.minPoint.y * 10.0, 2),
+                        round(bbox.minPoint.z * 10.0, 2),
+                    ],
+                    "bbox_max_mm": [
+                        round(bbox.maxPoint.x * 10.0, 2),
+                        round(bbox.maxPoint.y * 10.0, 2),
+                        round(bbox.maxPoint.z * 10.0, 2),
                     ],
                     "face_count": body.faces.count,
                     "edge_count": body.edges.count,
