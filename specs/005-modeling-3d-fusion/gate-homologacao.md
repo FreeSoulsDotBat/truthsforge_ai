@@ -19,6 +19,8 @@
    TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE=true
    TRUTHS_FORGE_MODELING_HIERARCHICAL_PLANNING_ENABLED=true     # F2 (decompõe→observa→replaneja)
    TRUTHS_FORGE_MODELING_LIVE_GEOMETRY_RECONCILIATION_ENABLED=true  # F5 (lê geometria ao vivo na edição)
+   TRUTHS_FORGE_MODELING_VISUAL_VERIFICATION_ENABLED=true       # Gate Visual (render→visão→replan) — destrava o F7
+   TRUTHS_FORGE_MODELING_SPATIAL_RESOLUTION_ENABLED=true        # F7 (posicionamento paramétrico declarativo) — só p/ o Gate F7
    # F6 (sanitizer determinístico) já vem ON por padrão; só desligue p/ depurar planner cru.
    ```
    > As 3 flags de capacidade (loop/hierárquico/reconciliação) só fazem efeito
@@ -301,6 +303,74 @@ Modele uma caixa de 60x40x30 mm com uma tampa ligada por uma dobradiça de nós
 
 ---
 
+## Gate F7 — Posicionamento paramétrico (declarativo → montagem nativa) ⭐ API-blind
+
+Precisa de `TRUTHS_FORGE_MODELING_SPATIAL_RESOLUTION_ENABLED=true` (e, p/ o caso
+oficial, o **Gate Visual** ON). O resolver de backend (`spatial_resolver`) já está
+mock-verde, mas a **montagem nativa** (`joint`/`make_component`/`combine`) nunca
+rodou no Fusion à mão — é onde o teu olho vale. Faça **na ordem** P1 → P2 → P6:
+o P1 valida a fundação ANTES de confiar na camada declarativa por cima.
+
+### F7.P1 — Fundação de montagem (joint + make_component + combine-DENTRO)
+
+Isola o adapter do LLM via **plano literal** (ver §"Plano literal" abaixo). Cole os
+steps e execute:
+```powershell
+$steps = @{ steps = @(
+  @{ title="Caixa";  tool_name="fusion.add_box";       input_json=@{ width_mm=60; depth_mm=40; height_mm=20; name="Caixa" } },
+  @{ title="Tampa";  tool_name="fusion.add_box";       input_json=@{ width_mm=60; depth_mm=40; height_mm=3;  name="Tampa"; origin_mm=@(0,0,20) } },
+  @{ title="CompC";  tool_name="fusion.make_component"; input_json=@{ body_ref="Caixa"; name="Caixa" } },
+  @{ title="CompT";  tool_name="fusion.make_component"; input_json=@{ body_ref="Tampa"; name="Tampa" } },
+  @{ title="Junta";  tool_name="fusion.joint";          input_json=@{ joint_type="revolute"; body_one="Tampa"; body_two="Caixa"; face_selector_one="top"; face_selector_two="top"; axis="x" } }
+) }
+```
+**Observar:** os 2 viram **componentes** no browser; a **junta revolute** aparece e
+a tampa **gira** em torno do eixo X (arraste no Fusion). **Combine-DENTRO:** num 2º
+teste, crie `Caixa` + 2 cilindros, `make_component` da Caixa, mova os cilindros pra
+dentro dela e `combine_bodies join` → **1 sólido** dentro do componente (é o que a
+dobradiça precisa: nós fundidos na caixa, não entre componentes). Mande o **dump
+dos steps** (in/out) se a junta não montar — é fix-by-trace.
+
+### F7.P2 — `query_geometry` enriquecido (números do probe)
+
+Plano literal com 1 caixa conhecida + 1 step `fusion.query_geometry`; depois
+inspecione o `output_json` do step de query:
+```powershell
+# após executar [add_box 60x40x20 'Caixa', query_geometry], dump do último step:
+$p = Invoke-RestMethod "http://127.0.0.1:8000/api/3d/plans/<PLAN_ID>"
+$p.steps[-1].output_json | ConvertTo-Json -Depth 8
+```
+**Observar:** por corpo, `bbox_min_mm`≈[0,0,0] e `bbox_max_mm`≈[60,40,20] (não só
+`dimensions_mm`); por **aresta reta**, `start_point_mm`/`end_point_mm` nas pontas
+certas e `direction` unitário (ex.: [1,0,0] numa aresta X). Arestas circulares vêm
+com esses campos `null` (ok — o eixo vem do centro/raio). São os números que o
+resolver consome; se vierem errados, o placement erra — manda o dump.
+
+### F7.P6 — Placement declarativo + dobradiça que ABRE (caso oficial)
+
+**Natural** (flag F7 + Gate Visual ON; prova o planner declarando placement):
+```
+Modele uma caixa de 60x40x30 mm com uma tampa ligada por uma dobradiça de nós
+(knuckles) na borda de cima de 60 mm, de modo que a tampa abra e feche. A caixa
+deve sair impressa como UMA peça e a tampa como outra.
+```
+**Observar (logs — pré-voo §5, filtre por `spatial_resolved|visual.`):**
+1. No trace aparece `executor.spatial_resolved` com `concrete_tools` (ex.: a
+   `place_body`/`distribute_along` vira `make_component`/`combine_bodies`/`joint`).
+2. Os **knuckles** caem na **borda certa** (a aberta) e **alternados** caixa/tampa,
+   fundidos cada grupo no seu corpo (combine-DENTRO); o **pino**/eixo é coaxial.
+3. A tampa **abre e fecha** (junta revolute entre os componentes).
+4. Se ainda divergir, o **Gate Visual** replaneja a correção — observe convergir.
+
+**Comparativo:** repita com `SPATIAL_RESOLUTION_ENABLED=false` — o planner volta a
+chutar `origin_mm` (deve errar mais o posicionamento). É a evidência do ganho.
+
+> **Regressão (importante):** rode um caso simples **sem** montagem (ex.: o Gate F6
+> da placa+4 furos) com a flag F7 **ON** — deve sair **idêntico** ao da flag OFF
+> (a resolução é no-op quando não há ref espacial). Se mudar algo, é bug.
+
+---
+
 ## Plano literal via API (fallback — quando nem natural nem dirigido funcionam)
 
 Isola 100% o adapter do planner (tira o LLM da equação). Útil pros casos
@@ -332,3 +402,8 @@ Invoke-RestMethod "$api/plans/<PLAN_ID>/execute" -Method Post
 Gate 1 (superfícies) → Gate 2 (sheet metal) → Gate 3 (placa/params) → Gate 4
 (loop). Os Gates 1 e 2 concentram o risco (tools novas) — se algo quebrar, será
 ali, e o dump dos steps + trace permite correção fix-by-trace na mesma sessão.
+
+Para o **F7** (posicionamento paramétrico, código entregue mock-verde): **Gate F7
+P1** (fundação de montagem — joint/component/combine) → **P2** (números do
+`query_geometry`) → **P6** (placement declarativo + dobradiça que abre via loop
+visual). O P1 concentra o risco API-blind; valide-o antes de confiar no P6.

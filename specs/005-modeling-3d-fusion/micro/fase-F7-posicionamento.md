@@ -60,9 +60,18 @@ Aritmética por AST restrito (sem `eval`). Fora da gramática → `fusion.spatia
 
 ## Definição de pronto (F7)
 
-- [ ] P0 SDD + ADR-022.
-- [ ] P1 fundação de montagem gateada no Fusion (combine-dentro/joint-entre).
-- [ ] P2 `query_geometry` enriquecido + gateado.
-- [ ] P3/P4/P5 resolver + tools + wiring, mock verdes; flag OFF = regressão.
+- [x] P0 SDD + ADR-022.
+- [ ] P1 fundação de montagem gateada no Fusion (combine-dentro/joint-entre) — **aguarda gate do dono**.
+- [~] P2 `query_geometry` enriquecido (bbox abs + pontas/direção de aresta) — **código + mock verdes; números aguardam gate Fusion**.
+- [x] P3/P4/P5 resolver + tools + wiring, mock verdes; flag OFF = regressão. (`spatial_ref` 19, `spatial_resolver` 15, wiring 7, nudge flag-gated; suíte local 529 verdes.)
 - [ ] **P6 gate do dono:** caixa+tampa knuckle que ABRE, 100% declarativa/paramétrica, convergindo pelo loop visual.
-- [ ] Docusaurus + SDD reconciliados; itens §3.1/§3.5 do débito marcados endereçados.
+- [ ] Docusaurus + SDD reconciliados; itens §3.1/§3.5 do débito marcados endereçados (feito no tech-debt; Docusaurus na fase final).
+
+## Estado de execução (2026-06-03)
+
+Código P0/P2/P3/P4/P5 **entregue e mock-verde** atrás da flag
+`modeling_spatial_resolution_enabled` (default OFF). Commits na
+`feat/3d-modelling-updates`: `8657971` (P0), `e643dcb` (P2), `575d330` (P3),
+`5ac207c` (P4), `f1cab09` (P5). Falta só o que é **API-blind** (gates Fusion P1
+fundação de montagem, P2 confiar os números do probe, P6 placement real + a
+dobradiça que abre pelo loop visual) — recipe abaixo.
