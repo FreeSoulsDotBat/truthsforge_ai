@@ -905,6 +905,9 @@ class ModelStateBody(BaseModel):
     is_solid: bool | None = None
     is_closed: bool | None = None
     surface_area_mm2: float | None = None
+    # F8: volume p/ fechar o delta de proveniência. None até o read-back emitir
+    # (toque de script fora do escopo puro); o diff só usa quando presente.
+    volume_mm3: float | None = None
     face_count: int | None = None
     edge_count: int | None = None
     faces: list[ModelStateFace] = Field(default_factory=list)
@@ -922,6 +925,70 @@ class ModelState(BaseModel):
     bodies: list[ModelStateBody] = Field(default_factory=list)
     timeline_count: int | None = None
     parameters: dict[str, str] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# F8 — Proveniência de operações + mudanças (ADR-023). Vocabulário comum de
+# IDENTIDADE entre os subsistemas: handle estável que JÁ existe (stable_id de
+# corpo, entityToken de face/aresta) — NÃO um token opaco novo.
+# ---------------------------------------------------------------------------
+
+
+class EntityRef(BaseModel):
+    """Referência a uma entidade por handle ESTÁVEL (não opaco-novo)."""
+
+    kind: Literal["body", "face", "edge", "sketch_curve"]
+    handle: str  # stable_id (corpo) | entityToken (face/aresta) | curve_id (curva)
+    name: str | None = None  # apelido legível (body.name / role), quando há
+    parent_body: str | None = None  # corpo dono (stable_id/name), p/ face/aresta
+
+
+class GeometricDelta(BaseModel):
+    """Métrica medida antes→depois de uma operação (numérica/vetorial)."""
+
+    metric: str  # bbox_min_mm|bbox_max_mm|surface_area_mm2|volume_mm3|face_count|edge_count
+    before: Any | None = None
+    after: Any | None = None
+    delta: Any | None = None  # escalar p/ números, lista p/ vetores, None se N/A
+
+
+class EntityChange(BaseModel):
+    """Uma entidade afetada por uma operação."""
+
+    ref: EntityRef
+    # created/modified/deleted/consumed (absorvida por feature) ou uncertain
+    # (handle sumiu mas a categoria do tool não previa — não afirma errado).
+    op: Literal["created", "modified", "consumed", "deleted", "uncertain"]
+    deltas: list[GeometricDelta] = Field(default_factory=list)
+    notes: str | None = None
+
+
+class ChangeRecord(BaseModel):
+    """Proveniência determinística de UM step: o que criou/modificou/consumiu/
+    deletou + delta geométrico. Produzido por código (mede o B-Rep), não pelo LLM."""
+
+    tool_name: str
+    tool_category: str | None = None  # ToolCategory.value
+    seq: int | None = None
+    step_id: str | None = None
+    created: list[EntityChange] = Field(default_factory=list)
+    modified: list[EntityChange] = Field(default_factory=list)
+    consumed: list[EntityChange] = Field(default_factory=list)
+    deleted: list[EntityChange] = Field(default_factory=list)
+    uncertain: list[EntityChange] = Field(default_factory=list)
+    bodies_before: int | None = None
+    bodies_after: int | None = None
+    captured_before: bool = False
+    captured_after: bool = False
+    summary: str = ""
+
+
+class OperationHistory(BaseModel):
+    """Histórico agregado (derivado dos ChangeRecords) — consultável e
+    renderizável p/ o contexto do planner/corretor."""
+
+    records: list[ChangeRecord] = Field(default_factory=list)
+    current_entities: list[EntityRef] = Field(default_factory=list)
 
 
 class ModelingSubGoalStatus(StrEnum):
