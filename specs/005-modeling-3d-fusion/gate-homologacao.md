@@ -406,11 +406,13 @@ chutar `origin_mm` (deve errar mais o posicionamento). É a evidência do ganho.
 Código entregue mock-verde, atrás de flags próprias (default OFF). Pré-requisito do
 **Spike** (task #56) p/ confiar curvas/diff sob edição paramétrica — ver abaixo.
 
-### F8.D1 — Proveniência + auto-crítica geométrica (sem visual)
-Ligue **só** `TRUTHS_FORGE_MODELING_PROVENANCE_ENABLED=true` +
-`TRUTHS_FORGE_MODELING_SELF_CRITIQUE_ENABLED=true`, deixando
-`MODELING_VISUAL_VERIFICATION_ENABLED=false` (era ele que duplicava corpos). Rode um
-build **one-shot** simples (não-hierárquico), ex.: caixa 60×40×20 ocada + tampa.
+### F8.D1 — Proveniência + auto-crítica geométrica
+Ligue `TRUTHS_FORGE_MODELING_PROVENANCE_ENABLED=true` +
+`TRUTHS_FORGE_MODELING_SELF_CRITIQUE_ENABLED=true`. O `MODELING_VISUAL_VERIFICATION_
+ENABLED` agora pode ficar **ON ou OFF**: com a auto-crítica ligada, o visual NÃO
+replaneja mais (não duplica corpos) — vira entrada `source=semantic` do veredito.
+Use `HIERARCHICAL_PLANNING=false` p/ um build **one-shot** (a asserção geométrica de
+contagem/órfão vale só nele). Rode um build simples, ex.: caixa 60×40×20 ocada + tampa.
 
 **Observar (filtre por `provenance_recorded|agent_loop.verdict`):**
 1. `executor.provenance_recorded` por passo mutativo, com `summary` coerente
@@ -419,6 +421,9 @@ build **one-shot** simples (não-hierárquico), ex.: caixa 60×40×20 ocada + ta
 2. Ao fim, **`agent_loop.verdict`** com `overall` + `findings`. Se aparecer um corpo
    órfão (ex.: `Caixa (1)`), o veredito deve marcá-lo **DEMAIS/excess** — é o bug do
    P6 antigo virando achado determinístico. Sem órfão e contagem certa → `ok`.
+   Se `overall != ok`, o chat agora **avisa** (não diz "finalizado" limpo).
+   Com o visual ON, veja também `visual.critique` (mode=verdict_input) e achados
+   `👁 visão:` (`source=semantic`) no mesmo veredito — sem replan/duplicação.
 3. **Regressão:** repita com as duas flags **OFF** — zero `provenance_recorded`/
    `verdict` e geometria **idêntica**.
 

@@ -226,3 +226,41 @@ def test_run_visual_correction_none_without_model(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(vc.settings, "modeling_visual_verification_enabled", True, raising=False)
     planner = _FakePlanner(_FakeVisionGateway([]), None)  # sem modelo
     assert vc.run_visual_correction(_FakeExecutor(), planner, _fusion_plan()) is None
+
+
+# ---------------------------------------------------------------------------
+# F8: assess_visual_findings — percepção read-only → Finding(source=semantic)
+# ---------------------------------------------------------------------------
+
+
+def test_assess_visual_findings_returns_semantic_on_issues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(vc.settings, "modeling_visual_verification_enabled", True, raising=False)
+    gw = _FakeVisionGateway(
+        [{"matches_intent": False, "issues": ["a tampa flutua", "peça de cabeça para baixo"],
+          "suggestion": "", "confidence": 0.8}]
+    )
+    planner = _FakePlanner(gw, _vision_model())
+    findings = vc.assess_visual_findings(_FakeExecutor(), planner, _fusion_plan())
+    assert len(findings) == 2
+    assert all(f.source == "semantic" and f.kind == "wrong" for f in findings)
+    assert all(f.check_id == "visual" and f.detail.startswith("👁 visão:") for f in findings)
+    # percepção pura: NÃO replaneja (não chama create_plan/execute_plan).
+    assert planner.created == []
+
+
+def test_assess_visual_findings_empty_when_matches(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vc.settings, "modeling_visual_verification_enabled", True, raising=False)
+    ok = {"matches_intent": True, "issues": [], "suggestion": "", "confidence": 1.0}
+    planner = _FakePlanner(_FakeVisionGateway([ok]), _vision_model())
+    assert vc.assess_visual_findings(_FakeExecutor(), planner, _fusion_plan()) == []
+
+
+def test_assess_visual_findings_empty_when_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vc.settings, "modeling_visual_verification_enabled", False, raising=False)
+    bad = {"matches_intent": False, "issues": ["x"], "suggestion": "", "confidence": 0.5}
+    gw = _FakeVisionGateway([bad])
+    planner = _FakePlanner(gw, _vision_model())
+    assert vc.assess_visual_findings(_FakeExecutor(), planner, _fusion_plan()) == []
+    assert gw.calls == 0  # nem renderiza/chama a visão

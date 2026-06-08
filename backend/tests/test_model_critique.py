@@ -85,6 +85,26 @@ def test_op_with_no_effect_is_missing() -> None:
     assert ("op_no_effect", "missing") in _kinds(v)
 
 
+def test_semantic_findings_merge_into_verdict() -> None:
+    # F8: a crítica visual (source='semantic') entra no MESMO veredito que a
+    # geometria — um ponto de decisão, duas percepções.
+    from app.core.contracts import Finding
+
+    sem = [
+        Finding(
+            kind="wrong",
+            source="semantic",
+            severity="warn",
+            check_id="visual",
+            detail="👁 visão: a tampa parece flutuar",
+        )
+    ]
+    v = build_model_verdict(IntentSpec(), None, _state(_body("Caixa")), semantic_findings=sem)
+    assert v.overall == "diverged"
+    assert any(f.source == "semantic" for f in v.findings)
+    assert v.deterministic_complete is False  # a visão foi consultada
+
+
 def test_op_no_effect_skips_assembly_tools() -> None:
     # Laudo (E): joint/make_component são geometria-neutros — ChangeRecord vazio é
     # ESPERADO, não 'FALTOU'. Sem a exclusão, o gate F8.D1/F7-P1 acusava falso.

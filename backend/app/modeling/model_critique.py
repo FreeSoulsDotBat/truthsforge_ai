@@ -174,15 +174,24 @@ def build_model_verdict(
     intent: IntentSpec,
     history: OperationHistory | None,
     state: ModelState | None,
+    *,
+    semantic_findings: list[Finding] | None = None,
 ) -> ModelVerdict:
     """Avalia o estado contra a intenção + histórico → veredito estruturado.
-    SÓ REPORTA (não corrige)."""
+    SÓ REPORTA (não corrige).
+
+    ``semantic_findings`` (F8): achados de fonte NÃO-determinística (ex.: a crítica
+    VISUAL como ``source='semantic'``) entram no MESMO veredito — um ponto de
+    decisão, duas percepções. A geometria mede o quantificável; a visão informa o
+    que ela não mede. Nenhuma das duas replaneja (invariante: reporta, não age)."""
 
     findings: list[Finding] = []
     findings += _check_body_count(intent, state)
     findings += _check_orphan_bodies(intent, state)
     findings += _check_interference(intent, state)
     findings += _check_op_no_effect(history)
+    if semantic_findings:
+        findings += list(semantic_findings)
 
     if any(f.severity == "critical" for f in findings):
         overall = "broken"
@@ -193,9 +202,9 @@ def build_model_verdict(
     else:
         overall = "ok"
 
-    # Determinístico-completo quando NÃO há julgamento semântico pendente: aí o
-    # LLM nem precisa ser chamado (a geometria contou toda a história).
-    deterministic_complete = intent.acceptance_text is None
+    # Determinístico-completo quando NÃO há julgamento semântico pendente NEM
+    # achado semântico injetado: aí a geometria contou toda a história sozinha.
+    deterministic_complete = intent.acceptance_text is None and not semantic_findings
 
     counts: dict[str, int] = {}
     for f in findings:

@@ -435,9 +435,10 @@ def run_plan_with_optional_loop(
     _maybe_visual_correction(executor, planner, executed_plan)
     _maybe_capture_model_state(executor, executed_plan)
     # F8 (Sub3.2): auto-crítica GEOMÉTRICA após a captura do estado. Roda DEPOIS
-    # do model_state (precisa do read-back fresco) e é o feedback primário que
-    # aposenta o juiz-de-visão. Best-effort, flag OFF, **só reporta**.
-    _maybe_evaluate_verdict(executor, executed_plan)
+    # do model_state (precisa do read-back fresco) e é o feedback primário. Quando
+    # o visual está ON, a visão entra aqui como achado semântico (não atua).
+    # Best-effort, flag OFF, **só reporta**.
+    _maybe_evaluate_verdict(executor, planner, executed_plan)
     # F8: SURFAÇA o veredito ao usuário. O sistema não deve reportar "finalizado"
     # limpo quando a auto-crítica detecta divergência (corpos a mais/órfãos/
     # interferência) — era a queixa "diz que finalizou mas montou errado". Só
@@ -505,17 +506,19 @@ def _maybe_visual_correction(
     Best-effort, atrás de ``modeling_visual_verification_enabled`` (default OFF).
     Render só existe no Fusion real; nunca propaga erro.
 
-    F8: quando a auto-crítica GEOMÉTRICA está ligada, ela é a fonte primária e o
-    loop visual SE APOSENTA (ADR-023: "verificador geométrico primário; visual
-    opt-in/OFF"). Evita o replan destrutivo do visual — a causa dos corpos
-    duplicados (``BoxOuter (1)``/``Lid (2)``) — quando o F8 já está no comando."""
+    F8: quando a auto-crítica GEOMÉTRICA está ligada, só o REPLAN destrutivo do
+    visual se aposenta (ADR-023). A PERCEPÇÃO visual continua — mas via
+    ``_maybe_evaluate_verdict`` → ``assess_visual_findings``, entrando no veredito
+    como achado ``source='semantic'`` (um veredito, duas percepções), sem recriar
+    corpos. Evita a duplicação (``BoxOuter (1)``/``Lid (2)``) mantendo o olho da
+    visão no jogo."""
 
     if not settings.modeling_visual_verification_enabled:
         return
     if settings.modeling_self_critique_enabled:
         logger.info(
-            "verificação visual ignorada: auto-crítica geométrica (F8) é primária "
-            "— evita replan destrutivo/duplicação de corpos."
+            "replan visual ignorado: auto-crítica geométrica (F8) é primária; a "
+            "visão entra como achado semântico no veredito, sem replan destrutivo."
         )
         return
     try:
@@ -526,16 +529,38 @@ def _maybe_visual_correction(
         logger.warning("verificação visual falhou", exc_info=True)
 
 
-def _maybe_evaluate_verdict(executor: ModelingExecutorService, plan: ModelingPlan) -> None:
+def _maybe_visual_findings(
+    executor: ModelingExecutorService, planner: Any, plan: ModelingPlan
+) -> list[Any]:
+    """F8: percepção visual como ENTRADA do veredito (``source='semantic'``), não
+    como atuador. ``[]`` quando o visual está OFF ou a visão aprova. Best-effort —
+    nunca derruba a avaliação."""
+
+    if not settings.modeling_visual_verification_enabled:
+        return []
+    try:
+        from app.modeling.visual_critique import assess_visual_findings
+
+        return assess_visual_findings(executor, planner, plan)
+    except Exception:  # noqa: BLE001 - visão é observabilidade, best-effort
+        logger.debug("percepção visual (verdict input) falhou", exc_info=True)
+        return []
+
+
+def _maybe_evaluate_verdict(
+    executor: ModelingExecutorService, planner: Any, plan: ModelingPlan
+) -> None:
     """F8 Sub3.2: deriva o ``IntentSpec`` do plano + agrega o histórico de
     proveniência (Sub2) + o ``model_state`` read-back e produz um ``ModelVerdict``
     determinístico (faltou/demais/errado/certo). Persiste em ``plan.model_verdict``
     + trace; entra no contexto do próximo bloco via ``render_verdict_block``.
 
+    Quando o visual está ligado, a crítica VISUAL entra AQUI como achado
+    ``source='semantic'`` (um veredito, duas percepções) — sem replan destrutivo.
+
     **INVARIANTE: só REPORTA** — não dispara replan nem correção. Best-effort,
     atrás de ``modeling_self_critique_enabled`` (default OFF) — com OFF é no-op
-    total (zero regressão). O verificador geométrico é primário; o
-    ``visual_critique`` permanece secundário/opt-in (já default OFF)."""
+    total (zero regressão)."""
 
     if not settings.modeling_self_critique_enabled:
         return
@@ -546,7 +571,10 @@ def _maybe_evaluate_verdict(executor: ModelingExecutorService, plan: ModelingPla
 
         intent = intent_from_plan(plan)
         history = history_from_plan(plan)
-        verdict = build_model_verdict(intent, history, plan.model_state)
+        semantic = _maybe_visual_findings(executor, planner, plan)
+        verdict = build_model_verdict(
+            intent, history, plan.model_state, semantic_findings=semantic
+        )
         plan.model_verdict = verdict
         store = getattr(executor, "store", None)
         if store is not None and hasattr(store, "upsert_modeling_plan"):
@@ -560,6 +588,7 @@ def _maybe_evaluate_verdict(executor: ModelingExecutorService, plan: ModelingPla
                 "plan_id": plan.id,
                 "overall": verdict.overall,
                 "findings": len(verdict.findings),
+                "semantic_findings": len(semantic),
                 "expected_body_count": intent.expected_body_count,
                 "deterministic_complete": verdict.deterministic_complete,
             },

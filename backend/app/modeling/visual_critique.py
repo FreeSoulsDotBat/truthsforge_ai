@@ -20,6 +20,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.contracts import (
+    Finding,
     ModelingPlan,
     ModelingPlanCreate,
     ModelingPlanKind,
@@ -131,6 +132,65 @@ def critique_render(
         logger.warning("crítica visual falhou: %s", exc)
         return None
     return verdict if isinstance(verdict, dict) else None
+
+
+def assess_visual_findings(executor: Any, planner: Any, plan: ModelingPlan) -> list[Finding]:
+    """F8: percepção VISUAL read-only → ``Finding(source='semantic')``.
+
+    Renderiza + critica (reusa ``capture_viewport_image`` + ``critique_render``),
+    mas **NÃO replaneja** — diferente de ``run_visual_correction``. A visão vira
+    ENTRADA do ``ModelVerdict`` (o que a geometria não mede: proporção, orientação,
+    "parece de cabeça pra baixo"), não um atuador paralelo. Best-effort: ``[]`` em
+    qualquer falha / quando a visão aprova. Atrás de ``modeling_visual_verification_
+    enabled``."""
+
+    if not settings.modeling_visual_verification_enabled:
+        return []
+    if getattr(plan, "software_choice", None) != ModelingSoftware.fusion:
+        return []
+    try:
+        model = planner._resolve_planner_model()
+    except Exception:  # noqa: BLE001
+        model = None
+    gateway = getattr(planner, "gateway", None)
+    if model is None or gateway is None:
+        return []
+    rendered = capture_viewport_image(executor, plan)
+    if not rendered:
+        return []
+    intent = getattr(plan, "prompt", "") or ""
+    verdict = critique_render(gateway, model, rendered_b64=rendered, intent=intent)
+    if verdict is None:
+        return []
+    matches = bool(verdict.get("matches_intent"))
+    issues = [str(i) for i in (verdict.get("issues") or []) if str(i).strip()]
+    tracer = get_tracer(getattr(executor, "store", None))
+    tracer.record(
+        "visual.critique",
+        source=ModelingTraceSource.backend,
+        level=ModelingTraceLevel.info if (matches or not issues) else ModelingTraceLevel.warn,
+        message=(
+            "visão: render corresponde à intenção"
+            if (matches or not issues)
+            else f"visão: {len(issues)} divergência(s) (entram no veredito, sem replan)"
+        ),
+        payload={"matches": matches, "issues": issues[:10], "mode": "verdict_input"},
+        plan_id=getattr(plan, "id", None),
+    )
+    if matches or not issues:
+        return []  # visão aprovou → nenhum achado
+    # Achados SEMÂNTICOS (opinião de visão, não medição): severidade warn — flipam
+    # o veredito p/ 'diverged' mas marcados como menos autoritativos que a geometria.
+    return [
+        Finding(
+            kind="wrong",
+            source="semantic",
+            severity="warn",
+            check_id="visual",
+            detail=f"👁 visão: {issue}",
+        )
+        for issue in issues[:6]
+    ]
 
 
 def _apply_visual_correction(
