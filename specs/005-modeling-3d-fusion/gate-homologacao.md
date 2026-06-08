@@ -311,6 +311,21 @@ mock-verde, mas a **montagem nativa** (`joint`/`make_component`/`combine`) nunca
 rodou no Fusion à mão — é onde o teu olho vale. Faça **na ordem** P1 → P2 → P6:
 o P1 valida a fundação ANTES de confiar na camada declarativa por cima.
 
+> **Pré-validação autônoma (2026-06-08, sem o dono):** com a conexão MCP
+> consertada (commit `0851c65`), rodei P2 e P1 direto no Fusion real via probe.
+> **P2 PASSOU** — `query_geometry` devolve `bbox_min/max_mm` e pontas/direção de
+> aresta corretos (a caixa nasce CENTRADA na origem: bbox `[-30,-20,0]→[30,20,20]`
+> p/ 60×40×20; logo `@body('X').bbox.max_z`=20, `min_x`=-30 etc.). **P1 achou +
+> consertou um bug** (`be1acd0`): depois de `make_component` os corpos saem do
+> root e o `joint` falhava com "Nenhum corpo solido na cena" → `_find_body` agora
+> acha corpos dentro de occurrences. **Falta revalidar o joint no Fusion** (a
+> sessão travou num modal após a falha — ver gotcha abaixo).
+>
+> **Gotcha de Fusion travado:** se o adapter mostra `conectado/http` mas toda
+> execução dá **timeout** (status leve responde, mas `execute` trava), quase
+> sempre há um **modal aberto no Fusion** (ex.: um erro de feature). Vá ao Fusion
+> e **feche o diálogo**; aí as tools voltam a rodar.
+
 ### F7.P1 — Fundação de montagem (joint + make_component + combine-DENTRO)
 
 Isola o adapter do LLM via **plano literal** (ver §"Plano literal" abaixo). Cole os
