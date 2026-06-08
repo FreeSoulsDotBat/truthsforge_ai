@@ -325,6 +325,17 @@ o P1 valida a fundação ANTES de confiar na camada declarativa por cima.
 > execução dá **timeout** (status leve responde, mas `execute` trava), quase
 > sempre há um **modal aberto no Fusion** (ex.: um erro de feature). Vá ao Fusion
 > e **feche o diálogo**; aí as tools voltam a rodar.
+>
+> **Pós-review adversarial (2026-06-08, 14 fixes — commits `d7f1bf6`/`ea1c85d`/
+> `0150351`):** endurecido o "NUNCA chuta" (token vazio, @-ref em campo fora do
+> whitelist, count/spacing inválidos, ÷0, eixo de corpo, spacing que não cabe →
+> todos erro TIPADO). **DECISÃO PENDENTE DO DONO:** a `combine-DENTRO` emite
+> `combine_bodies` (categoria **high_risk**); pela constituição a expansão F7 NÃO
+> auto-executa high_risk → hoje o P6 da dobradiça **falha tipado**
+> `fusion.spatial_expansion_requires_approval` no passo de combine. Decida: (a)
+> exibir card de aprovação do sub-passo, ou (b) reclassificar o `combine join`
+> gerado pelo resolver como auto-aprovável. Até lá, P6 com `alternate` (knuckles)
+> para no combine — esperado, não bug.
 
 ### F7.P1 — Fundação de montagem (joint + make_component + combine-DENTRO)
 
