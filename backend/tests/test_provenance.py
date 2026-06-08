@@ -27,6 +27,7 @@ from app.modeling.provenance import (
     aggregate_history,
     build_change_record,
     diff_model_state,
+    history_from_plan,
     render_history_block,
 )
 
@@ -225,3 +226,68 @@ def test_before_state_uses_carry_forward_without_reprobe(
 
     monkeypatch.setattr("app.modeling.model_state.capture_model_state", _boom)
     assert ex._provenance_before_state(_step("fusion.fillet_edges"), plan) is carried
+
+
+# --------------------------------------------------------------------------- #
+# Reconstrução do histórico a partir do plano executado (Sub 3.2)             #
+# --------------------------------------------------------------------------- #
+def _step_with_prov(seq: int, tool: str, before, after, *, category="additive"):
+    rec = build_change_record(tool, before, after, category=category, seq=seq)
+    step = ModelingPlanStep(
+        seq=seq,
+        title=tool,
+        software=ModelingSoftware.fusion,
+        tool_name=tool,
+        status=ModelingStepStatus.completed,
+        output_json={"ok": True, "_provenance": rec.model_dump(mode="json")},
+    )
+    return step
+
+
+def test_history_from_plan_reconstructs_records() -> None:
+    caixa = _state(_body("Caixa", "ID1"))
+    caixa_tampa = _state(_body("Caixa", "ID1"), _body("Tampa", "ID2"))
+    s1 = _step_with_prov(1, "fusion.add_box", _state(), caixa)
+    s2 = _step_with_prov(2, "fusion.add_box", caixa, caixa_tampa)
+    plan = _plan()
+    plan.steps = [s2, s1]  # fora de ordem de propósito
+    history = history_from_plan(plan)
+    assert history is not None
+    assert [r.seq for r in history.records] == [1, 2]  # ordenado por seq
+    # corpos correntes: Caixa + Tampa (ambos criados, nada consumido).
+    assert {e.name for e in history.current_entities} == {"Caixa", "Tampa"}
+
+
+def test_history_from_plan_none_without_provenance() -> None:
+    plan = _plan()
+    plan.steps = [
+        ModelingPlanStep(
+            seq=1,
+            title="t",
+            software=ModelingSoftware.fusion,
+            tool_name="fusion.add_box",
+            status=ModelingStepStatus.completed,
+            output_json={"ok": True},
+        )
+    ]
+    assert history_from_plan(plan) is None
+
+
+def test_history_from_plan_reads_nested_expanded() -> None:
+    # F7: step declarativo guarda os ChangeRecords dos sub-resultados expandidos.
+    rec = build_change_record(
+        "fusion.make_component", _state(), _state(_body("Tampa", "ID2")), category="mutative", seq=1
+    )
+    plan = _plan()
+    plan.steps = [
+        ModelingPlanStep(
+            seq=1,
+            title="place",
+            software=ModelingSoftware.fusion,
+            tool_name="fusion.place_body",
+            status=ModelingStepStatus.completed,
+            output_json={"ok": True, "expanded": [{"_provenance": rec.model_dump(mode="json")}]},
+        )
+    ]
+    history = history_from_plan(plan)
+    assert history is not None and len(history.records) == 1

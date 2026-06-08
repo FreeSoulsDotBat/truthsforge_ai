@@ -23,7 +23,7 @@ from app.core.contracts import (
     OperationHistory,
 )
 
-__all__ = ["build_model_verdict"]
+__all__ = ["build_model_verdict", "render_verdict_block"]
 
 _OVERLAP_EPS = 1e-3  # mm — sobreposição de bbox abaixo disto = contato, não interferência
 
@@ -201,3 +201,35 @@ def build_model_verdict(
         summary=summary,
         deterministic_complete=deterministic_complete,
     )
+
+
+_KIND_LABEL = {
+    "missing": "FALTOU",
+    "excess": "DEMAIS",
+    "wrong": "ERRADO",
+    "correct": "OK",
+}
+
+
+def render_verdict_block(verdict: ModelVerdict | None) -> str:
+    """Renderiza o ``ModelVerdict`` como bloco ``<auto-critica>`` p/ o contexto do
+    planner/corretor no PRÓXIMO bloco. Feedback estruturado e legível — só
+    reporta (o corretor decide). Vazio quando não há veredito ou achados."""
+
+    if verdict is None or not verdict.findings:
+        return ""
+    lines = [f"<auto-critica overall={verdict.overall}>"]
+    if verdict.summary:
+        lines.append(f"- resumo: {verdict.summary}")
+    for f in verdict.findings:
+        label = _KIND_LABEL.get(f.kind, f.kind.upper())
+        ref = f" [{f.entity_ref}]" if f.entity_ref else ""
+        src = "" if f.source == "deterministic" else f" ({f.source})"
+        lines.append(f"- {label}{src} {f.check_id}{ref}: {f.detail}")
+    if verdict.overall != "ok":
+        lines.append(
+            "- AÇÃO: corrija o que está FALTOU/DEMAIS/ERRADO sem recriar corpos já "
+            "existentes (referencie por nome/role); não duplique."
+        )
+    lines.append("</auto-critica>")
+    return "\n".join(lines)

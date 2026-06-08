@@ -434,6 +434,10 @@ def run_plan_with_optional_loop(
     # para o read-back refletir o estado pós-correção, não o anterior.
     _maybe_visual_correction(executor, planner, executed_plan)
     _maybe_capture_model_state(executor, executed_plan)
+    # F8 (Sub3.2): auto-crítica GEOMÉTRICA após a captura do estado. Roda DEPOIS
+    # do model_state (precisa do read-back fresco) e é o feedback primário que
+    # aposenta o juiz-de-visão. Best-effort, flag OFF, **só reporta**.
+    _maybe_evaluate_verdict(executor, executed_plan)
     # Recarrega o plano da store para que o result devolvido ao chamador
     # (trace/audit/frontend) reflita o estado final real após correção visual e
     # captura de model_state, em vez do snapshot stale de antes dessas etapas.
@@ -474,6 +478,49 @@ def _maybe_visual_correction(
         run_visual_correction(executor, planner, plan)
     except Exception:  # noqa: BLE001 - verificação visual nunca derruba o plano
         logger.warning("verificação visual falhou", exc_info=True)
+
+
+def _maybe_evaluate_verdict(executor: ModelingExecutorService, plan: ModelingPlan) -> None:
+    """F8 Sub3.2: deriva o ``IntentSpec`` do plano + agrega o histórico de
+    proveniência (Sub2) + o ``model_state`` read-back e produz um ``ModelVerdict``
+    determinístico (faltou/demais/errado/certo). Persiste em ``plan.model_verdict``
+    + trace; entra no contexto do próximo bloco via ``render_verdict_block``.
+
+    **INVARIANTE: só REPORTA** — não dispara replan nem correção. Best-effort,
+    atrás de ``modeling_self_critique_enabled`` (default OFF) — com OFF é no-op
+    total (zero regressão). O verificador geométrico é primário; o
+    ``visual_critique`` permanece secundário/opt-in (já default OFF)."""
+
+    if not settings.modeling_self_critique_enabled:
+        return
+    try:
+        from app.modeling.intent_spec import intent_from_plan
+        from app.modeling.model_critique import build_model_verdict
+        from app.modeling.provenance import history_from_plan
+
+        intent = intent_from_plan(plan)
+        history = history_from_plan(plan)
+        verdict = build_model_verdict(intent, history, plan.model_state)
+        plan.model_verdict = verdict
+        store = getattr(executor, "store", None)
+        if store is not None and hasattr(store, "upsert_modeling_plan"):
+            store.upsert_modeling_plan(plan)
+        executor._tracer.record(
+            "agent_loop.verdict",
+            source=ModelingTraceSource.backend,
+            level=(ModelingTraceLevel.warn if verdict.overall != "ok" else ModelingTraceLevel.info),
+            message=f"Auto-crítica: {verdict.summary}",
+            payload={
+                "plan_id": plan.id,
+                "overall": verdict.overall,
+                "findings": len(verdict.findings),
+                "expected_body_count": intent.expected_body_count,
+                "deterministic_complete": verdict.deterministic_complete,
+            },
+            plan_id=plan.id,
+        )
+    except Exception as exc:  # noqa: BLE001 - auto-crítica é observabilidade
+        logger.debug("auto-crítica (model_verdict) falhou: %s", exc)
 
 
 def _maybe_capture_model_state(executor: ModelingExecutorService, plan: ModelingPlan) -> None:

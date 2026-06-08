@@ -748,6 +748,26 @@ def build_edit_context_block(parent_plan: ModelingPlan | None) -> str | None:
         )
     elif metrics_lines:
         block.extend(["", "Métricas conhecidas dos corpos atuais:", *metrics_lines[:20]])
+
+    # F8 (Sub3.2): auto-crítica geométrica do bloco anterior (faltou/demais/
+    # errado/certo) + histórico de proveniência — feedback PRIMÁRIO p/ o corretor
+    # mirar o delta certo sem duplicar corpos. Lazy import (evita ciclo); silencioso
+    # quando a flag F8 esteve OFF (sem veredito/histórico capturado).
+    try:
+        from app.modeling.model_critique import render_verdict_block
+        from app.modeling.provenance import history_from_plan, render_history_block
+
+        verdict_block = render_verdict_block(getattr(parent_plan, "model_verdict", None))
+        if verdict_block:
+            block.extend(["", "Auto-crítica do bloco anterior (corrija isto):", verdict_block])
+        history = history_from_plan(parent_plan)
+        if history is not None:
+            history_block = render_history_block(history)
+            if history_block:
+                block.extend(["", "Proveniência (o que cada passo mudou):", history_block])
+    except Exception:  # noqa: BLE001 - contexto extra é best-effort
+        pass
+
     block.append("</modelo-atual>")
     return "\n".join(block)
 

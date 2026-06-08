@@ -1084,6 +1084,13 @@ class ModelingPlan(BaseModel):
     planner em edições/blocos seguintes (faces/edges com tokens estáveis +
     medidas), substituindo o contexto textual pobre. ``None`` quando a captura
     falhou, não há body, ou o software não suporta (JSONB, migration-free)."""
+    model_verdict: ModelVerdict | None = None
+    """F8 (Sub3.2): auto-crítica estruturada produzida (best-effort) ao fim da
+    execução quando ``modeling_self_critique_enabled`` está ligado — compara o
+    ``IntentSpec`` derivado do plano com o histórico de proveniência + o
+    ``model_state`` real e classifica faltou/demais/errado/certo. **Só reporta**;
+    entra no contexto do próximo bloco como feedback. ``None`` quando a flag está
+    OFF ou a avaliação não se aplica (JSONB, migration-free)."""
     sub_goals: list[ModelingSubGoal] = Field(default_factory=list)
     """F2: decomposição hierárquica (só no plano ``primary`` quando o
     planejamento hierárquico está ligado). Cada sub-objetivo é executado como

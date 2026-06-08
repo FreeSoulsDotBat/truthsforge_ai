@@ -242,6 +242,21 @@ class Settings(BaseModel):
             in {"1", "true", "yes", "on"}
         )
     )
+    # Auto-crítica estruturada (Frente F8 Sub3.2, ADR-023). Quando ``true``, ao
+    # fim da execução de um plano o motor deriva um ``IntentSpec`` (o esperado) do
+    # próprio plano + agrega o histórico de proveniência (Sub2) + o ModelState
+    # read-back e produz um ``ModelVerdict`` determinístico (faltou/demais/errado/
+    # certo). É o feedback GEOMÉTRICO primário (aposenta o juiz-de-visão como
+    # fonte). **INVARIANTE: só REPORTA** — persiste em ``plan.model_verdict`` +
+    # trace e entra no contexto do próximo bloco; NUNCA dispara replan destrutivo.
+    # Depende de ``modeling_provenance_enabled`` p/ ter histórico. Default OFF
+    # (probe da captura final; com OFF, zero avaliação e zero regressão).
+    modeling_self_critique_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_SELF_CRITIQUE_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",

@@ -13,11 +13,14 @@ base p/ a auto-crítica (Sub 3) dizer o que faltou/foi demais/errado/certo.
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.core.contracts import (
     ChangeRecord,
     EntityChange,
     EntityRef,
     GeometricDelta,
+    ModelingPlan,
     ModelState,
     ModelStateBody,
     OperationHistory,
@@ -27,6 +30,7 @@ __all__ = [
     "diff_model_state",
     "build_change_record",
     "aggregate_history",
+    "history_from_plan",
     "render_history_block",
 ]
 
@@ -262,3 +266,40 @@ def render_history_block(history: OperationHistory) -> str:
         lines.append(f"- corpos atuais: {names}")
     lines.append("</historico-operacoes>")
     return "\n".join(lines)
+
+
+def _records_from_step_output(output: Any) -> list[ChangeRecord]:
+    """Extrai ChangeRecord(s) de um ``output_json`` de step: o ``_provenance``
+    direto (passo simples) ou os de cada sub-resultado de uma expansão F7
+    declarativa (``expanded``/``sub_results``/``steps``). Best-effort/tolerante."""
+
+    out: list[ChangeRecord] = []
+    if not isinstance(output, dict):
+        return out
+    prov = output.get("_provenance")
+    if isinstance(prov, dict):
+        try:
+            out.append(ChangeRecord.model_validate(prov))
+        except Exception:  # noqa: BLE001 - proveniência malformada é ignorada
+            pass
+    for key in ("expanded", "sub_results", "steps", "results"):
+        nested = output.get(key)
+        if isinstance(nested, list):
+            for item in nested:
+                out.extend(_records_from_step_output(item))
+    return out
+
+
+def history_from_plan(plan: ModelingPlan) -> OperationHistory | None:
+    """Reconstrói o ``OperationHistory`` de um plano já executado a partir dos
+    ``ChangeRecord`` gravados em ``step.output_json["_provenance"]`` (Sub 2.2).
+
+    ``None`` quando nenhum step carregou proveniência (flag OFF na execução ou
+    plano sem passos mutativos) — aí a auto-crítica roda só com o ModelState."""
+
+    records: list[ChangeRecord] = []
+    for step in sorted(plan.steps, key=lambda s: s.seq):
+        records.extend(_records_from_step_output(step.output_json))
+    if not records:
+        return None
+    return aggregate_history(records)
