@@ -31,6 +31,9 @@ export const modeling3dApi = {
   capabilities: () => apiRequest<ModelingCapabilities>("/api/3d/capabilities"),
   sessions: () => apiRequest<ModelingSession[]>("/api/3d/sessions"),
   plans: () => apiRequest<ModelingPlan[]>("/api/3d/plans"),
+  /** Lê um plano pelo id — usado para reconciliar o status após uma queda de
+   *  rede no execute (o backend pode ter concluído mesmo sem a resposta chegar). */
+  getPlan: (planId: string) => apiRequest<ModelingPlan>(`/api/3d/plans/${planId}`),
   snapshots: (params: { plan_id?: string; project_id?: string } = {}) =>
     apiRequest<ModelingSnapshot[]>(`/api/3d/snapshots${queryString(params)}`),
   toolCalls: (params: { plan_id?: string; step_id?: string; limit?: number } = {}) =>
