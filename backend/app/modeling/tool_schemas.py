@@ -623,16 +623,17 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
                 example="Tampa",
             ),
             "anchor": ArgSpec(
-                "Face DO corpo que encosta no destino — @token('<face>') ou {face:'<token>'} (F1).",
-                type="string",
+                "Face DO corpo que encosta — por ROLE {body,role:'bottom_planar'} "
+                "ou predicado {body,face:{type,radius_mm}}. Não copie token.",
+                type="object",
                 unit=None,
-                example="@token('TAMPA_BOTTOM')",
+                example={"body": "Tampa", "role": "bottom_planar"},
             ),
             "target": ArgSpec(
-                "Face de DESTINO onde ancorar — @token('<face>') (F1).",
-                type="string",
+                "Face de DESTINO — por ROLE/predicado (o backend acha a face real).",
+                type="object",
                 unit=None,
-                example="@token('CAIXA_TOP')",
+                example={"body": "Caixa", "role": "top_planar"},
             ),
         },
     ),
@@ -650,10 +651,11 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
                 example="Tampa",
             ),
             "target": ArgSpec(
-                "Face cilíndrica de destino — @token('<face do furo/pino>') (F1).",
-                type="string",
+                "Face cilíndrica de destino por PREDICADO {body,face:{type:"
+                "'cylindrical',radius_mm:R}} — o backend acha o furo/pino real.",
+                type="object",
                 unit=None,
-                example="@token('CAIXA_BORE')",
+                example={"body": "Caixa", "face": {"type": "cylindrical", "radius_mm": 2.5}},
             ),
             "body_axis": ArgSpec(
                 "Eixo do corpo a alinhar (x|y|z). Default z.",

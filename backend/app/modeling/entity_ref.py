@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.contracts import EntityRef, ModelState, ModelStateBody, ModelStateFace
+from app.modeling.spatial_ref import SpatialRefError
 
 __all__ = [
     "ENTITY_REF_UNRESOLVED",
@@ -39,12 +40,15 @@ _POS_TOL = 0.1  # mm — margem p/ separar extremos (top/bottom)
 _RADIUS_TOL = 0.5  # mm — casamento de raio
 
 
-class EntityRefError(ValueError):
-    """Descritor de entidade fora da gramática / sem candidato no ModelState."""
+class EntityRefError(SpatialRefError):
+    """Descritor de entidade fora da gramática / sem candidato no ModelState.
+
+    Subclasse de ``SpatialRefError`` p/ o executor já tratar (``_spatial_failure_
+    outcome``) sem código novo — é a mesma família "resolução falhou, tipado,
+    nunca chuta"."""
 
     def __init__(self, message: str, *, code: str = ENTITY_REF_UNRESOLVED) -> None:
-        super().__init__(message)
-        self.code = code
+        super().__init__(message, code=code)
 
 
 class AmbiguousRefError(EntityRefError):

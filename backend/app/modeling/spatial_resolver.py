@@ -186,11 +186,26 @@ def resolve_inline_refs(
 # --------------------------------------------------------------------------- #
 # 2) Expansão das tools declarativas F7                                       #
 # --------------------------------------------------------------------------- #
-def _face_token_of(ref: Any) -> str | None:
+def _face_token_of(ref: Any, state: ModelState | None = None) -> str | None:
     # Token VAZIO ('') é tratado como ausência: senão passaria o guard
     # `is None` do expander e o handler cairia no "último corpo" (mis-mate).
     if isinstance(ref, dict):
-        return (ref.get("face") or ref.get("token")) or None
+        face = ref.get("face")
+        # 'face' como STRING (ou 'token') = token direto; 'face' como DICT =
+        # predicado semântico (resolvido abaixo, NÃO é token).
+        tok = ref.get("token") or (face if isinstance(face, str) else None)
+        if tok:
+            return tok
+        # F8: descritor SEMÂNTICO {body, role}/{body, face:{...}} → resolve por
+        # role/predicado medindo o ModelState (o LLM não copia token opaco).
+        # entity_ref levanta erro TIPADO (subclasse de SpatialRefError) se
+        # ambíguo/inexistente — propaga, nunca chuta.
+        if state is not None and ("role" in ref or isinstance(face, dict)):
+            from app.modeling.entity_ref import resolve_entity
+
+            handle = resolve_entity(ref, state)
+            return handle.handle if handle.kind == "face" else None
+        return None
     if isinstance(ref, str) and ref.strip().startswith("@"):
         try:
             kind, id_, _ = parse_at_expr(ref)
@@ -227,8 +242,8 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
     if not body:
         raise SpatialRefError("place_body exige 'body'")
     find_body(state, body)  # valida existência (erro tipado se não houver)
-    anchor_face = _face_token_of(args.get("anchor"))
-    target_face = _face_token_of(args.get("target"))
+    anchor_face = _face_token_of(args.get("anchor"), state)
+    target_face = _face_token_of(args.get("target"), state)
     if anchor_face is None or target_face is None:
         raise SpatialRefError(
             "place_body: 'anchor' (face no corpo) e 'target' (face de destino) precisam "
@@ -272,7 +287,7 @@ def _expand_align_axis(args: dict[str, Any], state: ModelState | None) -> list[C
     if not body:
         raise SpatialRefError("align_axis exige 'body'")
     find_body(state, body)
-    target_face = _face_token_of(args.get("target"))
+    target_face = _face_token_of(args.get("target"), state)
     if target_face is None:
         raise SpatialRefError(
             "align_axis: 'target' precisa referenciar uma FACE cilíndrica "

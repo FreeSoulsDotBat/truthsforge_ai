@@ -149,6 +149,33 @@ def test_place_body_expands_to_component_and_rigid_joint() -> None:
     assert actions[0].kind == "expand_placement"
 
 
+def test_place_body_accepts_semantic_role_descriptor() -> None:
+    # F8: o LLM aponta por role (sem copiar token) → resolve p/ o entityToken.
+    steps, _ = expand_placement(
+        "fusion.place_body",
+        {
+            "body": "Tampa",
+            "anchor": {"body": "Tampa", "role": "bottom_planar"},
+            "target": {"body": "Caixa", "role": "top_planar"},
+        },
+        _state(),
+    )
+    j = steps[1].input_json
+    assert j["face_token_one"] == "TAMPA_BOTTOM" and j["face_token_two"] == "CAIXA_TOP"
+
+
+def test_align_axis_accepts_predicate_descriptor() -> None:
+    steps, _ = expand_placement(
+        "fusion.align_axis",
+        {
+            "body": "Tampa",
+            "target": {"body": "Caixa", "face": {"type": "cylindrical", "radius_mm": 2.5}},
+        },
+        _state(),
+    )
+    assert steps[0].input_json["face_token_two"] == "CAIXA_BORE"
+
+
 def test_place_body_requires_face_refs() -> None:
     with pytest.raises(SpatialRefError):
         expand_placement(
