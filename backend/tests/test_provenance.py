@@ -7,12 +7,22 @@ tool; histórico agregado + render. Sem Fusion.
 
 from __future__ import annotations
 
+import pytest
+
+from app.core.config import settings
 from app.core.contracts import (
+    ModelingPlan,
+    ModelingPlanStatus,
+    ModelingPlanStep,
+    ModelingRiskLevel,
+    ModelingSoftware,
+    ModelingStepStatus,
     ModelState,
     ModelStateBody,
     ModelStateEdge,
     ModelStateFace,
 )
+from app.modeling.executor import ModelingExecutorService
 from app.modeling.provenance import (
     aggregate_history,
     build_change_record,
@@ -141,3 +151,77 @@ def test_no_change_yields_empty_record() -> None:
     rec = build_change_record("fusion.query_geometry", st, st, category="read_only")
     assert not (rec.created or rec.modified or rec.deleted or rec.consumed or rec.uncertain)
     assert rec.summary == "sem mudança detectada"
+
+
+# --------------------------------------------------------------------------- #
+# Wiring no executor (Sub 2.2) — flag-gated, captura before/after, carry-forward #
+# --------------------------------------------------------------------------- #
+def _executor() -> ModelingExecutorService:
+    return ModelingExecutorService(
+        store=object(), mcp_client=object(), snapshots=object(), artifacts=object()
+    )
+
+
+def _plan() -> ModelingPlan:
+    return ModelingPlan(
+        prompt="x", software_choice=ModelingSoftware.fusion, status=ModelingPlanStatus.approved
+    )
+
+
+def _step(tool: str) -> ModelingPlanStep:
+    return ModelingPlanStep(
+        seq=2,
+        title="t",
+        software=ModelingSoftware.fusion,
+        tool_name=tool,
+        risk_level=ModelingRiskLevel.low,
+        approval_required=False,
+        status=ModelingStepStatus.approved,
+        input_json={},
+    )
+
+
+def test_attach_provenance_writes_record_and_carries_forward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "modeling_provenance_enabled", True, raising=False)
+    after = _state(_body("Caixa", "ID1"), _body("Tampa", "ID2"))
+    monkeypatch.setattr("app.modeling.model_state.capture_model_state", lambda _e, _p: after)
+    ex, plan = _executor(), _plan()
+    output: dict = {"ok": True}
+    ex._attach_provenance(_step("fusion.add_box"), plan, output, _state(_body("Caixa", "ID1")))
+    prov = output["_provenance"]
+    assert [c["ref"]["name"] for c in prov["created"]] == ["Tampa"]
+    assert prov["tool_category"] == "additive"
+    # after vira o carry-forward (before do próximo passo).
+    assert ex._provenance_carry[0] == plan.id and ex._provenance_carry[1] is after
+
+
+def test_provenance_inactive_when_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "modeling_provenance_enabled", False, raising=False)
+    output: dict = {"ok": True}
+    _executor()._attach_provenance(_step("fusion.add_box"), _plan(), output, None)
+    assert "_provenance" not in output
+
+
+def test_provenance_inactive_for_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "modeling_provenance_enabled", True, raising=False)
+    output: dict = {"ok": True}
+    # query_geometry é read-only → não gera proveniência (e evita recursão).
+    _executor()._attach_provenance(_step("fusion.query_geometry"), _plan(), output, None)
+    assert "_provenance" not in output
+
+
+def test_before_state_uses_carry_forward_without_reprobe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "modeling_provenance_enabled", True, raising=False)
+    ex, plan = _executor(), _plan()
+    carried = _state(_body("Caixa", "ID1"))
+    ex._provenance_carry = (plan.id, carried)
+
+    def _boom(_e, _p):
+        raise AssertionError("não deveria reprobar — usa o carry-forward")
+
+    monkeypatch.setattr("app.modeling.model_state.capture_model_state", _boom)
+    assert ex._provenance_before_state(_step("fusion.fillet_edges"), plan) is carried

@@ -208,6 +208,9 @@ class ModelingExecutorService:
         self.artifacts = artifacts
         # Tracer compartilhado (no-op se a store não tem record_trace_events_bulk).
         self._tracer = get_tracer(store if hasattr(store, "record_trace_events_bulk") else None)
+        # F8: carry-forward do ModelState (plan_id, after) p/ ser o before do
+        # próximo passo — evita 2 probes/passo na proveniência.
+        self._provenance_carry: tuple[str, Any] | None = None
 
     def execute_plan(self, plan: ModelingPlan) -> ModelingExecutionResult:
         """Execute every runnable step of ``plan`` and persist the result."""
@@ -353,6 +356,9 @@ class ModelingExecutorService:
         if expanded_steps is not None:
             return self._run_expanded_steps(step, expanded_steps, plan)
 
+        # F8: estado ANTES do dispatch (carry-forward ou probe), p/ a proveniência.
+        prov_before = self._provenance_before_state(step, plan)
+
         started_at = time.perf_counter()
         output = self._dispatch_step(step, plan=plan)
         duration_ms = int((time.perf_counter() - started_at) * 1000)
@@ -360,6 +366,10 @@ class ModelingExecutorService:
         # antes da decisão de sucesso, senão falhas chegam como verdes.
         output = _unwrap_inner_fusion_result(output)
         output = self.artifacts.register_outputs(output, plan=plan, step=step)
+
+        # F8: grava o ChangeRecord (o que o passo criou/modificou/consumiu/
+        # deletou) em output["_provenance"] ANTES de persistir o tool_call.
+        self._attach_provenance(step, plan, output, prov_before)
 
         tool_call = self._record_tool_call(
             plan=plan, step=step, output=output, duration_ms=duration_ms
@@ -626,6 +636,87 @@ class ModelingExecutorService:
             tool_call_id=(tool_call.id if tool_call is not None else None),
             event=f"{step.seq}. {step.tool_name} não resolvido (F7)",
             ok=False,
+        )
+
+    # ------------------------------------------------------------------
+    # F8: proveniência de operações (captura before/after, flag-gated)
+    # ------------------------------------------------------------------
+
+    def _provenance_active(self, step: ModelingPlanStep) -> bool:
+        from app.core.config import settings
+
+        if not settings.modeling_provenance_enabled:
+            return False
+        if not step.tool_name.startswith("fusion."):
+            return False
+        # Só passos MUTATIVOS — read-only (query_geometry probe) não gera
+        # proveniência (e evita recursão na captura).
+        from app.modeling.tool_registry import is_read_only
+
+        return not is_read_only(step.tool_name)
+
+    def _provenance_before_state(self, step: ModelingPlanStep, plan: ModelingPlan):
+        """Estado ANTES do passo: carry-forward do after do passo anterior (mesmo
+        plano) ou um probe fresco. ``None`` se a proveniência está inativa."""
+
+        if not self._provenance_active(step):
+            return None
+        if self._provenance_carry is not None and self._provenance_carry[0] == plan.id:
+            return self._provenance_carry[1]
+        from app.modeling.model_state import capture_model_state
+
+        return capture_model_state(self, plan)
+
+    def _attach_provenance(
+        self,
+        step: ModelingPlanStep,
+        plan: ModelingPlan,
+        output: dict[str, Any],
+        before_state: Any,
+    ) -> None:
+        """Captura o after, monta o ChangeRecord e o anexa em
+        ``output["_provenance"]`` (zero-migration) + trace; carrega o after p/ ser
+        o before do próximo passo. Best-effort — nunca quebra a execução."""
+
+        if not self._provenance_active(step):
+            return
+        try:
+            from app.modeling.model_state import capture_model_state
+            from app.modeling.provenance import build_change_record
+            from app.modeling.tool_registry import descriptor
+
+            after = capture_model_state(self, plan)
+            self._provenance_carry = (plan.id, after)
+            desc = descriptor(step.tool_name)
+            category = desc.category.value if desc is not None else None
+            record = build_change_record(
+                step.tool_name,
+                before_state,
+                after,
+                category=category,
+                seq=step.seq,
+                step_id=step.id,
+            )
+        except Exception:  # noqa: BLE001 - proveniência é observabilidade, best-effort
+            return
+        if isinstance(output, dict):
+            output["_provenance"] = record.model_dump(mode="json")
+        self._tracer.record(
+            "executor.provenance_recorded",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.info,
+            message=f"Step {step.seq} proveniência: {record.summary}",
+            payload={
+                "step_id": step.id,
+                "tool_name": step.tool_name,
+                "summary": record.summary,
+                "created": len(record.created),
+                "modified": len(record.modified),
+                "consumed": len(record.consumed),
+                "deleted": len(record.deleted),
+                "uncertain": len(record.uncertain),
+            },
+            plan_id=plan.id,
         )
 
     # ------------------------------------------------------------------

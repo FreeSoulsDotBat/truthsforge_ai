@@ -229,6 +229,19 @@ class Settings(BaseModel):
             in {"1", "true", "yes", "on"}
         )
     )
+    # Proveniência de operações (Frente F8, ADR-023). Quando ``true``, o executor
+    # captura o ModelState ANTES e DEPOIS de cada passo mutativo (probe
+    # ``query_geometry``, com carry-forward do after→before entre passos p/ ~1
+    # probe/passo) e grava um ``ChangeRecord`` determinístico
+    # (criou/modificou/consumiu/deletou + delta) em ``response_json["_provenance"]``
+    # + trace. É a base do "o que mudou na peça" p/ a auto-crítica. Default OFF
+    # (probe extra; só mutativos); com OFF, zero captura e zero regressão.
+    modeling_provenance_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_PROVENANCE_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",
