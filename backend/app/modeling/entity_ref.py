@@ -115,16 +115,19 @@ def _resolve_face_by_role(
     role: str, cands: list[tuple[ModelStateBody, ModelStateFace]]
 ) -> tuple[ModelStateBody, ModelStateFace]:
     role = role.lower()
-    if role in ("top_planar", "top"):
-        planar = [bf for bf in cands if (bf[1].normal_axis or "").lower() in ("+z", "z")]
-        if not planar:
-            raise EntityRefError(f"role '{role}': nenhuma face planar voltada +z")
-        return _pick_extreme(planar, _center_z, maximize=True, tol=_POS_TOL, label=role)
-    if role in ("bottom_planar", "bottom"):
-        planar = [bf for bf in cands if (bf[1].normal_axis or "").lower() == "-z"]
-        if not planar:
-            raise EntityRefError(f"role '{role}': nenhuma face planar voltada -z")
-        return _pick_extreme(planar, _center_z, maximize=False, tol=_POS_TOL, label=role)
+    if role in ("top_planar", "top", "bottom_planar", "bottom"):
+        # Face HORIZONTAL (normal no eixo z, qualquer sinal) extrema em z: top = a
+        # de MAIOR center_z, bottom = a de MENOR. Ranquear por POSIÇÃO (não pelo
+        # sinal do normal) é robusto ao read-back que classifica o normal do FUNDO
+        # como '+z' (normal de superfície, não outward) — o bug que deixava
+        # 'bottom_planar' sem candidato e quebrava o place_body da tampa.
+        horizontal = [
+            bf for bf in cands if (bf[1].normal_axis or "").lower() in ("+z", "-z", "z")
+        ]
+        if not horizontal:
+            raise EntityRefError(f"role '{role}': nenhuma face planar horizontal (eixo z)")
+        top = role in ("top_planar", "top")
+        return _pick_extreme(horizontal, _center_z, maximize=top, tol=_POS_TOL, label=role)
     if role == "largest":
         return _pick_extreme(cands, _area, maximize=True, tol=_AREA_TOL, label=role)
     if role in ("largest_planar", "largest_flat"):

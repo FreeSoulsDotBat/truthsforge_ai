@@ -66,6 +66,30 @@ def test_resolve_face_by_role() -> None:
     assert resolve_entity({"body": "Caixa", "role": "largest"}, st).handle == "F_TOP"
 
 
+def test_bottom_planar_robust_to_misclassified_normal() -> None:
+    # Bug do gate m3d_plan_18a68125: o read-back classifica o FUNDO da tampa como
+    # '+z' (normal de superfície, não outward) → bottom_planar não achava candidato
+    # e o place_body falhava. Agora resolve pela POSIÇÃO (menor z entre horizontais).
+    st = ModelState(
+        bodies=[
+            ModelStateBody(
+                name="Lid",
+                stable_id="LID",
+                faces=[
+                    ModelStateFace(
+                        token="L_TOP", type="planar", normal_axis="+z", center_mm=[30, 20, 23]
+                    ),
+                    ModelStateFace(
+                        token="L_BOT", type="planar", normal_axis="+z", center_mm=[30, 20, 20]
+                    ),  # BUG real: o fundo vem como +z
+                ],
+            )
+        ]
+    )
+    assert resolve_entity({"body": "Lid", "role": "bottom_planar"}, st).handle == "L_BOT"
+    assert resolve_entity({"body": "Lid", "role": "top_planar"}, st).handle == "L_TOP"
+
+
 def test_resolve_face_by_predicate() -> None:
     st = _state()
     ref = resolve_entity({"body": "Caixa", "face": {"type": "cylindrical", "radius_mm": 5}}, st)

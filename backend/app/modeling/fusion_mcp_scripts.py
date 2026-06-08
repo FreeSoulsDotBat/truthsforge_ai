@@ -489,7 +489,7 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _face_normal_axis(face):
-            # G2.1: retorna o eixo dominante da normal da face planar
+            # G2.1: retorna o eixo dominante da normal OUTWARD da face planar
             # (+x/-x/+y/-y/+z/-z) ou None se nao for avaliavel.
             try:
                 evaluator = face.geometry
@@ -497,6 +497,16 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 normal = evaluator.normal
             except Exception:
                 return None
+            # OUTWARD vs parametrica: .normal do PLANO e a normal parametrica; o
+            # Fusion marca isParamReversed quando a face aponta para o lado oposto
+            # do solido. Sem corrigir, o FUNDO de uma caixa vem como '+z' (normal
+            # do plano) em vez de '-z' (outward) — bug que quebrava bottom_planar
+            # e o place_body da tampa (gate m3d_plan_18a68125).
+            try:
+                if face.isParamReversed:
+                    normal = adsk.core.Vector3D.create(-normal.x, -normal.y, -normal.z)
+            except Exception:
+                pass
             comps = [("x", normal.x), ("y", normal.y), ("z", normal.z)]
             axis, value = max(comps, key=lambda c: abs(c[1]))
             if abs(value) < 0.7:
