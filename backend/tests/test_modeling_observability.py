@@ -1035,8 +1035,8 @@ def test_stable_id_attached_to_body_creators() -> None:
         # Helpers presentes no script.
         assert "def _attach_stable_id" in script, f"{tool}: _attach_stable_id ausente"
         assert "def _stable_id_of" in script, f"{tool}: _stable_id_of ausente"
-        # _find_body checa stable_id ANTES de nome.
-        assert "_stable_id_of(bodies.item(i)) == ref" in script
+        # _find_body checa stable_id ANTES de nome (F7: itera lista de bodies).
+        assert "_stable_id_of(b) == ref" in script
         # Handler chama _attach_stable_id no body criado.
         assert "_attach_stable_id" in script, f"{tool}: handler nao chama _attach_stable_id"
         # Payload retorna stable_id (chave presente).

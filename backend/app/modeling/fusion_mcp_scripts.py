@@ -362,14 +362,22 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return out
 
 
-        def _find_body(design, body_ref=None):
+        def _find_body(design, body_ref=None, include_occurrence_proxies=False):
             # Onda C + T4.2 (Fase 4): resolve body por:
             #   1. stable_id (TF.stable_id attribute) — sobrevive a rename.
             #   2. nome do body.
             #   3. indice (int/str) — volatil a reorder.
             #   4. ultimo criado quando ref vazio.
-            # F7: inclui corpos dentro de occurrences (proxies de montagem).
-            bodies = _iter_all_bodies(design)
+            # F7: por PADRAO so olha root.bRepBodies (as ~tools de edicao criam a
+            # feature no root; um proxy de occurrence alimentado numa feature do
+            # root falha/erra de contexto). Proxies de occurrence (montagem) so
+            # entram quando include_occurrence_proxies=True — usado pelo _joint,
+            # que precisa da face do corpo ja componentizado.
+            if include_occurrence_proxies:
+                bodies = _iter_all_bodies(design)
+            else:
+                _root_bodies = _root(design).bRepBodies
+                bodies = [_root_bodies.item(i) for i in range(_root_bodies.count)]
             if len(bodies) == 0:
                 raise ToolError("fusion.no_body", "Nenhum corpo solido na cena.")
             if body_ref is None or body_ref == "":
@@ -3367,8 +3375,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return start, end, direction
 
             bodies_out = []
-            for bi in range(root.bRepBodies.count):
-                body = root.bRepBodies.item(bi)
+            # F7: inclui corpos dentro de occurrences (proxies de montagem) p/ o
+            # read-back ficar SIMÉTRICO ao write-side (_find_body/_joint). Sem
+            # isto, após make_component o ModelState ficava cego ao corpo
+            # componentizado e o resolver não achava suas faces/tokens. Root
+            # primeiro (índices estáveis); proxies na cauda.
+            for bi, body in enumerate(_iter_all_bodies(design)):
                 bbox = body.boundingBox
                 faces_out = []
                 for fi in range(min(body.faces.count, limit)):
@@ -4078,7 +4090,22 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             body = _find_body(
                 design,
                 args.get("body_ref") or args.get("body") or args.get("body_name"),
+                include_occurrence_proxies=True,
             )
+            # Idempotente: se o corpo JA esta numa occurrence (ex.: re-execucao do
+            # loop de correcao apos o joint falhar), no-op com o componente
+            # existente — nao cria outra occurrence nem re-move (duplicaria).
+            _ctx = None
+            try:
+                _ctx = body.assemblyContext
+            except Exception:
+                _ctx = None
+            if _ctx is not None:
+                return {{
+                    "message": "Corpo ja e componente; no-op.",
+                    "component_name": _ctx.component.name,
+                    "occurrence_name": _ctx.name,
+                }}
             root = _root(design)
             name = str(args.get("name") or args.get("component_name") or body.name)
             transform = adsk.core.Matrix3D.create()
@@ -4111,7 +4138,9 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 if faces.count > 0:
                     face = faces.item(0)
             if face is None:
-                body = _find_body(design, body_ref)
+                # Junta ENTRE componentes: o corpo já pode ter virado componente
+                # (make_component) → precisa achar o proxy na occurrence.
+                body = _find_body(design, body_ref, include_occurrence_proxies=True)
                 coll = _select_faces(body, face_selector or "cylindrical")
                 if coll.count > 0:
                     face = coll.item(0)
