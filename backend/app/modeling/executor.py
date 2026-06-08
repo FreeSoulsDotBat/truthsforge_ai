@@ -493,9 +493,12 @@ class ModelingExecutorService:
         # combine-DENTRO) e auto-executá-lo sem aprovação humana. Pré-varre e
         # BLOQUEIA a expansão inteira ANTES de executar qualquer passo (fail-safe,
         # sem deixar corpos soltos). A UX de aprovar o sub-passo é follow-up.
-        from app.modeling.tool_registry import requires_approval
+        # Gate pela CATEGORIA intrínseca do concreto — NÃO pelo risk_level herdado
+        # do declarativo (esse já foi consumido pelo gate de aprovação no nível do
+        # plano; re-checá-lo re-bloquearia um placement já aprovado pelo humano).
+        from app.modeling.tool_registry import is_blocked, is_high_risk
 
-        blocked = [c for c in concrete if requires_approval(c.tool_name, c.risk_level)]
+        blocked = [c for c in concrete if is_high_risk(c.tool_name) or is_blocked(c.tool_name)]
         if blocked:
             return self._spatial_expansion_blocked(original, blocked, plan)
 

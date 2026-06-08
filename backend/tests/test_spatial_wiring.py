@@ -186,6 +186,40 @@ def test_run_expanded_blocks_high_risk_concrete(monkeypatch: pytest.MonkeyPatch)
     assert outcome.output["error_code"] == "fusion.spatial_expansion_requires_approval"
 
 
+def test_run_expanded_does_not_reblock_inherited_high_risk_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Gate é pela CATEGORIA intrínseca: make_component/joint (mutative) NÃO
+    # bloqueiam mesmo herdando risk_level=high de um declarativo já aprovado.
+    ex = _executor()
+    called: list[str] = []
+    monkeypatch.setattr(
+        ex,
+        "_execute_single_step",
+        lambda s, *, plan: (
+            called.append(s.tool_name)
+            or _StepOutcome(step=s, output={"ok": True}, tool_call_id=None, event="e", ok=True)
+        ),
+    )
+    high = ModelingRiskLevel.high
+    concrete = [
+        _step("fusion.make_component"),
+        ModelingPlanStep(
+            seq=1,
+            title="j",
+            software=ModelingSoftware.fusion,
+            tool_name="fusion.joint",
+            risk_level=high,
+            approval_required=False,
+            status=ModelingStepStatus.approved,
+            input_json={},
+        ),
+    ]
+    outcome = ex._run_expanded_steps(_step("fusion.place_body"), concrete, _plan())
+    assert outcome.ok is True
+    assert called == ["fusion.make_component", "fusion.joint"]  # executou, não bloqueou
+
+
 def test_run_expanded_stops_on_first_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     ex = _executor()
     calls: list[str] = []

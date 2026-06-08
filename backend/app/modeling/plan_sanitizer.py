@@ -77,18 +77,19 @@ class SanitizeAction:
 
 def _value_has_geom_ref(value: Any) -> bool:
     if isinstance(value, str):
-        # F7: @-refs válidas (@token('..')/@body('..').bbox.max_z) só são
-        # POUPADAS quando o resolver de posicionamento está ATIVO p/ resolvê-las.
-        # Com a flag OFF ninguém resolve @-refs → trate cru (derruba como legado),
-        # senão um @-ref chegaria cru ao adapter e cairia em (0,0) (mis-place).
         from app.core.config import settings
 
-        probe = (
-            strip_at_refs(value)
-            if settings.modeling_spatial_resolution_enabled
-            else value
-        )
-        return bool(_GEOM_REF_RE.search(probe))
+        if settings.modeling_spatial_resolution_enabled:
+            # Flag ON: o resolver resolve @-refs → POUPA-as; só a forma CRUA
+            # (Placa.bbox.max_z) cai.
+            return bool(_GEOM_REF_RE.search(strip_at_refs(value)))
+        # Flag OFF: ninguém resolve @-refs → derruba QUALQUER @-ref pela PRESENÇA
+        # (o regex só pega a forma crua <palavra>.<geom>; @token('F').center tem
+        # ')' antes do '.center' e escaparia), senão chegaria cru ao adapter →
+        # mis-place em (0,0). A forma crua (sem @) também cai.
+        if strip_at_refs(value) != value:
+            return True
+        return bool(_GEOM_REF_RE.search(value))
     if isinstance(value, (list, tuple)):
         return any(_value_has_geom_ref(item) for item in value)
     return False

@@ -87,6 +87,17 @@ def test_at_refs_spared_only_when_resolver_flag_on(monkeypatch: pytest.MonkeyPat
     assert "origin_mm" not in cleaned_off and cleaned_off["diameter_mm"] == 6
     assert any(a.kind == "drop_geom_ref_value" for a in actions_off)
 
+    # Com a flag OFF, as formas @-ref COMUNS (.center/.normal/.direction) — que o
+    # regex _GEOM_REF_RE NÃO casa (')' antes do '.center') — também caem, pela
+    # PRESENÇA do @-ref, não chegam cruas ao adapter.
+    for field, ref in (
+        ("origin_mm", "@token('F_TOP').center"),
+        ("axis", "@edge('E1').direction"),
+        ("center_mm", "@body('Placa').center"),
+    ):
+        c_off, _ = sanitize_tool_arguments("fusion.add_cylinder", {field: ref, "diameter_mm": 6})
+        assert field not in c_off, f"{field}={ref} deveria cair com flag OFF"
+
     # Forma CRUA (sem @) cai independente da flag.
     raw = {"position_mm": ["Placa.bbox.max_z - 20", 0]}
     cleaned_raw, _ = sanitize_tool_arguments("fusion.add_cylinder", raw)
