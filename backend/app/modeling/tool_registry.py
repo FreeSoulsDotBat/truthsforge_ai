@@ -510,6 +510,14 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "alternância e combine-DENTRO; resolvido no backend F7 (F7).",
     ),
     _t(
+        "fusion.relate_bodies",
+        _FUSION,
+        _ADD,
+        "Relação declarativa entre 2 corpos (flush_mate/cover_opening/coaxial_insert/"
+        "hinge_along_shared_edge/seat_in_pocket/distribute_on_edge); o backend deriva "
+        "a geometria medindo e expande nas primitivas F7 (F8 Sub4).",
+    ),
+    _t(
         "fusion.knuckle_hinge",
         _FUSION,
         _ADD,
@@ -596,6 +604,13 @@ DEPRECATED_PLANNER_TOOLS: frozenset[str] = frozenset(
 )
 
 
+# Tools registradas mas AINDA NÃO oferecidas ao planner LLM — atrás de flag +
+# pendentes de gate Fusion (não ofereça um mecanismo não validado ao modelo). O
+# executor as resolve quando a flag liga; o owner valida via probe no gate; só
+# então entram no nudge/PLANNER_TOOLSET. F8 Sub4: relate_bodies (gate P6).
+UNRELEASED_PLANNER_TOOLS: frozenset[str] = frozenset({"fusion.relate_bodies"})
+
+
 # ---------------------------------------------------------------------------
 # Derived collections. Computed at import time so legacy callers keep working
 # while we migrate to direct registry access in Ondas 2–3.
@@ -632,6 +647,8 @@ def _planner_visible() -> tuple[str, ...]:
         if entry.name.endswith(".capture_viewport"):
             return False  # probe do loop visual (render→visão), não passo do plano
         if entry.name in DEPRECATED_PLANNER_TOOLS:
+            return False
+        if entry.name in UNRELEASED_PLANNER_TOOLS:
             return False
         return True
 

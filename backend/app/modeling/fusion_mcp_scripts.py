@@ -4577,17 +4577,22 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 return _make_component(args)
             if tool_name == "fusion.joint":
                 return _joint(args)
-            if tool_name in ("fusion.place_body", "fusion.align_axis", "fusion.distribute_along"):
-                # F7: tools DECLARATIVAS — devem ser expandidas pelo resolver de
+            if tool_name in (
+                "fusion.place_body",
+                "fusion.align_axis",
+                "fusion.distribute_along",
+                "fusion.relate_bodies",
+            ):
+                # F7/F8: tools DECLARATIVAS — devem ser expandidas pelo resolver de
                 # posicionamento (backend) em make_component/combine/joint/
                 # primitivas ANTES do dispatch. Chegar aqui crua = flag OFF ou
                 # wiring ausente: erro claro, nunca mis-place silencioso.
                 raise ToolError(
                     "fusion.spatial_not_resolved",
                     "Tool de posicionamento declarativa (" + tool_name + ") chegou ao "
-                    "adapter sem resolucao. O resolver de posicionamento (spatial_resolver) "
-                    "precisa expandi-la antes do dispatch. Verifique a flag "
-                    "modeling_spatial_resolution_enabled e o wiring do agent_loop.",
+                    "adapter sem resolucao. O resolver de posicionamento (spatial_resolver/"
+                    "relation_resolver) precisa expandi-la antes do dispatch. Verifique as flags "
+                    "modeling_spatial_resolution_enabled / modeling_relation_placement_enabled.",
                 )
             if tool_name == "fusion.knuckle_hinge":
                 return _knuckle_hinge(args)

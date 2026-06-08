@@ -127,7 +127,26 @@ def _resolve_face_by_role(
         return _pick_extreme(planar, _center_z, maximize=False, tol=_POS_TOL, label=role)
     if role == "largest":
         return _pick_extreme(cands, _area, maximize=True, tol=_AREA_TOL, label=role)
-    raise EntityRefError(f"role de face desconhecido: {role!r} (top_planar/bottom_planar/largest)")
+    if role in ("largest_planar", "largest_flat"):
+        planar = [bf for bf in cands if (bf[1].type or "").lower() == "planar"]
+        if not planar:
+            raise EntityRefError(f"role '{role}': nenhuma face planar")
+        return _pick_extreme(planar, _area, maximize=True, tol=_AREA_TOL, label=role)
+    if role in ("open_boundary", "opening"):
+        # F8 Sub4: a face da ABERTURA (ex.: topo de caixa ocada). Prefere as
+        # marcadas is_open_boundary (medidas pelo script atrás do gate); sem o
+        # sinal, cai na maior planar +z (a borda aberta típica de um shell top).
+        flagged = [bf for bf in cands if bf[1].is_open_boundary]
+        if flagged:
+            return _pick_extreme(flagged, _area, maximize=True, tol=_AREA_TOL, label=role)
+        planar_up = [bf for bf in cands if (bf[1].normal_axis or "").lower() in ("+z", "z")]
+        if not planar_up:
+            raise EntityRefError(f"role '{role}': nenhuma face de abertura (+z planar)")
+        return _pick_extreme(planar_up, _area, maximize=True, tol=_AREA_TOL, label=role)
+    raise EntityRefError(
+        f"role de face desconhecido: {role!r} "
+        "(top_planar/bottom_planar/largest/largest_planar/open_boundary)"
+    )
 
 
 def _resolve_face_by_predicate(

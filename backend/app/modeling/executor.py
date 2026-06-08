@@ -444,6 +444,14 @@ class ModelingExecutorService:
 
         from app.core.config import settings
 
+        # F8 Sub4: relação genérica (relate_bodies) → deriva medindo + expande nas
+        # primitivas F7. Atrás da própria flag (desacopla do gate F7); flag OFF =
+        # cai no caminho normal (o passo crua erra claro no adapter).
+        from app.modeling.relation_resolver import RELATE_TOOL
+
+        if settings.modeling_relation_placement_enabled and step.tool_name == RELATE_TOOL:
+            return self._resolve_relation_step(step, plan=plan)
+
         if not settings.modeling_spatial_resolution_enabled:
             return step, None
 
@@ -486,6 +494,37 @@ class ModelingExecutorService:
         if step.tool_name not in F7_PLACEMENT_TOOLS and len(concrete) == 1:
             return step.model_copy(update={"input_json": dict(concrete[0].input_json)}), None
         # Declarativa (1→N): materializa os passos concretos para execução.
+        return step, materialize_steps(step, concrete)
+
+    def _resolve_relation_step(
+        self, step: ModelingPlanStep, *, plan: ModelingPlan
+    ) -> tuple[ModelingPlanStep, list[ModelingPlanStep] | None]:
+        """F8 Sub4: resolve um passo ``fusion.relate_bodies`` — probe ao vivo,
+        deriva a primitiva F7 medindo e materializa os passos concretos. Erro
+        tipado (``RelationUnderivableError`` ⊂ ``SpatialRefError``) propaga p/ o
+        ``_spatial_failure_outcome`` do chamador (nunca posiciona no escuro)."""
+
+        from app.modeling.model_state import capture_model_state
+        from app.modeling.relation_resolver import resolve_relation
+        from app.modeling.spatial_resolver import materialize_steps
+
+        state = capture_model_state(self, plan)
+        concrete, actions = resolve_relation(dict(step.input_json or {}), state)
+        self._tracer.record(
+            "executor.relation_resolved",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.info,
+            message=f"F8: {step.tool_name} → {len(concrete)} passo(s) concreto(s)",
+            payload={
+                "step_id": step.id,
+                "tool_name": step.tool_name,
+                "kind": (step.input_json or {}).get("kind"),
+                "concrete_tools": [c.tool_name for c in concrete],
+                "actions": [a.detail for a in actions],
+                "had_state": state is not None,
+            },
+            plan_id=plan.id,
+        )
         return step, materialize_steps(step, concrete)
 
     def _run_expanded_steps(

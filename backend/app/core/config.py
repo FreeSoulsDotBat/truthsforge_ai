@@ -257,6 +257,19 @@ class Settings(BaseModel):
             in {"1", "true", "yes", "on"}
         )
     )
+    # Posicionamento por RELAÇÃO genérica (Frente F8 Sub4, ADR-023). Quando
+    # ``true``, o passo declarativo ``fusion.relate_bodies`` (vocabulário fechado:
+    # flush_mate/cover_opening/coaxial_insert/...) é DERIVADO medindo o ModelState
+    # e expandido nas primitivas F7 provadas (place_body/align_axis → joint). O
+    # verificador geométrico (contato/interferência/DOF) REPORTA; o reparo é só
+    # proposto (gate P6). Default OFF (acoplado ao gate Fusion de junta com offset);
+    # com OFF, relate_bodies não é resolvido e zero regressão.
+    modeling_relation_placement_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_RELATION_PLACEMENT_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",

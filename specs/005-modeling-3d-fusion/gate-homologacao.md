@@ -21,6 +21,9 @@
    TRUTHS_FORGE_MODELING_LIVE_GEOMETRY_RECONCILIATION_ENABLED=true  # F5 (lê geometria ao vivo na edição)
    TRUTHS_FORGE_MODELING_VISUAL_VERIFICATION_ENABLED=true       # Gate Visual (render→visão→replan) — destrava o F7
    TRUTHS_FORGE_MODELING_SPATIAL_RESOLUTION_ENABLED=true        # F7 (posicionamento paramétrico declarativo) — só p/ o Gate F7
+   TRUTHS_FORGE_MODELING_PROVENANCE_ENABLED=true                # F8 (proveniência: o que cada passo mudou) — Gate F8.D1
+   TRUTHS_FORGE_MODELING_SELF_CRITIQUE_ENABLED=true             # F8 (auto-crítica: faltou/demais/errado/certo) — Gate F8.D1
+   TRUTHS_FORGE_MODELING_RELATION_PLACEMENT_ENABLED=true        # F8 (relação genérica relate_bodies) — só p/ o Gate F8.R1
    # F6 (sanitizer determinístico) já vem ON por padrão; só desligue p/ depurar planner cru.
    ```
    > As 3 flags de capacidade (loop/hierárquico/reconciliação) só fazem efeito
@@ -395,6 +398,54 @@ chutar `origin_mm` (deve errar mais o posicionamento). É a evidência do ganho.
 > **Regressão (importante):** rode um caso simples **sem** montagem (ex.: o Gate F6
 > da placa+4 furos) com a flag F7 **ON** — deve sair **idêntico** ao da flag OFF
 > (a resolução é no-op quando não há ref espacial). Se mudar algo, é bug.
+
+---
+
+## Gate F8 — Identidade, proveniência, auto-crítica e relação (ADR-023)
+
+Código entregue mock-verde, atrás de flags próprias (default OFF). Pré-requisito do
+**Spike** (task #56) p/ confiar curvas/diff sob edição paramétrica — ver abaixo.
+
+### F8.D1 — Proveniência + auto-crítica geométrica (sem visual)
+Ligue **só** `TRUTHS_FORGE_MODELING_PROVENANCE_ENABLED=true` +
+`TRUTHS_FORGE_MODELING_SELF_CRITIQUE_ENABLED=true`, deixando
+`MODELING_VISUAL_VERIFICATION_ENABLED=false` (era ele que duplicava corpos). Rode um
+build **one-shot** simples (não-hierárquico), ex.: caixa 60×40×20 ocada + tampa.
+
+**Observar (filtre por `provenance_recorded|agent_loop.verdict`):**
+1. `executor.provenance_recorded` por passo mutativo, com `summary` coerente
+   (add_box → "criou 1 body"; combine → "consumiu N"; pocket → face "consumed", não
+   "deleted").
+2. Ao fim, **`agent_loop.verdict`** com `overall` + `findings`. Se aparecer um corpo
+   órfão (ex.: `Caixa (1)`), o veredito deve marcá-lo **DEMAIS/excess** — é o bug do
+   P6 antigo virando achado determinístico. Sem órfão e contagem certa → `ok`.
+3. **Regressão:** repita com as duas flags **OFF** — zero `provenance_recorded`/
+   `verdict` e geometria **idêntica**.
+
+### F8.R1 — Relação genérica (flush_mate) → montagem nativa
+Ligue `TRUTHS_FORGE_MODELING_RELATION_PLACEMENT_ENABLED=true`. O `fusion.relate_bodies`
+está **dark no planner** (não validado) — dirija por **plano literal** (fallback
+abaixo): primeiro `add_box 'Caixa'` (ocada) + `add_box 'Tampa'`, depois um passo
+`tool_name="fusion.relate_bodies"` com `input_json={kind:"flush_mate", moving:"Tampa",
+reference:"Caixa"}`.
+
+**Observar (filtre por `relation_resolved`):**
+1. `executor.relation_resolved` com `kind=flush_mate` e
+   `concrete_tools=["fusion.make_component","fusion.joint"]` (a relação derivou medindo
+   a face de baixo da Tampa e a de cima da Caixa — **sem token chutado**).
+2. A Tampa **encosta** no topo da Caixa (junta rígida); sem folga nem penetração.
+3. Tente `kind:"coaxial_insert"` (pino+furo) → deve virar `fusion.align_axis` (revolute).
+4. **Erro tipado:** `relate_bodies` com `reference` inexistente → falha clara
+   (`fusion.relation_underivable`), nunca posiciona no escuro.
+
+> **Acoplado ao P6:** o reparo de offset (folga/penetração medida) é só **proposto**
+> pelo `geometry_verifier` (não auto-aplicado) até o motor de junta com offset do P6.
+
+### F8.Spike — Identidade sob edição paramétrica (BLOQUEIA curvas) 🔒
+Probe (molde `_gate_f7_probe.py`): **(a)** `SketchCurve.attributes` sobrevive a
+`extrude`+recompute? **(b)** `entityToken` de face sobrevive a mudar 1 parâmetro de
+dimensão (não só re-run)? Resultado define se o diff afirma `deleted` ou marca
+`uncertain`, e se curvas entram no escopo. Sem isso, F8 cobre só corpo/face/aresta.
 
 ---
 

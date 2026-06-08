@@ -238,6 +238,20 @@ def test_deprecated_macros_excluded_from_planner_but_kept_in_adapter() -> None:
     assert "fusion.make_component" in PLANNER_TOOLSET
 
 
+def test_relate_bodies_registered_but_unreleased() -> None:
+    """F8 Sub4: relate_bodies existe no registro (executor o resolve atrás de
+    flag) mas NÃO é oferecido ao planner até o gate Fusion validar."""
+    from app.modeling.tool_registry import (
+        UNRELEASED_PLANNER_TOOLS,
+        is_known,
+    )
+
+    assert is_known("fusion.relate_bodies")
+    assert "fusion.relate_bodies" in FUSION_TOOLS
+    assert "fusion.relate_bodies" in UNRELEASED_PLANNER_TOOLS
+    assert "fusion.relate_bodies" not in PLANNER_TOOLSET  # dark até o gate
+
+
 def test_read_only_set_matches_allowlist() -> None:
     expected = {
         "blender.measure_object",

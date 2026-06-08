@@ -879,6 +879,10 @@ class ModelStateFace(BaseModel):
     radius_mm: float | None = None  # cilíndrica/cônica/esférica
     normal_axis: str | None = None  # +x..-z quando planar
     center_mm: list[float] | None = None
+    # F8 Sub4: face na borda de uma abertura (ex.: topo de uma caixa ocada). O
+    # script (atrás do gate) marca medindo o B-Rep; None no mock. A relação
+    # ``cover_opening`` mira a maior face com esta flag; sem ela cai no top_planar.
+    is_open_boundary: bool | None = None
 
 
 class ModelStateEdge(BaseModel):
@@ -1025,6 +1029,74 @@ class ModelVerdict(BaseModel):
     summary: str = ""
     # True quando os checks geométricos cobriram a intenção e NÃO precisou de LLM.
     deterministic_complete: bool = False
+
+
+# ---------------------------------------------------------------------------
+# F8 Sub 4 — Posicionamento por RELAÇÃO genérica + verificador geométrico
+# (ADR-023). O LLM declara uma relação de vocabulário FECHADO; o backend DERIVA a
+# geometria MEDINDO o ModelState e a expande nas primitivas F7 provadas
+# (place_body/align_axis/distribute_along). Cada kind = composição de primitivas
+# mensuráveis (barreira contra macro-por-produto). O verificador REPORTA contato/
+# interferência/DOF; o reparo determinístico é proposto, não auto-aplicado.
+# ---------------------------------------------------------------------------
+
+
+class RelationSpec(BaseModel):
+    """Relação declarativa entre dois corpos (vocabulário fechado). Referências
+    por NOME legível (``@body('Tampa')``/``Tampa``) — nunca token opaco."""
+
+    kind: Literal[
+        "flush_mate",
+        "cover_opening",
+        "seat_in_pocket",
+        "coaxial_insert",
+        "hinge_along_shared_edge",
+        "distribute_on_edge",
+    ]
+    moving: str  # corpo que se move até a referência
+    reference: str  # corpo de destino (fica parado)
+    moving_role: str | None = None  # override do role da face do moving
+    reference_role: str | None = None  # override do role da face da referência
+    count: int | None = None  # distribute_on_edge
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class DerivedRelation(BaseModel):
+    """Resultado de MEDIR o estado p/ uma ``RelationSpec``: a primitiva F7
+    concreta (tool + args com descritores role/predicado) que o resolver F7
+    expande. ``measured`` registra o que foi medido (raio, role escolhido)."""
+
+    kind: str
+    primitive_tool: str  # fusion.place_body | fusion.align_axis | fusion.distribute_along
+    primitive_args: dict[str, Any] = Field(default_factory=dict)
+    measured: dict[str, Any] = Field(default_factory=dict)
+    notes: str = ""
+
+
+class GeometricContactReport(BaseModel):
+    """Verificação GEOMÉTRICA determinística de uma relação após execução:
+    contato (faces encostam), interferência (sobreposição de volume) e DOF
+    (graus de liberdade pela junta). **Só reporta** — o reparo é proposto à parte."""
+
+    relation_kind: str
+    moving: str
+    reference: str
+    contact_ok: bool = False
+    gap_mm: float | None = None  # folga medida entre os corpos no eixo do mate
+    interference_mm3: float = 0.0  # sobreposição de bbox (deveria ser ~0)
+    dof_ok: bool | None = None  # DOF medido bate com o esperado da junta
+    ok: bool = True
+    findings: list[str] = Field(default_factory=list)
+
+
+class RelationRepairProposal(BaseModel):
+    """Correção determinística PROPOSTA (não auto-aplicada — gate P6): re-junta
+    com ``offset`` medido p/ fechar a folga, ou afastar p/ matar interferência."""
+
+    relation_kind: str
+    reason: str  # gap | interference
+    offset_mm: float  # delta a aplicar na junta (sinal = direção)
+    detail: str = ""
 
 
 class ModelingSubGoalStatus(StrEnum):
