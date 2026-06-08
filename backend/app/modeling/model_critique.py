@@ -27,6 +27,12 @@ __all__ = ["build_model_verdict", "render_verdict_block"]
 
 _OVERLAP_EPS = 1e-3  # mm — sobreposição de bbox abaixo disto = contato, não interferência
 
+# Tools de MONTAGEM/metadados que, por projeto, não mexem em métrica de B-Rep
+# (não criam corpo, não mudam bbox/área/tokens). Um ChangeRecord vazio aqui é
+# ESPERADO — não é "passo sem efeito". Sem esta exclusão, o gate F8.D1/F7-P1
+# (add_box×2 + make_component×2 + joint) acusaria 'FALTOU' falso.
+_GEOMETRY_NEUTRAL_TOOLS = frozenset({"fusion.make_component", "fusion.joint"})
+
 
 def _bodies_by_ref(state: ModelState | None) -> dict[str, ModelStateBody]:
     out: dict[str, ModelStateBody] = {}
@@ -146,6 +152,8 @@ def _check_op_no_effect(history: OperationHistory | None) -> list[Finding]:
         cat = (rec.tool_category or "").lower()
         if cat == "read_only":
             continue
+        if rec.tool_name in _GEOMETRY_NEUTRAL_TOOLS:
+            continue  # montagem/metadados: ChangeRecord vazio é esperado, não falha
         empty = not (rec.created or rec.modified or rec.consumed or rec.deleted or rec.uncertain)
         # Só acusa quando houve captura antes E depois (senão não dá p/ afirmar).
         if empty and rec.captured_before and rec.captured_after:

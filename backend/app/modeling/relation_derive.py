@@ -127,13 +127,27 @@ def _derive_axis(spec: RelationSpec, state: ModelState | None) -> DerivedRelatio
         # referência (o furo certo entre vários) — não chuta "o primeiro cilindro".
         target_face["radius_mm"] = round(radius, 3)
         measured["moving_radius_mm"] = round(radius, 3)
-    args = {
+    args: dict[str, Any] = {
         "body": spec.moving,
         "target": {"body": spec.reference, "face": target_face},
     }
     notes = f"{spec.kind}: alinha eixo de {spec.moving} à face cilíndrica de {spec.reference}"
     if spec.kind == "hinge_along_shared_edge":
         notes += " (dobradiça revolute em torno do furo do pino)"
+    # Eixo da junta revolute: o ModelState atual NÃO carrega o vetor-eixo da face
+    # cilíndrica (só raio/centro), então não dá p/ MEDIR o eixo aqui. Em vez de
+    # assumir Z no escuro (chute — viola "NUNCA chuta"), tornamos explícito:
+    # `params.body_axis` define o eixo (ex.: "x" p/ dobradiça lateral); sem ele, a
+    # junta cai no default Z do _expand_align_axis — declarado no `measured`/notes
+    # p/ não ser silencioso. Medir o eixo da face é trabalho do gate (enriquecer
+    # query_geometry com o axis-vector da face cilíndrica).
+    body_axis = spec.params.get("body_axis")
+    if body_axis is not None:
+        args["body_axis"] = body_axis
+        measured["body_axis"] = body_axis
+    else:
+        measured["axis_default"] = "z"
+        notes += " [eixo=Z default; passe params.body_axis p/ eixo não-Z]"
     return DerivedRelation(
         kind=spec.kind,
         primitive_tool="fusion.align_axis",
@@ -145,8 +159,16 @@ def _derive_axis(spec: RelationSpec, state: ModelState | None) -> DerivedRelatio
 
 def _derive_distribute(spec: RelationSpec, state: ModelState | None) -> DerivedRelation:
     ref = _find_body(state, spec.reference)
-    count = spec.count or spec.params.get("count")
-    if not count or int(count) < 1:
+    raw_count = spec.count if spec.count is not None else spec.params.get("count")
+    # Coerção TIPADA: int() cru de um valor inválido levanta ValueError BASE, que
+    # NÃO é SpatialRefError e escaparia do `except` do executor (derruba o plano).
+    try:
+        count = int(raw_count) if raw_count is not None else 0
+    except (TypeError, ValueError):
+        raise RelationUnderivableError(
+            f"distribute_on_edge: 'count' inválido: {raw_count!r}"
+        ) from None
+    if count < 1:
         raise RelationUnderivableError("distribute_on_edge exige 'count' >= 1")
     edge = spec.params.get("edge") or _longest_straight_edge_token(ref)
     if not edge:
@@ -156,7 +178,7 @@ def _derive_distribute(spec: RelationSpec, state: ModelState | None) -> DerivedR
         )
     args: dict[str, Any] = {
         "edge": edge,
-        "count": int(count),
+        "count": count,
         "prototype": spec.params.get("prototype") or {"primitive": "cylinder"},
     }
     for opt in ("spacing_mm", "fit", "alternate"):
@@ -166,7 +188,7 @@ def _derive_distribute(spec: RelationSpec, state: ModelState | None) -> DerivedR
         kind=spec.kind,
         primitive_tool="fusion.distribute_along",
         primitive_args=args,
-        measured={"edge_token": edge, "count": int(count)},
+        measured={"edge_token": edge, "count": count},
         notes=f"distribute_on_edge: {count} nós ao longo da aresta de {spec.reference}",
     )
 

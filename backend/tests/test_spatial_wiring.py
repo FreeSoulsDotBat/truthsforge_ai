@@ -166,6 +166,47 @@ def test_run_expanded_aggregates_success(monkeypatch: pytest.MonkeyPatch) -> Non
     assert outcome.step.status is ModelingStepStatus.completed
 
 
+def test_run_expanded_preserves_subprovenance_for_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Bug do laudo (A): _run_expanded_steps descartava o _provenance dos concretos
+    # → history_from_plan via vazio p/ TODO placement/relação (auto-crítica cega).
+    # Garante que o _provenance de cada sub-passo sobrevive no agregado E é
+    # recuperável por history_from_plan (round-trip executor→histórico).
+    from app.modeling.provenance import build_change_record, history_from_plan
+
+    ex = _executor()
+    before = ModelState(bodies=[])
+    after = ModelState(bodies=[ModelStateBody(name="Tampa", stable_id="ID1")])
+    prov = build_change_record(
+        "fusion.make_component", before, after, category="mutative", seq=1
+    ).model_dump(mode="json")
+
+    def fake(step: ModelingPlanStep, *, plan: ModelingPlan) -> _StepOutcome:
+        out: dict = {"ok": True}
+        if step.tool_name == "fusion.make_component":
+            out["_provenance"] = prov
+        return _StepOutcome(
+            step=step.model_copy(update={"status": ModelingStepStatus.completed}),
+            output=out,
+            tool_call_id=None,
+            event="e",
+            ok=True,
+        )
+
+    monkeypatch.setattr(ex, "_execute_single_step", fake)
+    concrete = [_step("fusion.make_component"), _step("fusion.joint")]
+    outcome = ex._run_expanded_steps(_step("fusion.place_body"), concrete, _plan())
+    # o _provenance do concreto sobrevive no agregado…
+    assert outcome.output["expanded"][0]["_provenance"]["tool_name"] == "fusion.make_component"
+    # …e history_from_plan o recupera do plano persistido (antes do fix, vazio).
+    plan = _plan()
+    plan.steps = [outcome.step]
+    hist = history_from_plan(plan)
+    assert hist is not None and len(hist.records) == 1
+    assert hist.records[0].tool_name == "fusion.make_component"
+
+
 def test_run_expanded_blocks_high_risk_concrete(monkeypatch: pytest.MonkeyPatch) -> None:
     # Constituição: a expansão NÃO pode auto-executar um concreto high_risk
     # (combine_bodies). Pré-varre e bloqueia ANTES de executar qualquer passo.

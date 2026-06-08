@@ -85,6 +85,22 @@ def test_op_with_no_effect_is_missing() -> None:
     assert ("op_no_effect", "missing") in _kinds(v)
 
 
+def test_op_no_effect_skips_assembly_tools() -> None:
+    # Laudo (E): joint/make_component são geometria-neutros — ChangeRecord vazio é
+    # ESPERADO, não 'FALTOU'. Sem a exclusão, o gate F8.D1/F7-P1 acusava falso.
+    for tool in ("fusion.joint", "fusion.make_component"):
+        rec = ChangeRecord(
+            tool_name=tool,
+            tool_category="mutative",
+            seq=5,
+            captured_before=True,
+            captured_after=True,
+        )
+        hist = OperationHistory(records=[rec])
+        v = build_model_verdict(IntentSpec(), hist, _state(_body("Caixa")))
+        assert all(f.check_id != "op_no_effect" for f in v.findings), tool
+
+
 def test_deterministic_complete_unless_semantic_acceptance() -> None:
     state = _state(_body("Caixa"), _body("Tampa"))
     assert build_model_verdict(

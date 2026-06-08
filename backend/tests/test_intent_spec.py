@@ -54,7 +54,9 @@ def test_two_named_primitives_disjoint() -> None:
 
 def test_declarative_placement_makes_count_unknown_but_keeps_names() -> None:
     # place_body é resolvido em runtime (fuse-DENTRO ou joint) → net desconhecido;
-    # mas não cria corpo de nome imprevisível → órfão/disjunto seguem valendo.
+    # não cria corpo de nome imprevisível → órfão segue valendo. MAS a junta
+    # invalida a disjunção (coaxial sobrepõe; flush encosta) → disjoint vazio
+    # (avaliador MUDO > falso-positivo de interferência).
     intent = intent_from_plan(
         _plan(
             _step(1, "fusion.add_box", name="Caixa"),
@@ -64,7 +66,36 @@ def test_declarative_placement_makes_count_unknown_but_keeps_names() -> None:
     )
     assert intent.expected_body_count is None
     assert {b["name"] for b in intent.expected_bodies} == {"Caixa", "Tampa"}
-    assert intent.disjoint_groups == [["Caixa", "Tampa"]]
+    assert intent.disjoint_groups == []  # junta presente → sem asserção de disjunção
+
+
+def test_relate_bodies_makes_count_unknown_and_no_disjoint() -> None:
+    # Laudo (B): relate_bodies é uma junta → net desconhecido E disjunção
+    # indeterminável (coaxial sobrepõe). Avaliador MUDO p/ contagem e disjoint;
+    # órfão segue valendo (nomes conhecidos).
+    intent = intent_from_plan(
+        _plan(
+            _step(1, "fusion.add_box", name="Caixa"),
+            _step(2, "fusion.add_box", name="Tampa"),
+            _step(3, "fusion.relate_bodies", kind="flush_mate", moving="Tampa", reference="Caixa"),
+        )
+    )
+    assert intent.expected_body_count is None
+    assert intent.disjoint_groups == []
+    assert {b["name"] for b in intent.expected_bodies} == {"Caixa", "Tampa"}
+
+
+def test_align_axis_coaxial_no_false_disjoint() -> None:
+    # O falso-positivo do laudo: junta coaxial NÃO pode gerar disjoint (senão o
+    # avaliador acusa interferência num encaixe correto).
+    intent = intent_from_plan(
+        _plan(
+            _step(1, "fusion.add_box", name="Caixa"),
+            _step(2, "fusion.add_cylinder", name="Pino"),
+            _step(3, "fusion.align_axis", body="Pino"),
+        )
+    )
+    assert intent.disjoint_groups == []
 
 
 def test_combine_join_consumes_tool_bodies() -> None:

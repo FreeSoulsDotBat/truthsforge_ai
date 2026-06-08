@@ -66,6 +66,28 @@ def test_coaxial_overlap_is_contact() -> None:
     assert propose_repair(rep, spec) is None
 
 
+def test_seat_in_pocket_containment_is_contact_not_penetration() -> None:
+    # Laudo (F): assento correto (peça contida no bolso) era reportado como
+    # penetração massiva + reparo ejetava a peça. Agora é contenção esperada.
+    caixa = _body("Caixa", [0, 0, 0], [60, 40, 20])
+    peca = _body("Peca", [10, 10, 2], [50, 30, 18])  # contida no bbox da caixa
+    spec = RelationSpec(kind="seat_in_pocket", moving="Peca", reference="Caixa")
+    rep = verify_relation(spec, _state(caixa, peca))
+    assert rep.contact_ok and rep.ok
+    assert rep.interference_mm3 == 0.0
+    assert propose_repair(rep, spec) is None
+
+
+def test_distribute_on_edge_reports_not_contact_verifiable() -> None:
+    # Laudo (G): kind N-corpos não tem verificação de contato 2-corpos — reporta
+    # explícito em vez de 'ok' silencioso.
+    caixa = _body("Caixa", [0, 0, 0], [60, 40, 20])
+    no = _body("No", [0, 0, 0], [2, 2, 2])
+    spec = RelationSpec(kind="distribute_on_edge", moving="No", reference="Caixa")
+    rep = verify_relation(spec, _state(caixa, no))
+    assert any("não tem verificação geométrica" in f for f in rep.findings)
+
+
 def test_dof_expected_reported() -> None:
     caixa = _body("Caixa", [0, 0, 0], [60, 40, 20])
     tampa = _body("Tampa", [0, 0, 20], [60, 40, 23])

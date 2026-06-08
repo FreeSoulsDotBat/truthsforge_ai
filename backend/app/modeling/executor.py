@@ -451,6 +451,12 @@ class ModelingExecutorService:
 
         if settings.modeling_relation_placement_enabled and step.tool_name == RELATE_TOOL:
             return self._resolve_relation_step(step, plan=plan)
+        if step.tool_name == RELATE_TOOL:
+            # Relation flag OFF: NÃO deixe o caminho F7 abaixo tentar resolver os
+            # @body refs do relate_bodies (o leftover-ref guard daria um erro
+            # enganoso "campo não suportado: moving"). Cai cru no adapter → erro
+            # claro fusion.spatial_not_resolved, como o invariante documenta.
+            return step, None
 
         if not settings.modeling_spatial_resolution_enabled:
             return step, None
@@ -563,12 +569,24 @@ class ModelingExecutorService:
         ok = bool(outcomes) and all(o.ok for o in outcomes)
         n_ok = sum(1 for o in outcomes if o.ok)
         last = outcomes[-1] if outcomes else None
+
+        def _expanded_entry(o: _StepOutcome) -> dict[str, Any]:
+            # F8: PRESERVA o _provenance de cada concreto (gravado por
+            # _attach_provenance dentro de _execute_single_step). Sem isto,
+            # history_from_plan reconstrói histórico VAZIO p/ todo placement/
+            # relação (a auto-crítica rodaria cega — o coração do F8.D1).
+            entry: dict[str, Any] = {"tool_name": o.step.tool_name, "ok": o.ok}
+            prov = o.output.get("_provenance") if isinstance(o.output, dict) else None
+            if prov is not None:
+                entry["_provenance"] = prov
+            return entry
+
         agg_output: dict[str, Any] = {
             "ok": ok,
             "tool_name": original.tool_name,
             "transport": "backend",
             "mcp_server": "spatial_resolver",
-            "expanded": [{"tool_name": o.step.tool_name, "ok": o.ok} for o in outcomes],
+            "expanded": [_expanded_entry(o) for o in outcomes],
             "message": (last.output.get("message") if last else "F7: sem passos concretos"),
         }
         status = ModelingStepStatus.completed if ok else ModelingStepStatus.failed

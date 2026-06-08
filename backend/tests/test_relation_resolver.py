@@ -121,3 +121,25 @@ def test_executor_noop_when_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:
     step, expanded = _executor()._maybe_resolve_spatial(_relate_step(), plan=_plan())
     # flag OFF: não resolve (o passo crua erraria claro no adapter).
     assert expanded is None
+
+
+def test_executor_skips_relate_when_only_spatial_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Laudo (H): relation OFF + spatial ON + @body refs — relate_bodies NÃO pode
+    # ser capturado pelo caminho F7 (o leftover-ref guard daria erro enganoso
+    # "campo não suportado: moving"). Deve cair limpo no adapter (expanded=None).
+    monkeypatch.setattr(settings, "modeling_relation_placement_enabled", False, raising=False)
+    monkeypatch.setattr(settings, "modeling_spatial_resolution_enabled", True, raising=False)
+    step = ModelingPlanStep(
+        seq=1,
+        title="relate",
+        software=ModelingSoftware.fusion,
+        tool_name="fusion.relate_bodies",
+        status=ModelingStepStatus.approved,
+        input_json={
+            "kind": "flush_mate",
+            "moving": "@body('Tampa')",
+            "reference": "@body('Caixa')",
+        },
+    )
+    _step_out, expanded = _executor()._maybe_resolve_spatial(step, plan=_plan())
+    assert expanded is None  # fallthrough limpo ao adapter, sem erro enganoso F7

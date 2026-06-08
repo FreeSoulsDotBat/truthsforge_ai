@@ -26,8 +26,11 @@ __all__ = ["verify_relation", "propose_repair"]
 _CONTACT_TOL = 0.2  # mm — |folga| abaixo disto = contato
 _EPS = 1e-3  # mm — penetração abaixo disto = ruído numérico
 
-_PLACE_KINDS = frozenset({"flush_mate", "cover_opening", "seat_in_pocket"})
-_AXIS_KINDS = frozenset({"coaxial_insert", "hinge_along_shared_edge"})
+# Encosto FACE-A-FACE: contato medido por folga/penetração no eixo do mate.
+_FLUSH_KINDS = frozenset({"flush_mate", "cover_opening"})
+# CONTENÇÃO/encaixe: a sobreposição de bbox é ESPERADA (pino no furo, peça no
+# bolso) — medir contato por overlap>0, NUNCA classificar como penetração.
+_CONTAIN_KINDS = frozenset({"coaxial_insert", "hinge_along_shared_edge", "seat_in_pocket"})
 # DOF esperado por kind (p/ o relatório; medição real é gate do dono).
 _EXPECTED_DOF = {
     "flush_mate": 0,
@@ -52,7 +55,12 @@ def _center(b: ModelStateBody) -> list[float] | None:
 
 
 def _mate_axis(m: ModelStateBody, r: ModelStateBody) -> int:
-    """Eixo do mate = aquele de maior separação entre os centros (o empilhamento)."""
+    """Eixo do mate = aquele de maior separação entre os centros (o empilhamento).
+
+    Limitação conhecida (laudo F8, baixa/latente): a inferência por centro erra se
+    o desalinhamento lateral exceder a altura do empilhamento. A medição robusta
+    viria da NORMAL da face-alvo declarada na recipe (top_planar/open_boundary) —
+    follow-up quando o verificador for plugado no loop (hoje só reporta, não-ligado)."""
 
     cm, cr = _center(m), _center(r)
     if cm is None or cr is None:
@@ -101,7 +109,7 @@ def verify_relation(spec: RelationSpec, state_after: ModelState | None) -> Geome
         )
         return report
 
-    if spec.kind in _PLACE_KINDS:
+    if spec.kind in _FLUSH_KINDS:
         axis = _mate_axis(m, r)
         gap = _gap_along(m, r, axis)
         report.gap_mm = round(gap, 3)
@@ -122,16 +130,26 @@ def verify_relation(spec: RelationSpec, state_after: ModelState | None) -> Geome
             )
         else:
             report.contact_ok = True
-    elif spec.kind in _AXIS_KINDS:
-        # Encaixe coaxial: a sobreposição de bbox é ESPERADA (o pino entra no furo).
+    elif spec.kind in _CONTAIN_KINDS:
+        # Contenção/encaixe (coaxial, bolso): sobreposição de bbox é ESPERADA (o
+        # pino entra no furo, a peça assenta no bolso) — NUNCA tratar como
+        # penetração. Contato = overlap>0; sem overlap, o encaixe não ocorreu.
         ov = _bbox_overlap_volume(m, r)
         report.contact_ok = ov > 0
         if ov <= 0:
             report.ok = False
             report.findings.append(
-                f"'{spec.moving}' não sobrepõe '{spec.reference}' — o encaixe coaxial "
-                "não se concretizou."
+                f"'{spec.moving}' não sobrepõe '{spec.reference}' — o encaixe "
+                f"({spec.kind}) não se concretizou."
             )
+    else:
+        # distribute_on_edge etc.: distribuição N-corpos, não um contato 2-corpos.
+        # Honestidade (invariante 6): reporta explicitamente que não há verificação
+        # geométrica de contato p/ este kind — em vez de devolver 'ok' silencioso.
+        report.findings.append(
+            f"kind '{spec.kind}' não tem verificação geométrica de contato 2-corpos "
+            "(distribuição N-corpos) — verificar no gate."
+        )
     # DOF não é medível do ModelState (precisa da junta) — gate do dono. Registra
     # o esperado p/ o relatório, sem afirmar medição.
     if spec.kind in _EXPECTED_DOF:
@@ -147,7 +165,7 @@ def propose_repair(
     ``offset`` = -folga (fecha) ou -penetração (afasta). ``None`` quando já há
     contato ou o kind não tem reparo fechado. NÃO auto-aplica (gate P6)."""
 
-    if spec.kind not in _PLACE_KINDS or report.gap_mm is None or report.contact_ok:
+    if spec.kind not in _FLUSH_KINDS or report.gap_mm is None or report.contact_ok:
         return None
     gap = report.gap_mm
     if gap > _CONTACT_TOL:

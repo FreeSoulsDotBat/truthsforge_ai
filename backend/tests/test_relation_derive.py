@@ -100,6 +100,52 @@ def test_coaxial_without_cylinder_still_derives_generic_target() -> None:
     assert "moving_radius_mm" not in d.measured
 
 
+def test_coaxial_axis_default_z_is_explicit_not_silent() -> None:
+    # Laudo (C): sem params.body_axis, a junta cai no default Z — mas isso fica
+    # DECLARADO no measured/notes (não é chute silencioso).
+    d = derive_relation(
+        RelationSpec(kind="coaxial_insert", moving="A", reference="B"),
+        _state(_body("A"), _body("B")),
+    )
+    assert d.measured.get("axis_default") == "z"
+    assert "body_axis" not in d.primitive_args
+    assert "Z default" in d.notes
+
+
+def test_coaxial_propagates_body_axis_param() -> None:
+    # eixo não-Z (ex.: dobradiça lateral): params.body_axis é propagado p/ a junta.
+    d = derive_relation(
+        RelationSpec(
+            kind="coaxial_insert", moving="Pino", reference="Caixa", params={"body_axis": "x"}
+        ),
+        _state(_body("Pino"), _body("Caixa")),
+    )
+    assert d.primitive_args["body_axis"] == "x"
+    assert d.measured["body_axis"] == "x"
+
+
+def test_hinge_derives_to_align_axis() -> None:
+    moving = _body("Folha", faces=[_face("t", type="cylindrical", radius=3)])
+    d = derive_relation(
+        RelationSpec(kind="hinge_along_shared_edge", moving="Folha", reference="Base"),
+        _state(moving, _body("Base")),
+    )
+    assert d.primitive_tool == "fusion.align_axis"
+    assert "furo do pino" in d.notes
+
+
+def test_distribute_invalid_count_is_typed_error() -> None:
+    # Laudo (D): int('abc') levantava ValueError CRU que escapava do executor.
+    ref = _body("Caixa", edges=[_straight_edge("e", 40)])
+    with pytest.raises(RelationUnderivableError):
+        derive_relation(
+            RelationSpec(
+                kind="distribute_on_edge", moving="x", reference="Caixa", params={"count": "abc"}
+            ),
+            _state(ref),
+        )
+
+
 def test_distribute_on_edge_derives_longest_edge() -> None:
     ref = _body("Caixa", edges=[_straight_edge("e_short", 10), _straight_edge("e_long", 40)])
     d = derive_relation(

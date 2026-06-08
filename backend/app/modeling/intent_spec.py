@@ -68,8 +68,16 @@ _UNCOUNTABLE = frozenset(
 _CONSUME = frozenset({"fusion.combine_bodies", "blender.apply_boolean"})
 _DELETE = frozenset({"fusion.delete_body"})
 # Posicionamento declarativo: resolvido em runtime (pode fundir-DENTRO ⇒ -1 ou
-# só juntar ⇒ 0). Net desconhecido ⇒ contagem não-contável.
-_DECLARATIVE = frozenset({"fusion.place_body", "fusion.align_axis", "fusion.distribute_along"})
+# só juntar ⇒ 0). Net desconhecido ⇒ contagem não-contável. Uma JUNTA também
+# invalida a hipótese de disjunção (encaixe coaxial sobrepõe bbox por projeto).
+_DECLARATIVE = frozenset(
+    {
+        "fusion.place_body",
+        "fusion.align_axis",
+        "fusion.distribute_along",
+        "fusion.relate_bodies",
+    }
+)
 
 
 def _clean_name(value: object) -> str | None:
@@ -124,6 +132,7 @@ def intent_from_plan(plan: ModelingPlan) -> IntentSpec:
     count = 0  # net de corpos (de um design VAZIO)
     count_known = True  # vira False em criação/consumo não contabilizável
     names_known = True  # vira False quando surge corpo de nome imprevisível
+    joints_present = False  # qualquer junta/placement → disjunção indeterminável
 
     for step in sorted(plan.steps, key=lambda s: s.seq):
         tool = step.tool_name
@@ -185,11 +194,14 @@ def intent_from_plan(plan: ModelingPlan) -> IntentSpec:
                 live.discard(nm)
         elif tool in _DECLARATIVE:
             count_known = False  # fuse-DENTRO (-1) ou joint (0): runtime decide
+            joints_present = True  # encaixe coaxial sobrepõe bbox → sem disjunção
             if tool == "fusion.distribute_along":
                 names_known = False  # cria N corpos auto-nomeados
             # place_body/align_axis não introduzem corpo de nome imprevisível:
             # names_known permanece (o "moving" já existe; um fuse só remove um
-            # nome de `live`, o que é seguro p/ órfão/interferência).
+            # nome de `live`, seguro p/ órfão). MAS a junta torna a disjunção
+            # indeterminável (coaxial sobrepõe; flush encosta) → não emitimos
+            # disjoint_groups (avaliador MUDO > falso-positivo de interferência).
         else:
             # read_only / sketch / export / feature neutra conhecida → net 0.
             # Tool desconhecida (fora do registro) → defensivo: não contabiliza.
@@ -201,7 +213,9 @@ def intent_from_plan(plan: ModelingPlan) -> IntentSpec:
 
     expected_count = count if (count_known and count >= 0) else None
     expected_bodies = [{"name": n} for n in sorted(live)] if names_known else []
-    disjoint = [sorted(live)] if (names_known and len(live) >= 2) else []
+    disjoint = (
+        [sorted(live)] if (names_known and not joints_present and len(live) >= 2) else []
+    )
 
     return IntentSpec(
         expected_body_count=expected_count,
