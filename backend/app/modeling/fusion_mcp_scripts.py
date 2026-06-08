@@ -337,33 +337,59 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             raise ToolError("fusion.sketch_not_found", "Sketch não encontrado.")
 
 
+        def _iter_all_bodies(design):
+            # F3/F7: corpos do root + proxies dos corpos dentro de occurrences
+            # (contexto de MONTAGEM). Sem isto, depois de make_component os
+            # corpos saem do root.bRepBodies e o joint/_find_body falhava com
+            # "Nenhum corpo solido na cena" — a junta ENTRE componentes precisa
+            # achar a face do corpo no proxy da occurrence. Root primeiro p/
+            # preservar a ordem/comportamento de quem ainda nao virou componente.
+            root = _root(design)
+            out = []
+            for i in range(root.bRepBodies.count):
+                out.append(root.bRepBodies.item(i))
+            try:
+                occs = root.occurrences
+                for i in range(occs.count):
+                    try:
+                        ob = occs.item(i).bRepBodies
+                        for j in range(ob.count):
+                            out.append(ob.item(j))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            return out
+
+
         def _find_body(design, body_ref=None):
             # Onda C + T4.2 (Fase 4): resolve body por:
             #   1. stable_id (TF.stable_id attribute) — sobrevive a rename.
             #   2. nome do body.
             #   3. indice (int/str) — volatil a reorder.
             #   4. ultimo criado quando ref vazio.
-            bodies = _root(design).bRepBodies
-            if bodies.count == 0:
+            # F7: inclui corpos dentro de occurrences (proxies de montagem).
+            bodies = _iter_all_bodies(design)
+            if len(bodies) == 0:
                 raise ToolError("fusion.no_body", "Nenhum corpo solido na cena.")
             if body_ref is None or body_ref == "":
-                return bodies.item(bodies.count - 1)
+                return bodies[len(bodies) - 1]
             ref = str(body_ref)
             # T4.2: stable_id primeiro — sobrevive a rename do usuario e a
             # recompute, ao contrario de nome/indice.
-            for i in range(bodies.count):
-                if _stable_id_of(bodies.item(i)) == ref:
-                    return bodies.item(i)
-            for i in range(bodies.count):
-                if bodies.item(i).name == ref:
-                    return bodies.item(i)
+            for b in bodies:
+                if _stable_id_of(b) == ref:
+                    return b
+            for b in bodies:
+                if b.name == ref:
+                    return b
             try:
                 idx = int(ref)
-                if 0 <= idx < bodies.count:
-                    return bodies.item(idx)
+                if 0 <= idx < len(bodies):
+                    return bodies[idx]
             except (TypeError, ValueError):
                 pass
-            _avail = [bodies.item(i).name for i in range(bodies.count)]
+            _avail = [b.name for b in bodies]
             raise ToolError(
                 "fusion.body_not_found",
                 "Corpo nao encontrado: " + ref + ". Corpos disponiveis: " + str(_avail),
