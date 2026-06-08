@@ -488,6 +488,17 @@ class ModelingExecutorService:
         agrega num único ``_StepOutcome`` (para o chamador, a placement é 1
         passo). Para no primeiro que falhar — os seguintes dependem dele."""
 
+        # Constituição (inegociável): uma tool declarativa `additive` NÃO pode
+        # "lavar" um concreto high_risk/destrutivo (ex.: combine_bodies da
+        # combine-DENTRO) e auto-executá-lo sem aprovação humana. Pré-varre e
+        # BLOQUEIA a expansão inteira ANTES de executar qualquer passo (fail-safe,
+        # sem deixar corpos soltos). A UX de aprovar o sub-passo é follow-up.
+        from app.modeling.tool_registry import requires_approval
+
+        blocked = [c for c in concrete if requires_approval(c.tool_name, c.risk_level)]
+        if blocked:
+            return self._spatial_expansion_blocked(original, blocked, plan)
+
         outcomes: list[_StepOutcome] = []
         for concrete_step in concrete:
             # Concretos não são F7 nem carregam ref → _maybe_resolve_spatial é
@@ -521,8 +532,56 @@ class ModelingExecutorService:
             step=updated,
             output=agg_output,
             tool_call_id=(last.tool_call_id if last is not None else None),
-            event=f"{original.seq}. {original.tool_name} → {n_ok}/{len(concrete)} passo(s) concreto(s)",
+            event=f"{original.seq}. {original.tool_name} → {n_ok}/{len(concrete)} concreto(s)",
             ok=ok,
+        )
+
+    def _spatial_expansion_blocked(
+        self,
+        original: ModelingPlanStep,
+        blocked: list[ModelingPlanStep],
+        plan: ModelingPlan,
+    ) -> _StepOutcome:
+        """Bloqueia (fail-safe) uma expansão F7 que conteria concreto high_risk
+        sem aprovação. Passo declarativo vira FALHO com erro tipado claro."""
+
+        names = ", ".join(sorted({c.tool_name for c in blocked}))
+        msg = (
+            f"Placement F7 expande para operação que exige aprovação humana "
+            f"({names}); não auto-executa (constituição: high_risk/destrutivo no "
+            f"caminho feliz). Aprovação de sub-passo é follow-up."
+        )
+        output: dict[str, Any] = {
+            "ok": False,
+            "tool_name": original.tool_name,
+            "transport": "backend",
+            "mcp_server": "spatial_resolver",
+            "error_code": "fusion.spatial_expansion_requires_approval",
+            "message": msg,
+        }
+        self._tracer.record(
+            "executor.step_error",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.warn,
+            message=f"Step {original.seq} F7 bloqueado: expande p/ {names} (aprovação)",
+            payload={"step_id": original.id, "tool_name": original.tool_name, "blocked": names},
+            plan_id=plan.id,
+        )
+        tool_call = self._record_tool_call(plan=plan, step=original, output=output, duration_ms=0)
+        updated = original.model_copy(
+            update={
+                "status": ModelingStepStatus.failed,
+                "output_json": output,
+                "error": msg,
+                "completed_at": now_utc(),
+            }
+        )
+        return _StepOutcome(
+            step=updated,
+            output=output,
+            tool_call_id=(tool_call.id if tool_call is not None else None),
+            event=f"{original.seq}. {original.tool_name} bloqueado (expansão high_risk)",
+            ok=False,
         )
 
     def _spatial_failure_outcome(
@@ -547,6 +606,9 @@ class ModelingExecutorService:
             payload={"step_id": step.id, "tool_name": step.tool_name, "error_code": code},
             plan_id=plan.id,
         )
+        # Paridade com a falha de dispatch normal: persiste o tool_call (status
+        # error) p/ a falha F7 não sumir do painel de tool_calls.
+        tool_call = self._record_tool_call(plan=plan, step=step, output=output, duration_ms=0)
         updated = step.model_copy(
             update={
                 "status": ModelingStepStatus.failed,
@@ -558,7 +620,7 @@ class ModelingExecutorService:
         return _StepOutcome(
             step=updated,
             output=output,
-            tool_call_id=None,
+            tool_call_id=(tool_call.id if tool_call is not None else None),
             event=f"{step.seq}. {step.tool_name} não resolvido (F7)",
             ok=False,
         )

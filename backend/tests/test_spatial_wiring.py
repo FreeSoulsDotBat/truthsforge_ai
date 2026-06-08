@@ -166,6 +166,26 @@ def test_run_expanded_aggregates_success(monkeypatch: pytest.MonkeyPatch) -> Non
     assert outcome.step.status is ModelingStepStatus.completed
 
 
+def test_run_expanded_blocks_high_risk_concrete(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Constituição: a expansão NÃO pode auto-executar um concreto high_risk
+    # (combine_bodies). Pré-varre e bloqueia ANTES de executar qualquer passo.
+    ex = _executor()
+    called: list[str] = []
+    monkeypatch.setattr(
+        ex,
+        "_execute_single_step",
+        lambda s, *, plan: (
+            called.append(s.tool_name)
+            or _StepOutcome(step=s, output={"ok": True}, tool_call_id=None, event="e", ok=True)
+        ),
+    )
+    concrete = [_step("fusion.add_cylinder"), _step("fusion.combine_bodies")]
+    outcome = ex._run_expanded_steps(_step("fusion.distribute_along"), concrete, _plan())
+    assert outcome.ok is False
+    assert called == []  # nada executou (fail-safe, sem corpos soltos)
+    assert outcome.output["error_code"] == "fusion.spatial_expansion_requires_approval"
+
+
 def test_run_expanded_stops_on_first_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     ex = _executor()
     calls: list[str] = []
