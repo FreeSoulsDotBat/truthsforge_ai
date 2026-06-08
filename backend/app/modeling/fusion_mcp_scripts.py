@@ -4137,15 +4137,22 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 faces = _faces_by_tokens(design, [face_token])
                 if faces.count > 0:
                     face = faces.item(0)
+            src = "token" if face is not None else ""
             if face is None:
                 # Junta ENTRE componentes: o corpo já pode ter virado componente
                 # (make_component) → precisa achar o proxy na occurrence.
                 body = _find_body(design, body_ref, include_occurrence_proxies=True)
-                coll = _select_faces(body, face_selector or "cylindrical")
+                sel = face_selector or "cylindrical"
+                coll = _select_faces(body, sel)
                 if coll.count > 0:
                     face = coll.item(0)
-            if face is None:
-                return None
+                    src = "selector:" + str(sel)
+                else:
+                    raise ToolError(
+                        "fusion.joint_geometry",
+                        "Nenhuma face '" + str(sel) + "' no corpo '" + str(body.name)
+                        + "' (faces=" + str(body.faces.count) + ").",
+                    )
             kp = adsk.fusion.JointKeyPointTypes.CenterKeyPoint
             try:
                 is_planar = (
@@ -4154,12 +4161,25 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 )
             except Exception:
                 is_planar = False
+            # Surface o motivo REAL (a API de JointGeometry com proxy de occurrence
+            # é API-blind) em vez de engolir num None silencioso.
             try:
                 if is_planar:
-                    return adsk.fusion.JointGeometry.createByPlanarFace(face, None, kp)
-                return adsk.fusion.JointGeometry.createByNonPlanarFace(face, kp)
-            except Exception:
-                return None
+                    geo = adsk.fusion.JointGeometry.createByPlanarFace(face, None, kp)
+                else:
+                    geo = adsk.fusion.JointGeometry.createByNonPlanarFace(face, kp)
+            except Exception as exc:
+                raise ToolError(
+                    "fusion.joint_geometry",
+                    "createBy" + ("Planar" if is_planar else "NonPlanar") + "Face falhou ("
+                    + src + ", planar=" + str(is_planar) + "): " + str(exc),
+                )
+            if geo is None:
+                raise ToolError(
+                    "fusion.joint_geometry",
+                    "createBy*Face devolveu None (" + src + ", planar=" + str(is_planar) + ").",
+                )
+            return geo
 
 
         def _joint(args):
