@@ -991,6 +991,42 @@ class OperationHistory(BaseModel):
     current_entities: list[EntityRef] = Field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# F8 Sub 3 — Auto-crítica estruturada (ADR-023). Substitui o juiz-de-visão como
+# fonte de feedback: classifica FALTOU/DEMAIS/ERRADO/CERTO por checagem
+# DETERMINÍSTICA (geométrica). INVARIANTE: REPORTA, nunca auto-executa correção.
+# ---------------------------------------------------------------------------
+
+
+class IntentSpec(BaseModel):
+    """O 'esperado' normalizado contra o qual o avaliador compara. Derivado
+    barato dos ``expected_*`` dos steps + tools declarativas + acceptance."""
+
+    expected_body_count: int | None = None
+    expected_bodies: list[dict[str, Any]] = Field(default_factory=list)  # {name?, dims_mm?}
+    disjoint_groups: list[list[str]] = Field(default_factory=list)  # refs que NÃO podem interferir
+    acceptance_text: str | None = None  # camada semântica (julgamento do LLM)
+
+
+class Finding(BaseModel):
+    kind: Literal["missing", "excess", "wrong", "correct"]
+    source: Literal["deterministic", "semantic"]
+    severity: Literal["info", "warn", "error", "critical"]
+    check_id: str  # body_count|orphan_body|interference|op_no_effect|...
+    entity_ref: str | None = None  # stable_id/token/op — NUNCA coordenada solta
+    detail: str
+    expected: Any | None = None
+    measured: Any | None = None
+
+
+class ModelVerdict(BaseModel):
+    overall: Literal["ok", "incomplete", "diverged", "broken"]
+    findings: list[Finding] = Field(default_factory=list)
+    summary: str = ""
+    # True quando os checks geométricos cobriram a intenção e NÃO precisou de LLM.
+    deterministic_complete: bool = False
+
+
 class ModelingSubGoalStatus(StrEnum):
     pending = "pending"
     completed = "completed"
