@@ -438,6 +438,11 @@ def run_plan_with_optional_loop(
     # do model_state (precisa do read-back fresco) e é o feedback primário que
     # aposenta o juiz-de-visão. Best-effort, flag OFF, **só reporta**.
     _maybe_evaluate_verdict(executor, executed_plan)
+    # F8: SURFAÇA o veredito ao usuário. O sistema não deve reportar "finalizado"
+    # limpo quando a auto-crítica detecta divergência (corpos a mais/órfãos/
+    # interferência) — era a queixa "diz que finalizou mas montou errado". Só
+    # REPORTA (não replaneja); o aviso entra nos events que o chat mostra.
+    result = _attach_verdict_notice(result, executed_plan)
     # Recarrega o plano da store para que o result devolvido ao chamador
     # (trace/audit/frontend) reflita o estado final real após correção visual e
     # captura de model_state, em vez do snapshot stale de antes dessas etapas.
@@ -445,6 +450,36 @@ def run_plan_with_optional_loop(
     if refreshed is not None and refreshed is not result.plan:
         result = result.model_copy(update={"plan": refreshed})
     return result
+
+
+_VERDICT_HEAD = {
+    "incomplete": "⚠️ Faltou algo no modelo",
+    "diverged": "⚠️ O modelo divergiu do pedido",
+    "broken": "⛔ Modelo inconsistente",
+}
+
+
+def _attach_verdict_notice(
+    result: ModelingExecutionResult, plan: ModelingPlan
+) -> ModelingExecutionResult:
+    """Anexa um aviso aos ``events`` quando a auto-crítica geométrica reprovou.
+
+    Honestidade: se o veredito (F8) viu corpos a mais/órfãos/interferência, o
+    usuário precisa SABER — não basta o chat dizer "finalizado". Report-only; não
+    altera status nem dispara replan. No-op quando não há veredito ou ele é ``ok``
+    (flag de auto-crítica OFF = sem veredito = comportamento idêntico ao anterior)."""
+
+    verdict = getattr(plan, "model_verdict", None)
+    if verdict is None or verdict.overall == "ok":
+        return result
+    issues = [f.detail for f in verdict.findings if f.kind in ("missing", "excess", "wrong")]
+    if not issues:
+        return result
+    head = _VERDICT_HEAD.get(verdict.overall, "⚠️ Atenção")
+    notice = f"{head}: " + "; ".join(issues[:5])
+    events = list(getattr(result, "events", []) or [])
+    events.append(notice)
+    return result.model_copy(update={"events": events})
 
 
 def _reload_plan(
@@ -468,9 +503,20 @@ def _maybe_visual_correction(
     """Passo 3 do motor genérico: render → crítica visual → replan corretivo.
 
     Best-effort, atrás de ``modeling_visual_verification_enabled`` (default OFF).
-    Render só existe no Fusion real; nunca propaga erro."""
+    Render só existe no Fusion real; nunca propaga erro.
+
+    F8: quando a auto-crítica GEOMÉTRICA está ligada, ela é a fonte primária e o
+    loop visual SE APOSENTA (ADR-023: "verificador geométrico primário; visual
+    opt-in/OFF"). Evita o replan destrutivo do visual — a causa dos corpos
+    duplicados (``BoxOuter (1)``/``Lid (2)``) — quando o F8 já está no comando."""
 
     if not settings.modeling_visual_verification_enabled:
+        return
+    if settings.modeling_self_critique_enabled:
+        logger.info(
+            "verificação visual ignorada: auto-crítica geométrica (F8) é primária "
+            "— evita replan destrutivo/duplicação de corpos."
+        )
         return
     try:
         from app.modeling.visual_critique import run_visual_correction

@@ -557,8 +557,8 @@ def test_capture_model_state_populates_and_persists_plan() -> None:
 
 def test_capture_model_state_skips_non_fusion() -> None:
     """Captura só roda para fusion; blender/outros não geram probe."""
-    from app.modeling.agent_loop import _maybe_capture_model_state
     from app.core.contracts import ModelingSoftware as _SW
+    from app.modeling.agent_loop import _maybe_capture_model_state
 
     store = _FakeStore()
 
@@ -576,3 +576,73 @@ def test_capture_model_state_skips_non_fusion() -> None:
     plan = plan.model_copy(update={"software_choice": _SW.blender})
     _maybe_capture_model_state(ex, plan)
     assert ex.calls == 0 and plan.model_state is None
+
+
+# ----------------------------------------------------- F8: surfacing do veredito
+
+
+def test_attach_verdict_notice_warns_on_divergence() -> None:
+    # O sistema não deve reportar "finalizado" limpo quando a auto-crítica viu
+    # corpos a mais/órfãos (ex.: BoxOuter (1)/Lid (2) duplicados do gate).
+    from app.core.contracts import (
+        Finding,
+        ModelingExecutionResult,
+        ModelVerdict,
+    )
+    from app.modeling.agent_loop import _attach_verdict_notice
+
+    plan = _plan(_step(1, "fusion.add_box", name="BoxOuter"))
+    plan.model_verdict = ModelVerdict(
+        overall="diverged",
+        findings=[
+            Finding(
+                kind="excess",
+                source="deterministic",
+                severity="warn",
+                check_id="orphan_body",
+                detail="corpo 'Lid (2)' não estava previsto (órfão).",
+            )
+        ],
+    )
+    result = ModelingExecutionResult(
+        plan=plan,
+        executed_step_ids=[],
+        blocked_step_ids=[],
+        events=["1. ok"],
+        tool_call_ids=[],
+    )
+    out = _attach_verdict_notice(result, plan)
+    assert any("Lid (2)" in e for e in out.events)
+    assert any("divergiu" in e for e in out.events)
+
+
+def test_attach_verdict_notice_noop_when_ok_or_absent() -> None:
+    from app.core.contracts import ModelingExecutionResult, ModelVerdict
+    from app.modeling.agent_loop import _attach_verdict_notice
+
+    plan = _plan(_step(1, "fusion.add_box", name="BoxOuter"))
+    base = ModelingExecutionResult(
+        plan=plan, executed_step_ids=[], blocked_step_ids=[], events=["1. ok"], tool_call_ids=[]
+    )
+    # sem veredito (flag OFF) → events idênticos.
+    assert _attach_verdict_notice(base, plan).events == ["1. ok"]
+    # veredito ok → idem.
+    plan.model_verdict = ModelVerdict(overall="ok")
+    assert _attach_verdict_notice(base, plan).events == ["1. ok"]
+
+
+def test_visual_correction_skipped_when_self_critique_on(monkeypatch) -> None:
+    # F8: com a auto-crítica geométrica ON, o loop visual (que duplicava corpos)
+    # se aposenta mesmo com a própria flag ON.
+    from app.core.config import settings
+    from app.modeling.agent_loop import _maybe_visual_correction
+
+    monkeypatch.setattr(settings, "modeling_visual_verification_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "modeling_self_critique_enabled", True, raising=False)
+
+    def _boom(*a, **k):  # pragma: no cover - não deve ser chamado
+        raise AssertionError("visual não deveria rodar com auto-crítica ON")
+
+    monkeypatch.setattr("app.modeling.visual_critique.run_visual_correction", _boom)
+    # não levanta → o visual foi pulado antes do import/execução.
+    _maybe_visual_correction(object(), object(), _plan(_step(1, "fusion.add_box", name="X")))
