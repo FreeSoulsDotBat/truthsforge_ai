@@ -62,7 +62,7 @@ def test_spec_from_args_requires_fields() -> None:
 
 
 def test_resolve_relation_expands_to_component_and_joint() -> None:
-    concrete, actions = resolve_relation(
+    concrete, actions, derived = resolve_relation(
         {"kind": "flush_mate", "moving": "Tampa", "reference": "Caixa"}, _state()
     )
     tools = [c.tool_name for c in concrete]
@@ -74,11 +74,51 @@ def test_resolve_relation_expands_to_component_and_joint() -> None:
     assert joint["body_two"] == "Caixa"
     # a primeira ação registra a derivação da relação (telemetria/auditoria).
     assert actions[0].kind == "derive_relation"
+    # o derived devolvido carrega o role medido (observabilidade do trace).
+    assert derived.primitive_tool == "fusion.place_body"
+    assert derived.primitive_args["target"] == {"body": "Caixa", "role": "top_planar"}
 
 
 def test_resolve_relation_unknown_kind_is_typed() -> None:
     with pytest.raises(RelationUnderivableError):
         resolve_relation({"kind": "teleport", "moving": "Tampa", "reference": "Caixa"}, _state())
+
+
+def test_placement_diag_resolves_token_to_geometry() -> None:
+    # Observabilidade: o trace transforma o token opaco em 'onde a face está'
+    # (corpo + centro + normal) — o que faltava p/ diagnosticar mis-place.
+    from app.modeling.executor import _placement_diag
+    from app.modeling.spatial_resolver import ConcreteStep
+
+    concrete = [
+        ConcreteStep("fusion.make_component", {"body_ref": "Tampa", "name": "Tampa"}),
+        ConcreteStep(
+            "fusion.joint",
+            {
+                "joint_type": "rigid",
+                "body_one": "Tampa",
+                "face_token_one": "tampa_bottom",
+                "body_two": "Caixa",
+                "face_token_two": "caixa_top",
+            },
+        ),
+    ]
+    diag = _placement_diag(concrete, _state())
+    faces = {f["token"]: f for f in diag["resolved_faces"]}
+    assert faces["caixa_top"]["body"] == "Caixa"
+    assert faces["caixa_top"]["center_mm"] == [30, 20, 20]  # mostra ONDE ancorou
+    assert faces["tampa_bottom"]["body"] == "Tampa"
+    assert any(b["name"] == "Caixa" for b in diag["bodies"])
+
+
+def test_placement_diag_marks_unresolved_token() -> None:
+    from app.modeling.executor import _placement_diag
+    from app.modeling.spatial_resolver import ConcreteStep
+
+    diag = _placement_diag(
+        [ConcreteStep("fusion.joint", {"face_token_two": "ghost_token"})], _state()
+    )
+    assert diag["resolved_faces"][0] == {"token": "ghost_token", "resolved": False}
 
 
 # --------------------------------------------------------------------------- #

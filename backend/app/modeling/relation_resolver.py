@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.contracts import ModelState, RelationSpec
+from app.core.contracts import DerivedRelation, ModelState, RelationSpec
 from app.modeling.relation_derive import RelationUnderivableError, derive_relation
 from app.modeling.spatial_resolver import ConcreteStep, ResolveAction, resolve_step
 
@@ -53,9 +53,10 @@ def spec_from_args(args: dict[str, Any]) -> RelationSpec:
 
 def resolve_relation(
     args: dict[str, Any], state: ModelState | None
-) -> tuple[list[ConcreteStep], list[ResolveAction]]:
+) -> tuple[list[ConcreteStep], list[ResolveAction], DerivedRelation]:
     """Deriva a relação (medindo) e expande na primitiva F7 → passos concretos +
-    ações. Erro tipado (``RelationUnderivableError``/``SpatialRefError``) — nunca
+    ações + a ``DerivedRelation`` (pra observabilidade: role/predicado medido).
+    Erro tipado (``RelationUnderivableError``/``SpatialRefError``) — nunca
     posiciona no escuro."""
 
     try:
@@ -72,4 +73,4 @@ def resolve_relation(
         spec.kind,
         f"{spec.kind} → {derived.primitive_tool} (medido: {derived.measured})",
     )
-    return concrete, [head, *actions]
+    return concrete, [head, *actions], derived

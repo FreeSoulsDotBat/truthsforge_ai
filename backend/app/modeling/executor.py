@@ -192,6 +192,69 @@ class _StepOutcome:
     ok: bool
 
 
+# Chaves de args concretos que carregam um token de entidade (face/aresta) a
+# resolver para geometria legível no trace de diagnóstico de posicionamento.
+_PLACEMENT_TOKEN_KEYS = ("face_token_one", "face_token_two", "edge", "edge_token", "token")
+
+
+def _entity_geom_from_state(token: str, state: Any) -> dict[str, Any] | None:
+    """Geometria LEGÍVEL de um token (face/aresta) a partir do ``ModelState`` —
+    faz o trace explicar QUAL face foi casada e ONDE ela está (corpo, centro,
+    normal). ``{token, resolved: False}`` quando o token não está no estado."""
+
+    if state is None or not token:
+        return None
+    for b in getattr(state, "bodies", []) or []:
+        for f in b.faces:
+            if f.token == token:
+                return {
+                    "token": token,
+                    "body": b.name,
+                    "kind": "face",
+                    "type": f.type,
+                    "center_mm": f.center_mm,
+                    "normal": f.normal_axis,
+                    "area_mm2": f.area_mm2,
+                    "radius_mm": f.radius_mm,
+                }
+        for e in b.edges:
+            if e.token == token:
+                return {
+                    "token": token,
+                    "body": b.name,
+                    "kind": "edge",
+                    "length_mm": e.length_mm,
+                    "start_mm": e.start_point_mm,
+                    "end_mm": e.end_point_mm,
+                }
+    return {"token": token, "resolved": False}
+
+
+def _placement_diag(concrete: list[Any], state: Any) -> dict[str, Any]:
+    """Diagnóstico de posicionamento para o trace: args concretos de cada passo +
+    geometria das faces/arestas casadas + bboxes dos corpos. Transforma um token
+    opaco em 'onde está', tornando o trace auto-explicativo para mis-place — sem
+    precisar de dump do plano."""
+
+    diag_steps: list[dict[str, Any]] = []
+    seen: list[str] = []
+    for c in concrete:
+        args = dict(getattr(c, "input_json", None) or {})
+        diag_steps.append({"tool": getattr(c, "tool_name", "?"), "args": args})
+        for k, v in args.items():
+            if isinstance(v, str) and v and (k in _PLACEMENT_TOKEN_KEYS or "token" in k):
+                if v not in seen:
+                    seen.append(v)
+    faces = [g for g in (_entity_geom_from_state(t, state) for t in seen) if g]
+    bodies = None
+    if state is not None:
+        bodies = [
+            {"name": b.name, "bbox_min_mm": b.bbox_min_mm, "bbox_max_mm": b.bbox_max_mm}
+            for b in (getattr(state, "bodies", []) or [])[:20]
+        ]
+    return {"concrete": diag_steps, "resolved_faces": faces, "bodies": bodies}
+
+
 class ModelingExecutorService:
     """Executes plans by dispatching steps and recording tool calls."""
 
@@ -493,6 +556,10 @@ class ModelingExecutorService:
                 "concrete_tools": [c.tool_name for c in concrete],
                 "actions": [a.detail for a in actions],
                 "had_state": state is not None,
+                # Observabilidade F7: args concretos da junta + geometria das faces
+                # casadas (token → corpo/centro/normal) + bboxes — o trace mostra
+                # QUAL face ancorou e ONDE (diagnóstico de mis-place sem dump).
+                "placement": _placement_diag(concrete, state),
             },
             plan_id=plan.id,
         )
@@ -515,7 +582,7 @@ class ModelingExecutorService:
         from app.modeling.spatial_resolver import materialize_steps
 
         state = capture_model_state(self, plan)
-        concrete, actions = resolve_relation(dict(step.input_json or {}), state)
+        concrete, actions, derived = resolve_relation(dict(step.input_json or {}), state)
         self._tracer.record(
             "executor.relation_resolved",
             source=ModelingTraceSource.backend,
@@ -528,6 +595,16 @@ class ModelingExecutorService:
                 "concrete_tools": [c.tool_name for c in concrete],
                 "actions": [a.detail for a in actions],
                 "had_state": state is not None,
+                # Observabilidade F8: role→primitiva derivada + geometria das faces
+                # casadas (token → corpo/centro/normal) + bboxes. O trace explica
+                # SOZINHO onde a peça foi ancorada (ex.: aro lateral vs centro).
+                "derived": {
+                    "primitive_tool": derived.primitive_tool,
+                    "primitive_args": derived.primitive_args,
+                    "measured": derived.measured,
+                    "notes": derived.notes,
+                },
+                "placement": _placement_diag(concrete, state),
             },
             plan_id=plan.id,
         )

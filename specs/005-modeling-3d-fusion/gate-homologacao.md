@@ -63,6 +63,21 @@
      "    out: " + ($_.output_json | ConvertTo-Json -Compress -Depth 8)
    }
    ```
+4. **O trace RICO por plan_id** (o que diz POR QUÊ o posicionamento saiu errado —
+   qual face foi casada e ONDE ela está). É a forma preferida: um plan_id já mostra
+   tudo, sem dump manual.
+   ```powershell
+   Invoke-RestMethod "http://127.0.0.1:8000/api/3d/plans/<PLAN_ID>/trace" |
+     Where-Object event_type -match 'spatial_resolved|relation_resolved|provenance_recorded|verdict|visual' |
+     ForEach-Object { $_.event_type; $_.payload | ConvertTo-Json -Compress -Depth 12 }
+   ```
+   No `spatial_resolved`/`relation_resolved`, o campo **`placement`** traz:
+   `concrete` (args reais da junta: `face_token_one/two`, `joint_type`, `axis`),
+   **`resolved_faces`** (cada token → `body`/`type`/`center_mm`/`normal` — onde a
+   face REALMENTE está) e `bodies` (bboxes). Para relações, `derived` mostra o
+   role medido (ex.: `target.role=open_boundary`). Com isso o mis-place se lê
+   direto: "ancorou em `center_mm=[55,20,20]` (aro lateral) em vez do centro
+   `[30,20,20]`".
 
 ---
 
