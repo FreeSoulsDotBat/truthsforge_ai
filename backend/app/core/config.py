@@ -212,6 +212,20 @@ class Settings(BaseModel):
     modeling_visual_max_rounds: int = Field(
         default_factory=lambda: _env_int("TRUTHS_FORGE_MODELING_VISUAL_MAX_ROUNDS", 2)
     )
+    # AÇÃO do loop visual: o replan corretivo que RECRIA corpos (e quando a visão
+    # alucina — "tampa ausente"/"groove inexistente" — duplica em BoxOuter_fixed/
+    # Lid (1)). É um FOOTGUN ao reaproveitar a env do gate F7 (visual ON). Por isso
+    # o replan destrutivo é OPT-IN explícito (default OFF): com a flag visual ON mas
+    # esta OFF, a visão só PERCEBE (read-back/laudo), nunca recria. A verificação
+    # primária é a auto-crítica GEOMÉTRICA (F8); a visão entra como achado semântico
+    # no veredito (ver modeling_self_critique_enabled). Ligue só p/ reproduzir o loop
+    # legado deliberadamente.
+    modeling_visual_autocorrect_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_VISUAL_AUTOCORRECT_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
     # Posicionamento PARAMÉTRICO declarativo (Frente F7, ADR-022). Quando
     # ``true``, antes de despachar um passo que carrega referência espacial
     # (``@token('F').center``, objeto ``{edge:.., point:along}``) OU uma das tools

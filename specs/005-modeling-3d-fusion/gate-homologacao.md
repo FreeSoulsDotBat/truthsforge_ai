@@ -19,7 +19,8 @@
    TRUTHS_FORGE_MODELING_DEBUG_LLM_TRACE=true
    TRUTHS_FORGE_MODELING_HIERARCHICAL_PLANNING_ENABLED=true     # F2 (decompõe→observa→replaneja)
    TRUTHS_FORGE_MODELING_LIVE_GEOMETRY_RECONCILIATION_ENABLED=true  # F5 (lê geometria ao vivo na edição)
-   TRUTHS_FORGE_MODELING_VISUAL_VERIFICATION_ENABLED=true       # Gate Visual (render→visão→replan) — destrava o F7
+   TRUTHS_FORGE_MODELING_VISUAL_VERIFICATION_ENABLED=true       # visão (percepção). O REPLAN destrutivo é opt-in à parte:
+   # TRUTHS_FORGE_MODELING_VISUAL_AUTOCORRECT_ENABLED=true      # ↑ só p/ reproduzir o loop legado (recria corpos / pode duplicar). Default OFF = seguro.
    TRUTHS_FORGE_MODELING_SPATIAL_RESOLUTION_ENABLED=true        # F7 (posicionamento paramétrico declarativo) — só p/ o Gate F7
    TRUTHS_FORGE_MODELING_PROVENANCE_ENABLED=true                # F8 (proveniência: o que cada passo mudou) — Gate F8.D1
    TRUTHS_FORGE_MODELING_SELF_CRITIQUE_ENABLED=true             # F8 (auto-crítica: faltou/demais/errado/certo) — Gate F8.D1

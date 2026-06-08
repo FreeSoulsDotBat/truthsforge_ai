@@ -515,6 +515,17 @@ def _maybe_visual_correction(
 
     if not settings.modeling_visual_verification_enabled:
         return
+    if not settings.modeling_visual_autocorrect_enabled:
+        # Default SEGURO: o replan visual que RECRIA corpos (BoxOuter_fixed/
+        # Lid (1) — a duplicação quando a visão alucina) é opt-in explícito. Sem
+        # ele, a verificação fica com a auto-crítica geométrica (F8) + a visão
+        # como achado semântico do veredito. Mata o footgun de reaproveitar a env
+        # do gate F7 (visual ON) e ver corpos duplicados.
+        logger.info(
+            "replan visual destrutivo desligado (default seguro; opt-in via "
+            "modeling_visual_autocorrect_enabled). Use a auto-crítica geométrica (F8)."
+        )
+        return
     if settings.modeling_self_critique_enabled:
         logger.info(
             "replan visual ignorado: auto-crítica geométrica (F8) é primária; a "

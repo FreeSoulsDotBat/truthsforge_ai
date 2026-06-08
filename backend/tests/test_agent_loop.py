@@ -631,18 +631,49 @@ def test_attach_verdict_notice_noop_when_ok_or_absent() -> None:
     assert _attach_verdict_notice(base, plan).events == ["1. ok"]
 
 
-def test_visual_correction_skipped_when_self_critique_on(monkeypatch) -> None:
-    # F8: com a auto-crítica geométrica ON, o loop visual (que duplicava corpos)
-    # se aposenta mesmo com a própria flag ON.
+def _boom_visual(*a, **k):  # pragma: no cover - não deve ser chamado
+    raise AssertionError("replan visual destrutivo não deveria rodar aqui")
+
+
+def test_visual_autocorrect_off_by_default_skips_replan(monkeypatch) -> None:
+    # O caso do gate m3d_plan_60232db8: env reaproveitada do F7 tem visual ON e
+    # self_critique OFF. O replan destrutivo (que alucinou e duplicou corpos) NÃO
+    # pode rodar — é opt-in (default OFF).
     from app.core.config import settings
     from app.modeling.agent_loop import _maybe_visual_correction
 
     monkeypatch.setattr(settings, "modeling_visual_verification_enabled", True, raising=False)
-    monkeypatch.setattr(settings, "modeling_self_critique_enabled", True, raising=False)
-
-    def _boom(*a, **k):  # pragma: no cover - não deve ser chamado
-        raise AssertionError("visual não deveria rodar com auto-crítica ON")
-
-    monkeypatch.setattr("app.modeling.visual_critique.run_visual_correction", _boom)
-    # não levanta → o visual foi pulado antes do import/execução.
+    monkeypatch.setattr(settings, "modeling_self_critique_enabled", False, raising=False)
+    monkeypatch.setattr(settings, "modeling_visual_autocorrect_enabled", False, raising=False)
+    monkeypatch.setattr("app.modeling.visual_critique.run_visual_correction", _boom_visual)
     _maybe_visual_correction(object(), object(), _plan(_step(1, "fusion.add_box", name="X")))
+
+
+def test_visual_correction_skipped_when_self_critique_on(monkeypatch) -> None:
+    # Mesmo com o opt-in ON, a auto-crítica geométrica (F8) é primária → o replan
+    # visual se aposenta (vira achado semântico do veredito, sem recriar corpos).
+    from app.core.config import settings
+    from app.modeling.agent_loop import _maybe_visual_correction
+
+    monkeypatch.setattr(settings, "modeling_visual_verification_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "modeling_visual_autocorrect_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "modeling_self_critique_enabled", True, raising=False)
+    monkeypatch.setattr("app.modeling.visual_critique.run_visual_correction", _boom_visual)
+    _maybe_visual_correction(object(), object(), _plan(_step(1, "fusion.add_box", name="X")))
+
+
+def test_visual_replan_runs_only_with_explicit_optin(monkeypatch) -> None:
+    # Opt-in ON + self_critique OFF → o loop legado roda (back-compat deliberado).
+    from app.core.config import settings
+    from app.modeling.agent_loop import _maybe_visual_correction
+
+    monkeypatch.setattr(settings, "modeling_visual_verification_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "modeling_visual_autocorrect_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "modeling_self_critique_enabled", False, raising=False)
+    called: list[bool] = []
+    monkeypatch.setattr(
+        "app.modeling.visual_critique.run_visual_correction",
+        lambda *a, **k: called.append(True),
+    )
+    _maybe_visual_correction(object(), object(), _plan(_step(1, "fusion.add_box", name="X")))
+    assert called == [True]
