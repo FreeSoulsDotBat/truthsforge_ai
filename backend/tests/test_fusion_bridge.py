@@ -135,6 +135,27 @@ class _FakeAutodeskMCPHandler(BaseHTTPRequestHandler):
         params = payload.get("params") or {}
         server.requests.append(payload)
 
+        require_session = getattr(server, "require_session", False)
+        req_session = self.headers.get("Mcp-Session-Id")
+
+        # ``notifications/initialized``: notificação (sem id) — aceita e encerra.
+        if method == "notifications/initialized":
+            self.send_response(202)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        # Servidor STATEFUL: exige o ``Mcp-Session-Id`` em tudo menos no
+        # initialize (reproduz o "400 Missing MCP-Session-Id header" real).
+        if require_session and method != "initialize" and req_session != server.session_id:
+            body = json.dumps({"error": "Missing MCP-Session-Id header"}).encode("utf-8")
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if method == "initialize":
             response = {
                 "jsonrpc": "2.0",
@@ -180,6 +201,9 @@ class _FakeAutodeskMCPHandler(BaseHTTPRequestHandler):
         raw = json.dumps(response).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
+        # Server stateful entrega o session id no header da resposta do initialize.
+        if require_session and method == "initialize":
+            self.send_header("Mcp-Session-Id", server.session_id)
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
@@ -191,17 +215,23 @@ class _FakeAutodeskMCPHandler(BaseHTTPRequestHandler):
 class _FakeAutodeskMCPServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, tool_result: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self, tool_result: dict[str, Any] | None = None, *, require_session: bool = False
+    ) -> None:
         super().__init__(("127.0.0.1", 0), _FakeAutodeskMCPHandler)
         self.requests: list[dict[str, Any]] = []
         self.tool_calls: list[dict[str, Any]] = []
         self.tool_result = tool_result or {"ok": True, "message": "executado", "artifact_paths": []}
+        self.require_session = require_session
+        self.session_id = "fake-session-9f3c"
 
 
 def _spawn_fake_autodesk_mcp(
     tool_result: dict[str, Any] | None = None,
+    *,
+    require_session: bool = False,
 ) -> tuple[_FakeAutodeskMCPServer, str]:
-    server = _FakeAutodeskMCPServer(tool_result)
+    server = _FakeAutodeskMCPServer(tool_result, require_session=require_session)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host, port = server.server_address
@@ -279,6 +309,35 @@ def test_adapter_status_prefers_official_fusion_mcp_http(tmp_path) -> None:
         assert status.status == "available"
         assert status.mcp_url == url
         assert "MCP Server Adapter" in status.detail
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_adapter_does_full_mcp_session_handshake(tmp_path) -> None:
+    # Regressão: o servidor MCP do Fusion virou STATEFUL — devolve o
+    # Mcp-Session-Id no header do initialize e exige repeti-lo em tudo, senão
+    # 400 "Missing MCP-Session-Id header". Sem threading da sessão o adapter
+    # caía em mock e os planos "completavam" sem tocar no Fusion.
+    server, url = _spawn_fake_autodesk_mcp(require_session=True)
+    try:
+        discovery = _write_discovery(tmp_path, 65000, "legacy-token")
+        adapter = FusionDesktopAdapter(
+            discovery_path=discovery,
+            autodesk_mcp_url=url,
+            enable_autodesk_mcp=True,
+            timeout_seconds=2.0,
+            status_cache_seconds=0.0,
+        )
+        status = adapter.status()
+        assert status.connected is True
+        assert status.transport == "http"
+        # O handshake emitiu notifications/initialized e o tools/list passou
+        # (só passa se o Mcp-Session-Id foi capturado e reenviado).
+        methods = [r.get("method") for r in server.requests]
+        assert "initialize" in methods
+        assert "notifications/initialized" in methods
+        assert "tools/list" in methods
     finally:
         server.shutdown()
         server.server_close()
