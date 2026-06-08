@@ -611,9 +611,9 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
     "fusion.place_body": ToolSchema(
         summary=(
             "F7 — posiciona um corpo por REFERÊNCIA declarativa (sem coordenada "
-            "crua): ancora uma face do corpo numa face de destino (mate flush ou "
-            "coaxial). O resolver de posicionamento expande em make_component + "
-            "junta paramétrica que sobrevive a recompute."
+            "crua): ancora uma face do corpo numa face de destino, FLUSH (faces "
+            "coplanares encostadas). O resolver expande em make_component + junta "
+            "rígida que sobrevive a recompute. Para eixo coaxial use align_axis."
         ),
         args={
             "body": ArgSpec(
@@ -633,18 +633,6 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
                 type="string",
                 unit=None,
                 example="@token('CAIXA_TOP')",
-            ),
-            "mate": ArgSpec(
-                "flush (faces coplanares) | coaxial (eixos alinhados). Default flush.",
-                type="string",
-                unit=None,
-                required=False,
-                example="flush",
-            ),
-            "offset_mm": ArgSpec(
-                "Folga/afastamento entre as faces (mm).",
-                required=False,
-                example=0.0,
             ),
         },
     ),

@@ -65,22 +65,32 @@ def test_detects_geom_ref_in_scalar_and_center() -> None:
     assert any(a.kind == "drop_geom_ref_value" for a in a2)
 
 
-def test_spares_valid_f7_at_refs_but_still_drops_raw_geom_refs() -> None:
-    # F7: @-ref VÁLIDA sobrevive (o resolver de posicionamento a resolve depois);
-    # a mesma referência na forma CRUA (sem @) continua sendo descartada.
+def test_at_refs_spared_only_when_resolver_flag_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    # F7: @-ref VÁLIDA só é poupada quando o resolver está ATIVO p/ resolvê-la.
+    # Com a flag OFF, ninguém resolve @-refs → o guardrail derruba (senão chegaria
+    # crua ao adapter e cairia em (0,0)). A forma CRUA (sem @) cai nas duas configs.
+    from app.core.config import settings
+
     spared = {
         "diameter_mm": 6,
         "origin_mm": ["@body('Placa').bbox.max_z - 20", 0, 0],
-        "axis": "@edge('E1').direction",
-        "target": "@token('CAIXA_TOP')",
     }
-    cleaned, actions = sanitize_tool_arguments("fusion.add_cylinder", spared)
-    assert cleaned == spared and actions == []  # nada removido
+    # Flag ON: o resolver resolverá os @-refs depois → sanitizer POUPA.
+    monkeypatch.setattr(settings, "modeling_spatial_resolution_enabled", True, raising=False)
+    cleaned_on, actions_on = sanitize_tool_arguments("fusion.add_cylinder", spared)
+    assert cleaned_on == spared and actions_on == []
 
+    # Flag OFF (default): @-ref em origin_mm é DERRUBADA (regressão do guardrail
+    # evitada).
+    monkeypatch.setattr(settings, "modeling_spatial_resolution_enabled", False, raising=False)
+    cleaned_off, actions_off = sanitize_tool_arguments("fusion.add_cylinder", spared)
+    assert "origin_mm" not in cleaned_off and cleaned_off["diameter_mm"] == 6
+    assert any(a.kind == "drop_geom_ref_value" for a in actions_off)
+
+    # Forma CRUA (sem @) cai independente da flag.
     raw = {"position_mm": ["Placa.bbox.max_z - 20", 0]}
-    cleaned_raw, actions_raw = sanitize_tool_arguments("fusion.add_cylinder", raw)
-    assert "position_mm" not in cleaned_raw  # forma crua ainda cai
-    assert any(a.kind == "drop_geom_ref_value" for a in actions_raw)
+    cleaned_raw, _ = sanitize_tool_arguments("fusion.add_cylinder", raw)
+    assert "position_mm" not in cleaned_raw
 
 
 def test_remaps_alias_axis_line_to_axis() -> None:

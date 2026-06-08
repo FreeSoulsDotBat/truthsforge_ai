@@ -256,6 +256,56 @@ def test_distribute_along_validates_inputs() -> None:
         expand_placement("fusion.distribute_along", {"edge": "E_HINGE", "count": 0}, _state())
 
 
+def test_distribute_along_count_and_spacing_typed_not_valueerror() -> None:
+    st = _state()
+    # count/spacing malformados → SpatialRefError tipado (não ValueError cru que
+    # escaparia do execute_plan inteiro).
+    with pytest.raises(SpatialRefError):
+        expand_placement("fusion.distribute_along", {"edge": "E_HINGE", "count": "abc"}, st)
+    with pytest.raises(SpatialRefError):
+        expand_placement(
+            "fusion.distribute_along",
+            {"edge": "E_HINGE", "count": 3, "spacing_mm": "@nope"},
+            st,
+        )
+    # count como @-ref válido resolve (bbox.max_z=20 → 20-17=3 nós).
+    steps, _ = expand_placement(
+        "fusion.distribute_along",
+        {"edge": "E_HINGE", "count": "@body('Caixa').bbox.max_z - 17", "fit": True},
+        st,
+    )
+    assert len([s for s in steps if s.tool_name == "fusion.add_cylinder"]) == 3
+
+
+def test_distribute_along_spacing_overflow_is_typed() -> None:
+    # 5 nós × 20 mm = 80 mm numa aresta de 60 mm → erro tipado, não clamp/overlap.
+    with pytest.raises(SpatialRefError):
+        expand_placement(
+            "fusion.distribute_along",
+            {"edge": "E_HINGE", "count": 5, "spacing_mm": 20},
+            _state(),
+        )
+
+
+def test_place_body_empty_token_and_unsupported_controls_rejected() -> None:
+    st = _state()
+    base = {"body": "Tampa", "anchor": "@token('TAMPA_BOTTOM')", "target": "@token('CAIXA_TOP')"}
+    # Token vazio não pode passar o guard (cairia no "último corpo" no handler).
+    with pytest.raises(SpatialRefError):
+        expand_placement("fusion.place_body", {**base, "anchor": "@token('')"}, st)
+    # mate/offset ainda não suportados pela junta → erro tipado, não no-op.
+    with pytest.raises(SpatialRefError):
+        expand_placement("fusion.place_body", {**base, "mate": "coaxial"}, st)
+    with pytest.raises(SpatialRefError):
+        expand_placement("fusion.place_body", {**base, "offset_mm": 2}, st)
+
+
+def test_resolve_step_ref_in_unsupported_field_is_typed() -> None:
+    # Ref espacial em campo FORA do whitelist não vaza crua p/ o Fusion.
+    with pytest.raises(SpatialRefError):
+        resolve_step("fusion.add_rectangle", {"corner1_mm": "@token('CAIXA_TOP').center"}, _state())
+
+
 # --------------------------------------------------------------------------- #
 # resolve_step (entrada única do executor)                                    #
 # --------------------------------------------------------------------------- #

@@ -195,6 +195,24 @@ def test_resolve_scalar_rejects_vector_without_component() -> None:
         resolve_scalar("@token('F_TOP').center", _state())  # vetor, não escalar
 
 
+def test_resolve_scalar_zero_division_is_typed() -> None:
+    # Divisão/módulo por zero → SpatialRefError tipado (não ZeroDivisionError cru
+    # escapando do executor).
+    st = _state()
+    for expr in ("10 / 0", "10 % 0", "@body('Placa').bbox.max_x / (3 - 3)"):
+        with pytest.raises(SpatialRefError):
+            resolve_scalar(expr, st)
+
+
+def test_resolve_axis_rejects_body_or_point_ref() -> None:
+    # Corpo/ponto NÃO define direção — erro tipado em vez de normalizar a posição.
+    st = _state()
+    with pytest.raises(SpatialRefError):
+        resolve_axis({"body": "Placa"}, st)
+    with pytest.raises(SpatialRefError):
+        resolve_axis("@token('F_TOP').center", st)
+
+
 def test_resolve_scalar_blocks_code_injection() -> None:
     st = _state()
     # Sem eval: nomes/chamadas/atributos arbitrários são rejeitados.

@@ -77,9 +77,18 @@ class SanitizeAction:
 
 def _value_has_geom_ref(value: Any) -> bool:
     if isinstance(value, str):
-        # F7: @-refs válidas (@token('..')/@body('..').bbox.max_z) são poupadas —
-        # só a forma CRUA sem @ (Placa.bbox.max_z) é referência proibida.
-        return bool(_GEOM_REF_RE.search(strip_at_refs(value)))
+        # F7: @-refs válidas (@token('..')/@body('..').bbox.max_z) só são
+        # POUPADAS quando o resolver de posicionamento está ATIVO p/ resolvê-las.
+        # Com a flag OFF ninguém resolve @-refs → trate cru (derruba como legado),
+        # senão um @-ref chegaria cru ao adapter e cairia em (0,0) (mis-place).
+        from app.core.config import settings
+
+        probe = (
+            strip_at_refs(value)
+            if settings.modeling_spatial_resolution_enabled
+            else value
+        )
+        return bool(_GEOM_REF_RE.search(probe))
     if isinstance(value, (list, tuple)):
         return any(_value_has_geom_ref(item) for item in value)
     return False

@@ -26,6 +26,7 @@ Fora da gramática / token inexistente → :class:`SpatialRefError` tipado
 from __future__ import annotations
 
 import ast
+import math
 import operator
 import re
 from typing import Any
@@ -427,7 +428,16 @@ def _eval_ast(node: ast.AST) -> float:
             raise SpatialRefError("booleano não é número")
         return float(node.value)
     if isinstance(node, ast.BinOp) and type(node.op) in _BIN_OPS:
-        return _BIN_OPS[type(node.op)](_eval_ast(node.left), _eval_ast(node.right))
+        left, right = _eval_ast(node.left), _eval_ast(node.right)
+        try:
+            result = _BIN_OPS[type(node.op)](left, right)
+        except ZeroDivisionError as exc:
+            # divisão/módulo por zero (divisor literal 0 OU @-ref que resolve 0):
+            # erro tipado em vez de ZeroDivisionError cru escapando do executor.
+            raise SpatialRefError("divisão/módulo por zero na expressão escalar") from exc
+        if not math.isfinite(result):
+            raise SpatialRefError("resultado não-finito na expressão escalar")
+        return result
     if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPS:
         return _UNARY_OPS[type(node.op)](_eval_ast(node.operand))
     raise SpatialRefError("expressão aritmética não suportada (só números e + - * / % ( ))")
@@ -470,8 +480,15 @@ def resolve_axis(ref: Any, state: ModelState | None) -> Vec3:
             elif "face" in ref or "token" in ref:
                 ref["axis"] = "normal"
     vkind, val = _resolve_any(ref, state)
-    if vkind == "scalar":
-        raise SpatialRefError(f"referência {ref!r} resolveu escalar, esperava eixo")
+    if vkind != "axis":
+        # vector (centro/canto de corpo, ponto de face/aresta) NÃO é direção —
+        # normalizar a POSIÇÃO viraria um eixo espúrio (chute). Só 'axis'
+        # (normal de face, direção de aresta) é eixo legítimo.
+        raise SpatialRefError(
+            f"referência {ref!r} resolveu {vkind}, esperava eixo; um corpo/ponto não "
+            "define direção — use @edge('E').direction, @token('F').normal, cardinal "
+            "(+z) ou [x,y,z]"
+        )
     return _normalize(val)
 
 

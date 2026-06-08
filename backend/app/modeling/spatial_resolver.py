@@ -115,6 +115,19 @@ def _has_at(value: Any) -> bool:
     return False
 
 
+def _has_leftover_ref(value: Any) -> bool:
+    """Sobrou alguma ref espacial (objeto ou @-string) num valor já resolvido?
+    Vasculha listas/dicts aninhados."""
+
+    if is_spatial_ref(value) or _has_at(value):
+        return True
+    if isinstance(value, dict):
+        return any(_has_leftover_ref(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_leftover_ref(v) for v in value)
+    return False
+
+
 def _resolve_point_field(value: Any, state: ModelState | None) -> tuple[Any, bool]:
     """Resolve um campo-ponto. ``True`` no 2º item se mudou algo."""
 
@@ -156,6 +169,15 @@ def resolve_inline_refs(
                 actions.append(ResolveAction("resolve_inline_ref", key, f"{value!r} → {new!r}"))
         except SpatialRefError:
             raise
+    # Ref espacial sobrando em campo FORA do whitelist (ex.: corner1_mm,
+    # points_mm) seria despachada CRUA ao Fusion → mis-place. Falha tipada em
+    # vez de chute (invariante "NUNCA chuta").
+    for key, value in out.items():
+        if _has_leftover_ref(value):
+            raise SpatialRefError(
+                f"referência espacial em campo não suportado: {key!r} "
+                "(o resolver só cobre campos de ponto/eixo/escalar conhecidos)"
+            )
     for a in actions:
         logger.info("spatial_resolver %s [%s] %s", a.kind, a.field, a.detail)
     return out, actions
@@ -165,15 +187,17 @@ def resolve_inline_refs(
 # 2) Expansão das tools declarativas F7                                       #
 # --------------------------------------------------------------------------- #
 def _face_token_of(ref: Any) -> str | None:
+    # Token VAZIO ('') é tratado como ausência: senão passaria o guard
+    # `is None` do expander e o handler cairia no "último corpo" (mis-mate).
     if isinstance(ref, dict):
-        return ref.get("face") or ref.get("token")
+        return (ref.get("face") or ref.get("token")) or None
     if isinstance(ref, str) and ref.strip().startswith("@"):
         try:
             kind, id_, _ = parse_at_expr(ref)
         except SpatialRefError:
             return None
         if kind in ("token", "face"):
-            return id_
+            return id_ or None
     return None
 
 
@@ -211,25 +235,35 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
             "referenciar FACES — @token('<face>') ou {face:'<token>'}. O mate do Fusion "
             "casa faces, não coordenadas."
         )
+    # mate/offset/clearance ainda NÃO são aplicados pelo handler _joint (gate
+    # P6): falha tipada em vez de virar no-op silencioso (hoje flush==coaxial e
+    # offset não afasta nada). Não prometemos o que não entregamos.
     mate = str(args.get("mate") or "flush").lower()
+    if mate != "flush":
+        raise SpatialRefError(
+            f"place_body: mate='{mate}' ainda não é suportado pela junta (gate P6); "
+            "use align_axis para coaxialidade."
+        )
+    for opt in ("offset_mm", "clearance_mm"):
+        if args.get(opt) not in (None, 0, 0.0):
+            raise SpatialRefError(
+                f"place_body: '{opt}' ainda não é aplicado pela junta (gate P6)."
+            )
     # Placement estático = junta rígida casando as duas faces resolvidas.
-    # (revolute/cilíndrica móvel é papel de align_axis.)
+    # (revolute/cilíndrica móvel é papel de align_axis.) body_two=None é
+    # tolerado: o handler resolve a face por token (findEntityByToken).
     jargs: dict[str, Any] = {
         "joint_type": "rigid",
         "body_one": body,
         "face_token_one": anchor_face,
         "body_two": _owner_body_name(state, target_face),
         "face_token_two": target_face,
-        "mate": mate,
     }
-    for opt in ("offset_mm", "clearance_mm"):
-        if args.get(opt) is not None:
-            jargs[opt] = resolve_scalar(args[opt], state) if _has_at(args[opt]) else args[opt]
     return [
         ConcreteStep(
             "fusion.make_component", {"body_ref": body, "name": body}, f"Componente {body}"
         ),
-        ConcreteStep("fusion.joint", jargs, f"Monta {body} ({mate})"),
+        ConcreteStep("fusion.joint", jargs, f"Monta {body} (flush)"),
     ]
 
 
@@ -264,8 +298,15 @@ def _distribute_fractions(
     if spacing_mm and not fit and length and length > 0:
         step = float(spacing_mm)
         total = step * (count - 1)
+        if total > length:
+            # Não cabe: erro tipado em vez de clamp silencioso (nós colados/
+            # sobrepostos seriam um "chute" geométrico).
+            raise SpatialRefError(
+                f"spacing_mm não cabe na aresta: {count} nós exigem {total:.1f} mm, "
+                f"aresta tem {length:.1f} mm. Reduza count/spacing_mm ou use fit=True."
+            )
         start = (length - total) / 2.0  # centra a fileira na aresta
-        return [max(0.0, min(1.0, (start + i * step) / length)) for i in range(count)]
+        return [(start + i * step) / length for i in range(count)]
     # fit / default: distribui uniformemente incluindo as pontas.
     return [i / (count - 1) for i in range(count)]
 
@@ -289,16 +330,27 @@ def _prototype_step(
 
 def _expand_distribute_along(args: dict[str, Any], state: ModelState | None) -> list[ConcreteStep]:
     edge_tok = args.get("edge")
-    count = int(args.get("count") or 0)
-    if not edge_tok or count < 1:
+    raw_count = args.get("count")
+    if not edge_tok or raw_count is None:
         raise SpatialRefError("distribute_along exige 'edge' (token) e 'count' >= 1")
+    # count/spacing_mm podem vir como @-ref ou número — resolve_scalar (no-op em
+    # número) garante erro TIPADO em vez de ValueError cru que escaparia do
+    # execute_plan inteiro.
+    try:
+        count = int(resolve_scalar(raw_count, state))
+    except SpatialRefError:
+        raise
+    except (TypeError, ValueError):
+        raise SpatialRefError(f"distribute_along: 'count' inválido: {raw_count!r}")
+    if count < 1:
+        raise SpatialRefError("distribute_along: 'count' precisa ser >= 1")
     edge = find_edge(state, edge_tok)
     proto = dict(args.get("prototype") or {})
     alternate = args.get("alternate")
     axis_vec = list(resolve_axis({"edge": edge_tok}, state))  # eixo dos nós = direção da aresta
-    fractions = _distribute_fractions(
-        count, edge.length_mm, args.get("spacing_mm"), args.get("fit")
-    )
+    spacing = args.get("spacing_mm")
+    spacing_val = resolve_scalar(spacing, state) if spacing is not None else None
+    fractions = _distribute_fractions(count, edge.length_mm, spacing_val, args.get("fit"))
 
     steps: list[ConcreteStep] = []
     groups: dict[str, list[str]] = {}
