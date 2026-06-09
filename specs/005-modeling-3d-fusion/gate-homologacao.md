@@ -485,6 +485,13 @@ dimensão (não só re-run)? Resultado define se o diff afirma `deleted` ou marc
 
 ## Gate F9 — Posicionamento relativo + estado semântico + enforcement (ADR-024)
 
+> ✅ **APROVADO no Fusion real (2026-06-09).** P1 align (center/gap/corner — tampa
+> centrada + 2 mm acima), P3 enforcement, edição idempotente (delta-zero = no-op) e
+> P2 roles + `container`/`is_open_boundary` (shell) todos validados. Achados do gate
+> corrigidos em sequência (schema align/gap_mm; gap pela normal do destino +
+> recentraliza; place_body idempotente; discovery pergunta montagem; abertura por
+> loop-com-furo). Confirmação opcional pendente: `lid`/`touches` num build flush.
+
 Código entregue mock-verde, atrás de **três flags próprias** (default OFF). Gateie
 **uma flag por vez** (são independentes). Pré-requisito comum: F0 já corrige o parser
 do `ModelState` p/ preservar `is_open_boundary` (sem flag).
