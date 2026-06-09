@@ -353,6 +353,10 @@ def enforce_relative_coord(
 
 _AXIS_TO_INDEX = {"x": 0, "y": 1, "z": 2}
 _PLACE_ALIGN_MODES = frozenset({"center", "coplanar", "gap", "edge", "corner"})
+# Abaixo deste delta (mm) o corpo JÁ está na posição calculada → placement vira
+# no-op (mover por ~0 faz o adapter rejeitar com invalid_dimensions; comum ao
+# re-aplicar um place_body numa EDIÇÃO de modelo já montado).
+_PLACE_NOOP_TOL = 1e-3
 
 
 def _mate_axis_index(target_face: ModelStateFace, ac: list[float], tc: list[float]) -> int:
@@ -582,6 +586,12 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
         anchor_face=anchor_face,
         target_face=target_face,
     )
+    if all(abs(d) < _PLACE_NOOP_TOL for d in delta):
+        # Corpo já está na posição calculada (Δ≈0) — NÃO emite move_body (o adapter
+        # rejeita translação zero). Placement vira no-op de sucesso. Comum ao editar
+        # um modelo já montado (gate: place_body num corpo já posicionado).
+        logger.debug("place_body %s: Δ≈0, corpo já posicionado — no-op", body)
+        return []
     return [
         ConcreteStep(
             "fusion.move_body",

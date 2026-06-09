@@ -670,7 +670,9 @@ class ModelingExecutorService:
             if not oc.ok:
                 break
 
-        ok = bool(outcomes) and all(o.ok for o in outcomes)
+        # Expansão VAZIA = no-op de sucesso (placement cujo Δ≈0: o corpo já está na
+        # posição calculada — comum em edição). all([])==True; não tratar como falha.
+        ok = all(o.ok for o in outcomes)
         n_ok = sum(1 for o in outcomes if o.ok)
         last = outcomes[-1] if outcomes else None
 
@@ -691,7 +693,11 @@ class ModelingExecutorService:
             "transport": "backend",
             "mcp_server": "spatial_resolver",
             "expanded": [_expanded_entry(o) for o in outcomes],
-            "message": (last.output.get("message") if last else "F7: sem passos concretos"),
+            "message": (
+                last.output.get("message")
+                if last
+                else "Placement: corpo já na posição calculada (sem movimento)."
+            ),
         }
         status = ModelingStepStatus.completed if ok else ModelingStepStatus.failed
         updated = original.model_copy(

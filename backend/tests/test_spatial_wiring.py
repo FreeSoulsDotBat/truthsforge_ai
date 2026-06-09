@@ -41,14 +41,16 @@ def _state() -> ModelState:
             ),
             ModelStateBody(
                 name="Tampa",
-                bbox_min_mm=[0, 0, 20],
-                bbox_max_mm=[60, 40, 23],
+                # Tampa flutuando 1,5 mm acima do topo da caixa → place_body PRECISA
+                # mover (se já estivesse coincidente, o resolver faria no-op).
+                bbox_min_mm=[0, 0, 21.5],
+                bbox_max_mm=[60, 40, 24.5],
                 faces=[
                     ModelStateFace(
                         token="TAMPA_BOTTOM",
                         type="planar",
                         normal_axis="-z",
-                        center_mm=[30, 20, 20],
+                        center_mm=[30, 20, 21.5],
                     ),
                 ],
             ),
@@ -294,6 +296,16 @@ def test_run_expanded_does_not_reblock_inherited_high_risk_level(
     outcome = ex._run_expanded_steps(_step("fusion.place_body"), concrete, _plan())
     assert outcome.ok is True
     assert called == ["fusion.make_component", "fusion.joint"]  # executou, não bloqueou
+
+
+def test_run_expanded_empty_is_success_noop() -> None:
+    # Expansão VAZIA (placement com Δ≈0 — corpo já na posição) é no-op de SUCESSO,
+    # não falha (gate: edição re-aplicava place_body, dava move_body zero e morria).
+    ex = _executor()
+    outcome = ex._run_expanded_steps(_step("fusion.place_body"), [], _plan())
+    assert outcome.ok is True
+    assert outcome.step.status is ModelingStepStatus.completed
+    assert "já na posição" in outcome.output["message"]
 
 
 def test_run_expanded_stops_on_first_failure(monkeypatch: pytest.MonkeyPatch) -> None:

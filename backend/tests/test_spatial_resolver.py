@@ -223,6 +223,40 @@ def test_align_axis_accepts_predicate_descriptor() -> None:
     assert steps[0].input_json["face_token_two"] == "CAIXA_BORE"
 
 
+def test_place_body_noop_when_already_positioned() -> None:
+    # Corpo já na posição (faces coincidentes) → Δ≈0 → NENHUM move_body. O adapter
+    # rejeita translação zero (invalid_dimensions); comum ao re-aplicar place_body
+    # numa EDIÇÃO de modelo já montado (gate: edição do teste 2 falhava em loop).
+    st = ModelState(
+        bodies=[
+            ModelStateBody(
+                name="Caixa",
+                stable_id="C",
+                faces=[
+                    ModelStateFace(
+                        token="CTOP", type="planar", normal_axis="+z", center_mm=[30, 20, 20]
+                    )
+                ],
+            ),
+            ModelStateBody(
+                name="Tampa",
+                stable_id="T",
+                faces=[
+                    ModelStateFace(
+                        token="TBOT", type="planar", normal_axis="-z", center_mm=[30, 20, 20]
+                    )
+                ],
+            ),
+        ]
+    )
+    steps, _ = expand_placement(
+        "fusion.place_body",
+        {"body": "Tampa", "anchor": "@token('TBOT')", "target": "@token('CTOP')"},
+        st,
+    )
+    assert steps == []
+
+
 def test_place_body_requires_face_refs() -> None:
     with pytest.raises(SpatialRefError):
         expand_placement(
