@@ -635,6 +635,22 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
                 unit=None,
                 example={"body": "Caixa", "role": "top_planar"},
             ),
+            "align": ArgSpec(
+                "F9 — MODO de alinhamento: 'center' (default, centra+encosta nos 3 "
+                "eixos) | 'coplanar' (só encosta, mantém o offset lateral) | 'gap' "
+                "(encosta deixando folga 'gap_mm') | 'edge'/'corner' (alinha por "
+                "borda/canto). Mapeie a intenção: 'X mm acima/folga/respiro'→'gap'; "
+                "'ao canto'→'corner'; 'pela borda'→'edge'; senão 'center'.",
+                type="string",
+                unit=None,
+                example="gap",
+            ),
+            "gap_mm": ArgSpec(
+                "Folga entre as faces quando align='gap' (a distância pedida).",
+                type="number",
+                unit="mm",
+                example=2,
+            ),
         },
     ),
     "fusion.align_axis": ToolSchema(

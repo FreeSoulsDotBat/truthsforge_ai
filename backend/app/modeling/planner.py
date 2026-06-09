@@ -875,15 +875,19 @@ def _f9_relative_nudge() -> str:
     parts: list[str] = []
     if settings.modeling_align_modes_enabled:
         parts.append(
-            "- ALINHAMENTO do `place_body` (campo `align`, escolha o MODO certo em\n"
-            "  vez de aceitar 'centralizar tudo'):\n"
-            "  • `center` (default): centra E encosta nos 3 eixos (tampa concêntrica).\n"
-            "  • `coplanar`: só encosta no eixo da normal, MANTÉM o offset em-plano\n"
-            "    (use quando o corpo já está na posição lateral certa).\n"
-            "  • `gap` + `gap_mm`: encosta deixando uma FOLGA medida (junta de\n"
-            "    expansão, respiro) — o backend escolhe o lado pela face âncora.\n"
-            "  • `edge`/`corner`: alinha por BORDA/CANTO (via caixa-limite). Só p/\n"
-            "    corpos alinhados aos eixos — rotacionado vira erro (use center).\n"
+            "- POSICIONAR UM CORPO SOBRE/CONTRA OUTRO: crie-o com PRIMITIVA\n"
+            "  (`add_box`/`add_cylinder`) e posicione com `place_body` — NÃO embuta a\n"
+            "  posição num `sketch`+`extrude` (o corpo nasceria na origem, no lugar\n"
+            "  errado). O `place_body` MEDE as faces e calcula a posição exata.\n"
+            "- ALINHAMENTO do `place_body` (campo `align` — escolha pelo que o pedido\n"
+            "  diz, NÃO centralize tudo por padrão):\n"
+            "  • 'X mm acima/abaixo/folga/respiro/separados por X' → `align:'gap'` +\n"
+            "    `gap_mm:X` (encosta deixando a folga; o backend escolhe o lado).\n"
+            "  • 'ao canto/cantos coincidentes' → `align:'corner'`.\n"
+            "  • 'pela borda/rente a uma borda' → `align:'edge'`.\n"
+            "  • 'mantendo a posição lateral/só encostar' → `align:'coplanar'`.\n"
+            "  • encostar e centralizar (tampa concêntrica) → `align:'center'` (default).\n"
+            "  edge/corner exigem corpos alinhados aos eixos (rotacionado vira erro).\n"
         )
     if settings.modeling_semantic_state_enabled:
         parts.append(
