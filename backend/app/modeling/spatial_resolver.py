@@ -367,6 +367,42 @@ def _mate_axis_index(target_face: ModelStateFace, ac: list[float], tc: list[floa
     return max(range(3), key=lambda i: abs(tc[i] - ac[i]))
 
 
+def _normal_sign_along(face: Any, axis: str) -> int:
+    """+1/-1 se a normal OUTWARD da face aponta no sentido +/-axis; 0 se não-cardinal."""
+
+    na = ((getattr(face, "normal_axis", None) or "") if face is not None else "").strip().lower()
+    if na in ("+" + axis, axis):
+        return 1
+    if na == "-" + axis:
+        return -1
+    return 0
+
+
+def _gap_direction(
+    na: int, anchor_face: Any, target_face: Any, ac: list[float], tc: list[float]
+) -> int:
+    """Sentido (+1/-1) em que a folga do align='gap' abre. A folga abre p/ o lado
+    de FORA do alvo — a normal OUTWARD da face de DESTINO (gate teste 2: tampa
+    criada ABAIXO do topo deve subir, não enfiar na caixa). Cascata de fallback:
+    normal do alvo → normal INWARD da âncora (-outward) → posição pré-move (frágil)
+    → erro tipado. NUNCA chuta o lado."""
+
+    axis = "xyz"[na]
+    s = _normal_sign_along(target_face, axis)
+    if s:
+        return s
+    s = _normal_sign_along(anchor_face, axis)
+    if s:
+        return -s  # normal da âncora é OUTWARD do corpo móvel; o volume vai p/ o INWARD
+    if abs(ac[na] - tc[na]) > 1e-6:
+        return 1 if ac[na] > tc[na] else -1
+    raise SpatialRefError(
+        "place_body align='gap': faces sem normal cardinal e coincidentes no eixo do "
+        "mate — lado da folga indeterminável. Use align='coplanar' ou reposicione antes.",
+        code=ALIGN_GAP_SIDE_UNDETERMINABLE,
+    )
+
+
 def _is_axis_aligned(body: Any) -> bool:
     """Heurística p/ edge/corner: o corpo está alinhado aos eixos do mundo? A
     evidência vem das normais das faces planares (cardinais quando alinhado). Sem
@@ -402,6 +438,8 @@ def _compute_place_delta(
     gap_mm: float = 0.0,
     moving: Any | None = None,
     reference: Any | None = None,
+    anchor_face: Any | None = None,
+    target_face: Any | None = None,
 ) -> list[float]:
     """Calcula o delta de translação do place_body por MODO de alinhamento (F9
     Pilar 1). ``center`` reproduz o snap concêntrico atual bit-a-bit; os demais
@@ -420,20 +458,13 @@ def _compute_place_delta(
         return delta
 
     if align == "gap":
-        # Coplanar + folga N no LADO em que a face ANCHOR já está (sinal medido, não
-        # fixo). Faces coincidentes com folga≠0 → lado indeterminável → erro tipado.
+        # Coplanar + folga N no lado de FORA do alvo (sentido da normal OUTWARD da
+        # face de destino, não da posição pré-move — gate teste 2). Sem sinal
+        # derivável → erro tipado (NUNCA chuta o lado).
         delta = [0.0, 0.0, 0.0]
         base = tc[na] - ac[na]
         if gap_mm:
-            side = ac[na] - tc[na]
-            if abs(side) < 1e-6:
-                raise SpatialRefError(
-                    "place_body align='gap': faces coincidentes no eixo do mate — o lado "
-                    "da folga é indeterminável. Posicione o corpo do lado desejado antes "
-                    "ou use align='coplanar' (folga 0).",
-                    code=ALIGN_GAP_SIDE_UNDETERMINABLE,
-                )
-            base += gap_mm * (1.0 if side > 0 else -1.0)
+            base += gap_mm * _gap_direction(na, anchor_face, target_face, ac, tc)
         delta[na] = round(base, 4)
         return delta
 
@@ -539,7 +570,15 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
     reference = _owner_body(state, target_face.token) if align in ("edge", "corner") else None
     gap_mm = _coerce_float(args.get("gap_mm") or args.get("gap"))
     delta = _compute_place_delta(
-        align, ac, tc, na, gap_mm=gap_mm, moving=moving, reference=reference
+        align,
+        ac,
+        tc,
+        na,
+        gap_mm=gap_mm,
+        moving=moving,
+        reference=reference,
+        anchor_face=anchor_face,
+        target_face=target_face,
     )
     return [
         ConcreteStep(

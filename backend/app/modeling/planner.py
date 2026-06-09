@@ -875,10 +875,12 @@ def _f9_relative_nudge() -> str:
     parts: list[str] = []
     if settings.modeling_align_modes_enabled:
         parts.append(
-            "- POSICIONAR UM CORPO SOBRE/CONTRA OUTRO: crie-o com PRIMITIVA\n"
-            "  (`add_box`/`add_cylinder`) e posicione com `place_body` — NÃO embuta a\n"
-            "  posição num `sketch`+`extrude` (o corpo nasceria na origem, no lugar\n"
-            "  errado). O `place_body` MEDE as faces e calcula a posição exata.\n"
+            "- POSICIONAR UM CORPO SOBRE/CONTRA/ALINHADO A OUTRO é SEMPRE um passo\n"
+            "  `place_body`, NUNCA por coordenada. Crie o corpo com PRIMITIVA na ORIGEM\n"
+            "  (sem `origin_mm`/`center_mm`, sem embutir a posição num sketch) e DEPOIS\n"
+            "  acrescente um passo `place_body` que MEDE as faces e calcula o lugar\n"
+            "  exato. NÃO tente acertar a posição no `add_box`/`extrude` — o corpo nasce\n"
+            "  na origem e o `place_body` o encaixa (faltou esse passo = peças soltas).\n"
             "- ALINHAMENTO do `place_body` (campo `align` — escolha pelo que o pedido\n"
             "  diz, NÃO centralize tudo por padrão):\n"
             "  • 'X mm acima/abaixo/folga/respiro/separados por X' → `align:'gap'` +\n"

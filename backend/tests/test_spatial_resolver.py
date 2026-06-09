@@ -525,6 +525,25 @@ def test_compute_delta_gap_opens_on_anchor_side() -> None:
     assert _compute_place_delta("gap", [30, 20, 18], [30, 20, 20], 2, gap_mm=2) == [0.0, 0.0, 0.0]
 
 
+def test_compute_delta_gap_follows_target_normal_not_position() -> None:
+    # Bug do gate teste 2: a tampa é criada ABAIXO do topo (ac=0 < tc=20). A folga
+    # deve abrir no sentido da NORMAL OUTWARD do destino (topo +z → sobe p/ z=22),
+    # NÃO pelo lado pré-move (que daria -z e enfiaria a tampa 2 mm DENTRO da caixa).
+    box_top = ModelStateFace(token="BT", type="planar", normal_axis="+z")
+    lid_bottom = ModelStateFace(token="LB", type="planar", normal_axis="-z")
+    delta = _compute_place_delta(
+        "gap", [0, 0, 0], [0, 0, 20], 2, gap_mm=2,
+        anchor_face=lid_bottom, target_face=box_top,
+    )
+    assert delta == [0.0, 0.0, 22.0]
+    # Só a normal da âncora (alvo sem cardinal) → INWARD da âncora (-(-z)=+z).
+    delta2 = _compute_place_delta(
+        "gap", [0, 0, 0], [0, 0, 20], 2, gap_mm=2,
+        anchor_face=lid_bottom, target_face=ModelStateFace(type="planar"),
+    )
+    assert delta2 == [0.0, 0.0, 22.0]
+
+
 def test_compute_delta_gap_coincident_faces_is_typed_error() -> None:
     # Faces coincidentes no eixo do mate + folga≠0 → lado indeterminável → erro
     # tipado (NUNCA chuta o lado).
