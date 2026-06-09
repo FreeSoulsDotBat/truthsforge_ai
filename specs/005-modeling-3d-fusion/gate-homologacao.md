@@ -425,10 +425,11 @@ Código entregue mock-verde, atrás de flags próprias (default OFF). Pré-requi
 ### F8.D1 — Proveniência + auto-crítica geométrica
 Ligue `TRUTHS_FORGE_MODELING_PROVENANCE_ENABLED=true` +
 `TRUTHS_FORGE_MODELING_SELF_CRITIQUE_ENABLED=true`. O `MODELING_VISUAL_VERIFICATION_
-ENABLED` agora pode ficar **ON ou OFF**: com a auto-crítica ligada, o visual NÃO
-replaneja mais (não duplica corpos) — vira entrada `source=semantic` do veredito.
-Use `HIERARCHICAL_PLANNING=false` p/ um build **one-shot** (a asserção geométrica de
-contagem/órfão vale só nele). Rode um build simples, ex.: caixa 60×40×20 ocada + tampa.
+ENABLED` pode ficar **ON ou OFF** (a visão vira entrada `source=semantic` do veredito;
+o replan destrutivo é opt-in à parte e fica OFF). O `HIERARCHICAL_PLANNING` também
+pode ficar **ON ou OFF**: a auto-crítica agora avalia no nível do TURNO (agrega os
+blocos) — com hierárquico ON, veja `orchestrator.turn_verdict`; com OFF, `agent_loop.
+verdict`. Rode um build simples, ex.: caixa 60×40×20 ocada + tampa.
 
 **Observar (filtre por `provenance_recorded|agent_loop.verdict`):**
 1. `executor.provenance_recorded` por passo mutativo, com `summary` coerente

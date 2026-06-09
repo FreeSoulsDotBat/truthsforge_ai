@@ -53,9 +53,12 @@ from app.core.contracts import (
     ModelingRiskLevel,
     ModelingSoftware,
     ModelingStepStatus,
+    ModelingSubGoal,
     ModelingSubGoalStatus,
     ModelingTraceLevel,
     ModelingTraceSource,
+    ModelState,
+    ModelVerdict,
     now_utc,
 )
 from app.modeling.agent_loop import run_plan_with_optional_loop
@@ -232,15 +235,24 @@ class ModelingChatOrchestrator:
         # rodaram. Limpa-os para o primary não persistir 'completed' com todos
         # os steps presos em 'pending' (estado inconsistente p/ quem renderiza
         # progresso a partir de plan.steps).
-        updated = primary.model_copy(
-            update={
-                "steps": [],
-                "sub_goals": sub_goals,
-                "status": final_status,
-                "model_state": current_state,
-                "updated_at": now_utc(),
-            }
+        # F8: veredito GEOMÉTRICO no nível do TURNO (agrega TODOS os blocos), p/ a
+        # auto-crítica valer COM o planejamento hierárquico ligado — não só em
+        # build one-shot. Só reporta; surfaça o aviso nos events.
+        turn_verdict, verdict_msg = self._hierarchical_turn_verdict(
+            primary, sub_goals, current_state
         )
+        if verdict_msg:
+            events.append(verdict_msg)
+        update_fields: dict[str, Any] = {
+            "steps": [],
+            "sub_goals": sub_goals,
+            "status": final_status,
+            "model_state": current_state,
+            "updated_at": now_utc(),
+        }
+        if turn_verdict is not None:
+            update_fields["model_verdict"] = turn_verdict
+        updated = primary.model_copy(update=update_fields)
         self.store.upsert_modeling_plan(updated)
         return ModelingExecutionResult(
             plan=updated,
@@ -249,6 +261,67 @@ class ModelingChatOrchestrator:
             events=events,
             tool_call_ids=tool_calls,
         )
+
+    def _hierarchical_turn_verdict(
+        self,
+        primary: ModelingPlan,
+        sub_goals: list[ModelingSubGoal],
+        final_state: ModelState | None,
+    ) -> tuple[ModelVerdict | None, str | None]:
+        """F8: deriva o ``IntentSpec`` do TURNO agregando os steps + a proveniência
+        de TODOS os blocos num plano sintético one-shot e avalia contra o estado
+        final. Assim a contagem/órfão/interferência valem com o planejamento
+        HIERÁRQUICO ON (antes só valiam em build one-shot). Só reporta — devolve
+        ``(verdict, aviso)``; ``(None, None)`` quando a flag está OFF ou falha."""
+
+        if not settings.modeling_self_critique_enabled:
+            return None, None
+        try:
+            from app.modeling.intent_spec import intent_from_plan
+            from app.modeling.model_critique import build_model_verdict, verdict_notice
+            from app.modeling.provenance import aggregate_history, history_from_plan
+
+            block_plans: list[ModelingPlan] = []
+            if hasattr(self.store, "get_modeling_plan"):
+                for sg in sub_goals:
+                    if sg.block_plan_id:
+                        bp = self.store.get_modeling_plan(sg.block_plan_id)
+                        if bp is not None:
+                            block_plans.append(bp)
+            all_steps = [s for bp in block_plans for s in bp.steps]
+            # Plano sintético one-shot (parent=None) → a derivação do IntentSpec
+            # enxerga o TURNO inteiro, não um bloco isolado.
+            agg = primary.model_copy(update={"steps": all_steps, "parent_plan_id": None})
+            intent = intent_from_plan(agg)
+            records = []
+            for bp in block_plans:
+                hist = history_from_plan(bp)
+                if hist is not None:
+                    records.extend(hist.records)
+            history = aggregate_history(records) if records else None
+            verdict = build_model_verdict(intent, history, final_state)
+            self._tracer.record(
+                "orchestrator.turn_verdict",
+                source=ModelingTraceSource.backend,
+                level=(
+                    ModelingTraceLevel.warn
+                    if verdict.overall != "ok"
+                    else ModelingTraceLevel.info
+                ),
+                message=f"Auto-crítica do turno: {verdict.summary}",
+                payload={
+                    "plan_id": primary.id,
+                    "overall": verdict.overall,
+                    "findings": len(verdict.findings),
+                    "blocks": len(block_plans),
+                    "expected_body_count": intent.expected_body_count,
+                },
+                plan_id=primary.id,
+            )
+            return verdict, verdict_notice(verdict)
+        except Exception as exc:  # noqa: BLE001 - auto-crítica é observabilidade
+            logger.debug("veredito de turno (hierárquico) falhou: %s", exc)
+            return None, None
 
     # ------------------------------------------------------------------
     # lifecycle

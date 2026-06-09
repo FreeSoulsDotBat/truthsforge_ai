@@ -22,6 +22,8 @@ from app.core.contracts import (
     ModelingSoftware,
     ModelingStepStatus,
     ModelingSubGoal,
+    ModelState,
+    ModelStateBody,
 )
 from app.modeling.chat_orchestrator import ModelingChatOrchestrator
 from app.modeling.executor import _StepOutcome
@@ -34,6 +36,9 @@ class _FakeStore:
     def upsert_modeling_plan(self, plan: ModelingPlan) -> ModelingPlan:
         self.plans[plan.id] = plan
         return plan
+
+    def get_modeling_plan(self, plan_id: str) -> ModelingPlan | None:
+        return self.plans.get(plan_id)
 
     def record_trace_events_bulk(self, events: list[Any]) -> None:
         pass
@@ -203,3 +208,57 @@ def test_run_execution_dispatches_hierarchical_only_with_flag_and_subgoals(
     monkeypatch.setattr(co.settings, "modeling_hierarchical_planning_enabled", True)
     orch._run_execution(primary)
     assert planner.planned_seqs == [1]
+
+
+def _named_block(plan_id: str, name: str) -> ModelingPlan:
+    return ModelingPlan(
+        id=plan_id,
+        prompt="x",
+        kind=ModelingPlanKind.edit,
+        parent_plan_id="m3d_plan_primary",
+        software_choice=ModelingSoftware.fusion,
+        status=ModelingPlanStatus.completed,
+        steps=[
+            ModelingPlanStep(
+                seq=1,
+                title=f"add {name}",
+                software=ModelingSoftware.fusion,
+                tool_name="fusion.add_box",
+                status=ModelingStepStatus.completed,
+                input_json={"name": name},
+            )
+        ],
+    )
+
+
+def test_hierarchical_turn_verdict_aggregates_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    # F8: o veredito agora vale COM o hierárquico ligado — agrega os corpos
+    # nomeados de TODOS os blocos e pega o órfão (corpo a mais) no estado final.
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "modeling_self_critique_enabled", True, raising=False)
+    orch, _planner, store = _orch([ModelingPlanStatus.completed, ModelingPlanStatus.completed])
+    store.plans["b1"] = _named_block("b1", "Caixa")
+    store.plans["b2"] = _named_block("b2", "Tampa")
+    primary = _primary_with_subgoals(2)
+    primary.sub_goals[0].block_plan_id = "b1"
+    primary.sub_goals[1].block_plan_id = "b2"
+    final = ModelState(
+        bodies=[
+            ModelStateBody(name="Caixa", stable_id="ID1"),
+            ModelStateBody(name="Tampa", stable_id="ID2"),
+            ModelStateBody(name="Caixa_fixed", stable_id="ID3"),  # órfão duplicado
+        ]
+    )
+    verdict, notice = orch._hierarchical_turn_verdict(primary, primary.sub_goals, final)
+    assert verdict is not None and verdict.overall == "diverged"
+    assert notice and "Caixa_fixed" in notice
+
+
+def test_hierarchical_turn_verdict_off_without_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "modeling_self_critique_enabled", False, raising=False)
+    orch, _planner, _store = _orch([ModelingPlanStatus.completed])
+    primary = _primary_with_subgoals(1)
+    assert orch._hierarchical_turn_verdict(primary, primary.sub_goals, None) == (None, None)

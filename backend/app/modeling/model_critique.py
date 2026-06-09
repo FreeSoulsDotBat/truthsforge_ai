@@ -23,7 +23,7 @@ from app.core.contracts import (
     OperationHistory,
 )
 
-__all__ = ["build_model_verdict", "render_verdict_block"]
+__all__ = ["build_model_verdict", "render_verdict_block", "verdict_notice"]
 
 _OVERLAP_EPS = 1e-3  # mm — sobreposição de bbox abaixo disto = contato, não interferência
 
@@ -226,6 +226,26 @@ _KIND_LABEL = {
     "wrong": "ERRADO",
     "correct": "OK",
 }
+
+_VERDICT_HEAD = {
+    "incomplete": "⚠️ Faltou algo no modelo",
+    "diverged": "⚠️ O modelo divergiu do pedido",
+    "broken": "⛔ Modelo inconsistente",
+}
+
+
+def verdict_notice(verdict: ModelVerdict | None) -> str | None:
+    """Aviso curto p/ o usuário quando o veredito reprovou (corpos a mais/órfãos/
+    interferência/visão). O sistema não deve dizer "finalizado" limpo num modelo
+    quebrado. ``None`` quando não há veredito ou ele é ``ok``. Só reporta."""
+
+    if verdict is None or verdict.overall == "ok":
+        return None
+    issues = [f.detail for f in verdict.findings if f.kind in ("missing", "excess", "wrong")]
+    if not issues:
+        return None
+    head = _VERDICT_HEAD.get(verdict.overall, "⚠️ Atenção")
+    return f"{head}: " + "; ".join(issues[:5])
 
 
 def render_verdict_block(verdict: ModelVerdict | None) -> str:

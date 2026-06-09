@@ -453,13 +453,6 @@ def run_plan_with_optional_loop(
     return result
 
 
-_VERDICT_HEAD = {
-    "incomplete": "⚠️ Faltou algo no modelo",
-    "diverged": "⚠️ O modelo divergiu do pedido",
-    "broken": "⛔ Modelo inconsistente",
-}
-
-
 def _attach_verdict_notice(
     result: ModelingExecutionResult, plan: ModelingPlan
 ) -> ModelingExecutionResult:
@@ -470,14 +463,11 @@ def _attach_verdict_notice(
     altera status nem dispara replan. No-op quando não há veredito ou ele é ``ok``
     (flag de auto-crítica OFF = sem veredito = comportamento idêntico ao anterior)."""
 
-    verdict = getattr(plan, "model_verdict", None)
-    if verdict is None or verdict.overall == "ok":
+    from app.modeling.model_critique import verdict_notice
+
+    notice = verdict_notice(getattr(plan, "model_verdict", None))
+    if notice is None:
         return result
-    issues = [f.detail for f in verdict.findings if f.kind in ("missing", "excess", "wrong")]
-    if not issues:
-        return result
-    head = _VERDICT_HEAD.get(verdict.overall, "⚠️ Atenção")
-    notice = f"{head}: " + "; ".join(issues[:5])
     events = list(getattr(result, "events", []) or [])
     events.append(notice)
     return result.model_copy(update={"events": events})
