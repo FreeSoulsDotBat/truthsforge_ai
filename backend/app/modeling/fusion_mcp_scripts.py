@@ -515,11 +515,14 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
 
 
         def _face_is_open_boundary(face):
-            # F9 Pilar 2: a face esta na borda de uma ABERTURA? Marca True quando
-            # tem ao menos uma aresta OPEN (pertence a 1 so face) — a definicao
-            # padrao de borda de superficie aberta (tampa removida / shell aberto).
-            # Solido fechado (toda aresta com 2 faces) -> False, e o open_boundary
-            # cai no fallback documentado (maior planar +z). None se nao avaliavel.
+            # F9 Pilar 2: a face esta na borda de uma ABERTURA? Dois sinais do B-Rep:
+            # (1) SURFACE body / casca aberta: a face tem uma aresta OPEN (pertence a
+            #     1 so face) — a borda padrao de superficie aberta.
+            # (2) SOLIDO OCADO (shell, ex.: caixa com topo removido): o solido e
+            #     manifold (toda aresta com 2 faces), entao a abertura nao e aresta
+            #     solta — e o BURACO na face do topo/labio: um quadro com loop
+            #     interno. face.loops.count > 1 (1 loop externo + o loop da abertura).
+            #     Solido cheio: toda face tem 1 loop -> nao marca (sem falso-positivo).
             try:
                 for _i in range(face.edges.count):
                     try:
@@ -528,7 +531,12 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                     except Exception:
                         continue
             except Exception:
-                return None
+                pass
+            try:
+                if face.loops.count > 1:
+                    return True
+            except Exception:
+                pass
             return False
 
 
