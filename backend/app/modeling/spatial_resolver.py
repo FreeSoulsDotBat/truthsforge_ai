@@ -458,10 +458,12 @@ def _compute_place_delta(
         return delta
 
     if align == "gap":
-        # Coplanar + folga N no lado de FORA do alvo (sentido da normal OUTWARD da
-        # face de destino, não da posição pré-move — gate teste 2). Sem sinal
-        # derivável → erro tipado (NUNCA chuta o lado).
-        delta = [0.0, 0.0, 0.0]
+        # CONCÊNTRICO no plano (como center) + folga no eixo da normal, no lado de
+        # FORA do alvo. "Tampa 2 mm acima" = CENTRADA e 2 mm acima (gate teste 2: o
+        # gap antes herdava o "não recentralizar" do coplanar e deixava a tampa
+        # deslocada). O sentido da folga vem da normal OUTWARD do destino, não da
+        # posição pré-move; sem sinal derivável → erro tipado (NUNCA chuta o lado).
+        delta = [round(tc[i] - ac[i], 4) for i in range(3)]
         base = tc[na] - ac[na]
         if gap_mm:
             base += gap_mm * _gap_direction(na, anchor_face, target_face, ac, tc)

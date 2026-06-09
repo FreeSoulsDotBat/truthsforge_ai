@@ -544,6 +544,19 @@ def test_compute_delta_gap_follows_target_normal_not_position() -> None:
     assert delta2 == [0.0, 0.0, 22.0]
 
 
+def test_compute_delta_gap_recenters_in_plane() -> None:
+    # Gate teste 2: tampa criada deslocada (centro 0,0) sobre uma caixa centrada em
+    # (25,25). O gap CENTRA no plano (como center) E abre a folga só no eixo da
+    # normal — "tampa 2 mm acima" fica centrada E 2 mm acima do topo (z=30).
+    box_top = ModelStateFace(token="BT", type="planar", normal_axis="+z")
+    lid_bottom = ModelStateFace(token="LB", type="planar", normal_axis="-z")
+    delta = _compute_place_delta(
+        "gap", [0, 0, 0], [25, 25, 30], 2, gap_mm=2,
+        anchor_face=lid_bottom, target_face=box_top,
+    )
+    assert delta == [25.0, 25.0, 32.0]
+
+
 def test_compute_delta_gap_coincident_faces_is_typed_error() -> None:
     # Faces coincidentes no eixo do mate + folga≠0 → lado indeterminável → erro
     # tipado (NUNCA chuta o lado).
