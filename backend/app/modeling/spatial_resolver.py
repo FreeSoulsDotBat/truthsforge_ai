@@ -236,13 +236,6 @@ def _resolve_face(ref: Any, state: ModelState | None) -> ModelStateFace | None:
     return None
 
 
-def _normal_axis_index(normal_axis: str | None) -> int:
-    """Eixo (0=x,1=y,2=z) da normal de uma face planar — o eixo do MATE. Default z."""
-
-    letter = (normal_axis or "+z").strip().lower()[-1:]
-    return {"x": 0, "y": 1, "z": 2}.get(letter, 2)
-
-
 def _owner_body_name(state: ModelState | None, face_token: str | None) -> str | None:
     if not face_token:
         return None
@@ -306,11 +299,11 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
             "place_body: faces sem center_mm medido — rode query_geometry (o delta "
             "determinístico vem da medição do centro das faces)."
         )
-    # Eixo do mate = normal da face ANCHOR (ex.: base da tampa = -z → eixo z). O
-    # delta zera a folga SÓ nesse eixo (mantém X/Y — não re-centra surpresa).
-    axis = _normal_axis_index(anchor_face.normal_axis)
-    delta = [0.0, 0.0, 0.0]
-    delta[axis] = round(tc[axis] - ac[axis], 4)
+    # Snap CONCÊNTRICO: o centro da face ANCHOR mapeia EXATAMENTE no centro da face
+    # TARGET nas 3 direções → a tampa CENTRA no topo da caixa E encosta (folga 0),
+    # ONDE QUER que o add_box a tenha criado. (Mate-axis-only deixava a tampa longe
+    # quando o planner a criava deslocada em X/Y — gate m3d_plan_fc7bc5.)
+    delta = [round(tc[i] - ac[i], 4) for i in range(3)]
     return [
         ConcreteStep(
             "fusion.move_body",

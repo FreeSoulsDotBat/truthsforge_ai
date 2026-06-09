@@ -151,6 +151,42 @@ def test_place_body_static_deterministic_move_closes_gap() -> None:
     assert actions[0].kind == "expand_placement"
 
 
+def test_place_body_centers_body_created_offset() -> None:
+    # Gate m3d_plan_fc7bc5: o add_box criou a tampa deslocada (Y=80..120, longe da
+    # caixa em Y=0..40). O snap CONCÊNTRICO centra E encosta nas 3 direções — não
+    # deixa a tampa longe (mate-axis-only deixava). anchor=[30,100,0] → [30,20,20]
+    # → Δ=[0,-80,20].
+    st = ModelState(
+        bodies=[
+            ModelStateBody(
+                name="Caixa",
+                stable_id="C",
+                faces=[
+                    ModelStateFace(
+                        token="CTOP", type="planar", normal_axis="+z", center_mm=[30, 20, 20]
+                    )
+                ],
+            ),
+            ModelStateBody(
+                name="Tampa",
+                stable_id="T",
+                faces=[
+                    ModelStateFace(
+                        token="TBOT", type="planar", normal_axis="-z", center_mm=[30, 100, 0]
+                    )
+                ],
+            ),
+        ]
+    )
+    steps, _ = expand_placement(
+        "fusion.place_body",
+        {"body": "Tampa", "anchor": "@token('TBOT')", "target": "@token('CTOP')"},
+        st,
+    )
+    assert steps[0].tool_name == "fusion.move_body"
+    assert steps[0].input_json["translation_mm"] == [0.0, -80.0, 20.0]
+
+
 def test_place_body_role_descriptor_measures_same_delta() -> None:
     # F8: o LLM aponta por role (sem copiar token) → o backend mede as faces e
     # chega no MESMO delta determinístico.
