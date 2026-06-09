@@ -379,7 +379,9 @@ class ModelingExecutorService:
     # single-step execution (extension seam for the Fase 2 agentic loop)
     # ------------------------------------------------------------------
 
-    def _execute_single_step(self, step: ModelingPlanStep, *, plan: ModelingPlan) -> _StepOutcome:
+    def _execute_single_step(
+        self, step: ModelingPlanStep, *, plan: ModelingPlan, from_expansion: bool = False
+    ) -> _StepOutcome:
         """Run one runnable step end-to-end and return its outcome.
 
         Dispatch → unwrap inner Fusion failures → register artifacts →
@@ -413,7 +415,9 @@ class ModelingExecutorService:
         # Inline → reescreve args; tool declarativa → expande e executa cada
         # concreto. Flag OFF / passo sem ref = no-op (caminho atual intacto).
         try:
-            step, expanded_steps = self._maybe_resolve_spatial(step, plan=plan)
+            step, expanded_steps = self._maybe_resolve_spatial(
+                step, plan=plan, from_expansion=from_expansion
+            )
         except SpatialRefError as exc:
             return self._spatial_failure_outcome(step, plan, exc)
         if expanded_steps is not None:
@@ -495,7 +499,7 @@ class ModelingExecutorService:
     # ------------------------------------------------------------------
 
     def _maybe_resolve_spatial(
-        self, step: ModelingPlanStep, *, plan: ModelingPlan
+        self, step: ModelingPlanStep, *, plan: ModelingPlan, from_expansion: bool = False
     ) -> tuple[ModelingPlanStep, list[ModelingPlanStep] | None]:
         """Resolve refs/placement do passo antes do dispatch (Frente F7).
 
@@ -512,9 +516,13 @@ class ModelingExecutorService:
         # outro corpo OU o deixe longe de todos (bugs reais: tampa sobreposta / a
         # 80 mm), levantando SpatialRefError tipado (tratado em :417). Só move_body,
         # só com a flag ON → no máximo 1 probe extra; flag OFF = no-op puro.
+        # NÃO checa o move_body que o PRÓPRIO resolver emitiu (from_expansion): esse
+        # já é o delta medido (place_body align=coplanar/edge/gap pode deixar offset
+        # lateral de propósito — re-checá-lo daria falso-positivo).
         if (
             settings.modeling_relative_enforcement_enabled
             and step.tool_name == "fusion.move_body"
+            and not from_expansion
         ):
             from app.modeling.model_state import capture_model_state
             from app.modeling.spatial_resolver import enforce_relative_coord
@@ -654,9 +662,10 @@ class ModelingExecutorService:
 
         outcomes: list[_StepOutcome] = []
         for concrete_step in concrete:
-            # Concretos não são F7 nem carregam ref → _maybe_resolve_spatial é
-            # no-op para eles (sem recursão/probe).
-            oc = self._execute_single_step(concrete_step, plan=plan)
+            # Concretos não são F7 nem carregam ref → o resolver F7 é no-op p/ eles.
+            # ``from_expansion=True`` também ISENTA o enforcement F9 (Gate B): o
+            # move_body concreto é o delta JÁ medido pelo resolver, não um chute.
+            oc = self._execute_single_step(concrete_step, plan=plan, from_expansion=True)
             outcomes.append(oc)
             if not oc.ok:
                 break

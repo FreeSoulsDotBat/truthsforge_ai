@@ -163,11 +163,23 @@ def test_relative_enforcement_off_is_noop(monkeypatch: pytest.MonkeyPatch) -> No
     assert expanded is None and out_step is step
 
 
+def test_relative_enforcement_exempts_expanded_concretes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # O move_body que o RESOLVER emite (from_expansion=True) é o delta JÁ medido —
+    # NÃO passa pelo Gate B (senão um place_body align=coplanar/edge com offset
+    # lateral de propósito seria falso-recusado). Mesmo move que sobreporia passa.
+    monkeypatch.setattr(settings, "modeling_relative_enforcement_enabled", True, raising=False)
+    monkeypatch.setattr("app.modeling.model_state.capture_model_state", lambda _e, _p: _state())
+    ex = _executor()
+    step = _step("fusion.move_body", body_ref="Tampa", translation_mm=[0, 0, -10])
+    out_step, expanded = ex._maybe_resolve_spatial(step, plan=_plan(), from_expansion=True)
+    assert expanded is None and out_step is step  # isento — sem SpatialRefError
+
+
 def test_run_expanded_aggregates_success(monkeypatch: pytest.MonkeyPatch) -> None:
     ex = _executor()
     calls: list[str] = []
 
-    def fake(step: ModelingPlanStep, *, plan: ModelingPlan) -> _StepOutcome:
+    def fake(step: ModelingPlanStep, *, plan: ModelingPlan, **_kw: object) -> _StepOutcome:
         calls.append(step.tool_name)
         return _StepOutcome(
             step=step.model_copy(update={"status": ModelingStepStatus.completed}),
@@ -205,7 +217,7 @@ def test_run_expanded_preserves_subprovenance_for_history(
         "fusion.make_component", before, after, category="mutative", seq=1
     ).model_dump(mode="json")
 
-    def fake(step: ModelingPlanStep, *, plan: ModelingPlan) -> _StepOutcome:
+    def fake(step: ModelingPlanStep, *, plan: ModelingPlan, **_kw: object) -> _StepOutcome:
         out: dict = {"ok": True}
         if step.tool_name == "fusion.make_component":
             out["_provenance"] = prov
@@ -238,7 +250,7 @@ def test_run_expanded_blocks_high_risk_concrete(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(
         ex,
         "_execute_single_step",
-        lambda s, *, plan: (
+        lambda s, *, plan, **_kw: (
             called.append(s.tool_name)
             or _StepOutcome(step=s, output={"ok": True}, tool_call_id=None, event="e", ok=True)
         ),
@@ -260,7 +272,7 @@ def test_run_expanded_does_not_reblock_inherited_high_risk_level(
     monkeypatch.setattr(
         ex,
         "_execute_single_step",
-        lambda s, *, plan: (
+        lambda s, *, plan, **_kw: (
             called.append(s.tool_name)
             or _StepOutcome(step=s, output={"ok": True}, tool_call_id=None, event="e", ok=True)
         ),
@@ -288,7 +300,7 @@ def test_run_expanded_stops_on_first_failure(monkeypatch: pytest.MonkeyPatch) ->
     ex = _executor()
     calls: list[str] = []
 
-    def fake(step: ModelingPlanStep, *, plan: ModelingPlan) -> _StepOutcome:
+    def fake(step: ModelingPlanStep, *, plan: ModelingPlan, **_kw: object) -> _StepOutcome:
         calls.append(step.tool_name)
         ok = step.tool_name == "fusion.joint"  # make_component FALHA primeiro
         return _StepOutcome(
