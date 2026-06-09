@@ -124,10 +124,17 @@ def render_model_state_block(state: ModelState | None) -> str:
         dims_s = "x".join(f"{d:g}" for d in dims) if dims else "?"
         kind = "sólido" if b.is_solid else "superfície"
         ref = b.stable_id or b.name or "?"
+        # F9 Pilar 2: rótulo de papel derivado (container/lid/...), quando houver.
+        label = f"; papel={b.body_label}" if b.body_label else ""
         lines.append(
             f"- corpo '{b.name}' (ref estável={ref}; {kind}; bbox {dims_s} mm; "
-            f"{b.face_count or 0} faces, {b.edge_count or 0} arestas)"
+            f"{b.face_count or 0} faces, {b.edge_count or 0} arestas{label})"
         )
+        # F9 Pilar 2: adjacências derivadas (quem encosta/interfere em quem) — a
+        # semântica de montagem que o LLM lê em vez de chutar coordenada.
+        for t in b.touches:
+            rel = "interfere com" if t.interference else "encosta em"
+            lines.append(f"    {rel} '{t.other}' (eixo {t.axis}, folga {t.gap_mm}mm)")
         # Faces salientes: cilíndricas/cônicas (com raio) primeiro, depois as
         # maiores planares — são os alvos típicos de rosca/furo/junta.
         ranked_faces = sorted(
@@ -140,7 +147,10 @@ def render_model_state_block(state: ModelState | None) -> str:
             extra = f" raio={f.radius_mm:g}mm" if f.radius_mm else ""
             axis = f" normal={f.normal_axis}" if f.normal_axis else ""
             ctr = f" centro={f.center_mm}" if f.center_mm else ""
-            lines.append(f"    face[{f.type or '?'}{extra}{axis}{ctr}] token={f.token}")
+            # F9 Pilar 2: papéis derivados (top_planar/open_boundary/...) p/ o LLM
+            # ECOAR por apelido em vez de copiar o token opaco.
+            roles = f" papéis={','.join(f.roles)}" if f.roles else ""
+            lines.append(f"    face[{f.type or '?'}{extra}{axis}{ctr}]{roles} token={f.token}")
         # Arestas circulares (furos/knuckle) primeiro.
         ranked_edges = sorted(b.edges, key=lambda e: (not e.is_circular, -(e.radius_mm or 0.0)))
         shown = 0
@@ -185,10 +195,29 @@ def capture_model_state(executor: Any, plan: ModelingPlan) -> ModelState | None:
     if getattr(outcome, "ok", True) is False or not isinstance(output, dict):
         return None
     try:
-        return model_state_from_query_output(output)
+        state = model_state_from_query_output(output)
     except Exception as exc:  # noqa: BLE001
         logger.debug("capture_model_state: parse falhou (%s)", exc)
         return None
+    return _maybe_enrich_semantic(state)
+
+
+def _maybe_enrich_semantic(state: ModelState | None) -> ModelState | None:
+    """F9 Pilar 2: atrás de ``modeling_semantic_state_enabled``, deriva roles/
+    touches/body_label (medindo) e injeta no state. Best-effort — nunca propaga
+    exceção; flag OFF = state intacto (zero regressão)."""
+
+    from app.core.config import settings
+
+    if state is None or not settings.modeling_semantic_state_enabled:
+        return state
+    try:
+        from app.modeling.semantic_state import derive_semantic_state
+
+        return derive_semantic_state(state)
+    except Exception as exc:  # noqa: BLE001 - enriquecimento é best-effort
+        logger.debug("capture_model_state: enriquecimento semântico falhou (%s)", exc)
+        return state
 
 
 __all__ = [

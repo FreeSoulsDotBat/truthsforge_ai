@@ -310,6 +310,18 @@ class Settings(BaseModel):
             in {"1", "true", "yes", "on"}
         )
     )
+    # Estado semântico passo-a-passo — Frente F9 Pilar 2 (ADR-024). Quando ``true``,
+    # ao capturar o ModelState o motor DERIVA por medição: papéis de face (roles),
+    # adjacência entre corpos (touches) e rótulo de corpo (body_label), injetados no
+    # ``<model-state>`` p/ o LLM ECOAR a semântica em vez de chutar coordenada. Tudo
+    # best-effort: ambíguo → vazio/None (NUNCA rotula errado). Default OFF; com OFF,
+    # nenhuma derivação roda e o bloco fica como antes (zero regressão).
+    modeling_semantic_state_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_SEMANTIC_STATE_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",

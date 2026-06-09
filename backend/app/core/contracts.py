@@ -883,6 +883,21 @@ class ModelStateFace(BaseModel):
     # script (atrás do gate) marca medindo o B-Rep; None no mock. A relação
     # ``cover_opening`` mira a maior face com esta flag; sem ela cai no top_planar.
     is_open_boundary: bool | None = None
+    # F9 Pilar 2: papéis semânticos DERIVADos por medição (top_planar/bottom_planar/
+    # largest_planar/open_boundary) p/ o LLM ECOAR em vez de copiar token. Vazio
+    # quando o derive não roda (flag OFF) ou o papel é ambíguo (NUNCA chuta).
+    roles: list[str] = Field(default_factory=list)
+
+
+class BodyAdjacency(BaseModel):
+    """F9 Pilar 2: adjacência DERIVADA entre dois corpos (quem encosta/interfere em
+    quem). Medida por folga no eixo do mate + sobreposição no plano perpendicular —
+    é o "touches" que o LLM lê p/ entender a montagem entre steps."""
+
+    other: str  # nome (ou stable_id) do outro corpo
+    axis: str | None = None  # eixo do mate (x/y/z)
+    gap_mm: float | None = None  # folga medida (≈0 = contato; <0 = penetração)
+    interference: bool = False  # True quando os sólidos se penetram
 
 
 class ModelStateEdge(BaseModel):
@@ -916,6 +931,11 @@ class ModelStateBody(BaseModel):
     edge_count: int | None = None
     faces: list[ModelStateFace] = Field(default_factory=list)
     edges: list[ModelStateEdge] = Field(default_factory=list)
+    # F9 Pilar 2: adjacências DERIVADAS (quem este corpo encosta/penetra) +
+    # rótulo de papel best-effort ("container"/"lid"/...). Vazio/None quando o
+    # derive não roda (flag OFF) ou o sinal é ambíguo (NUNCA rotula errado).
+    touches: list[BodyAdjacency] = Field(default_factory=list)
+    body_label: str | None = None
 
 
 class ModelState(BaseModel):
