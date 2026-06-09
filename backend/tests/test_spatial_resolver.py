@@ -20,9 +20,10 @@ from app.core.contracts import (
     ModelStateEdge,
     ModelStateFace,
 )
-from app.modeling.spatial_ref import SpatialRefError
+from app.modeling.spatial_ref import RELATIVE_COORD_FORBIDDEN, SpatialRefError
 from app.modeling.spatial_resolver import (
     F7_PLACEMENT_TOOLS,
+    enforce_relative_coord,
     expand_placement,
     materialize_steps,
     needs_resolution,
@@ -431,3 +432,55 @@ def test_materialize_steps_inherits_seq_software_risk_with_fresh_ids() -> None:
     # IDs novos e distintos (não colidem em tool_calls).
     ids = [s.id for s in steps]
     assert len(set(ids)) == len(ids) and original.id not in ids
+
+
+# --------------------------------------------------------------------------- #
+# 3) F9 Pilar 3 — enforcement de coordenada relativa (Gate B)                  #
+# --------------------------------------------------------------------------- #
+def test_enforce_rejects_overlapping_absolute_move() -> None:
+    # Move a Tampa (z=21.5..24.5) PARA DENTRO da caixa (z=0..20) → sobreposição
+    # de bbox grande → recusa tipada (o bug "corpos sobrepostos").
+    with pytest.raises(SpatialRefError) as exc:
+        enforce_relative_coord(
+            _state(), "fusion.move_body", {"body_ref": "Tampa", "translation_mm": [0, 0, -15]}
+        )
+    assert exc.value.code == RELATIVE_COORD_FORBIDDEN
+    assert "SOBREPONDO" in str(exc.value)
+
+
+def test_enforce_rejects_far_absolute_move() -> None:
+    # Move a Tampa 80 mm p/ cima → fica longe de tudo → recusa (o bug "tampa a
+    # 80 mm"). Aceita ref por nome OU stable_id.
+    with pytest.raises(SpatialRefError) as exc:
+        enforce_relative_coord(
+            _state(), "fusion.move_body", {"body_ref": "ID_TAMPA", "translation_mm": [0, 0, 80]}
+        )
+    assert exc.value.code == RELATIVE_COORD_FORBIDDEN
+    assert "mais próximo" in str(exc.value)
+
+
+def test_enforce_allows_clean_flush_move() -> None:
+    # Move a Tampa -1,5 mm → encosta no topo (folga 0), sem sobrepor → passa.
+    enforce_relative_coord(
+        _state(), "fusion.move_body", {"body_ref": "Tampa", "translation_mm": [0, 0, -1.5]}
+    )  # não levanta
+
+
+def test_enforce_noop_without_state_or_other_bodies() -> None:
+    # NUNCA inventa veredito: sem read-back (state None) ou com 1 só corpo → no-op.
+    far = {"body_ref": "Tampa", "translation_mm": [0, 0, 80]}
+    enforce_relative_coord(None, "fusion.move_body", far)
+    one = ModelState(bodies=[_state().bodies[0]])
+    enforce_relative_coord(one, "fusion.move_body", {**far, "body_ref": "Caixa"})
+
+
+def test_enforce_noop_for_non_move_tool_and_missing_args() -> None:
+    st = _state()
+    # Tool fora do escopo v1 (add_box) → no-op (não recusa o 1º corpo).
+    enforce_relative_coord(st, "fusion.add_box", {"origin_mm": [999, 999, 999]})
+    # move_body sem translation/ref → no-op (não há o que medir).
+    enforce_relative_coord(st, "fusion.move_body", {"body_ref": "Tampa"})
+    enforce_relative_coord(st, "fusion.move_body", {"translation_mm": [0, 0, 80]})
+    # Corpo-alvo ausente no estado → no-op.
+    absent = {"body_ref": "Inexistente", "translation_mm": [0, 0, 80]}
+    enforce_relative_coord(st, "fusion.move_body", absent)

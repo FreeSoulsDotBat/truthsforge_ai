@@ -40,6 +40,7 @@ from app.core.contracts import (
 
 __all__ = [
     "SPATIAL_REF_UNRESOLVED",
+    "RELATIVE_COORD_FORBIDDEN",
     "SpatialRefError",
     "is_spatial_ref",
     "parse_at_expr",
@@ -53,6 +54,10 @@ __all__ = [
 ]
 
 SPATIAL_REF_UNRESOLVED = "fusion.spatial_ref_unresolved"
+# F9 Pilar 3 (Gate B): coordenada absoluta chutada num move_body que sobrepõe
+# outro corpo ou o deixa longe de todos — recusada p/ forçar place_body
+# declarativo (o backend mede e encaixa). Erro tipado, NUNCA um palpite.
+RELATIVE_COORD_FORBIDDEN = "fusion.relative_coord_forbidden"
 
 Vec3 = tuple[float, float, float]
 

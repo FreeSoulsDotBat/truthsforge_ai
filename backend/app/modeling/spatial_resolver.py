@@ -43,6 +43,7 @@ from app.core.contracts import (
     ModelStateFace,
 )
 from app.modeling.spatial_ref import (
+    RELATIVE_COORD_FORBIDDEN,
     SpatialRefError,
     find_body,
     find_edge,
@@ -64,7 +65,14 @@ __all__ = [
     "expand_placement",
     "resolve_step",
     "materialize_steps",
+    "enforce_relative_coord",
 ]
+
+# F9 Pilar 3 (Gate B) — tolerâncias do enforcement de coordenada relativa. No
+# molde das tolerâncias-constante do ``geometry_verifier`` (_CONTACT_TOL etc.),
+# não em ``config.py`` (evita bloat; estes são limiares de medição, não política).
+_RELATIVE_OVERLAP_TOL_MM3 = 1.0  # overlap de bbox acima disto = interferência real
+_RELATIVE_FAR_TOL_MM = 5.0  # folga ao corpo mais próximo acima disto = "flutuando longe"
 
 F7_PLACEMENT_TOOLS: frozenset[str] = frozenset(
     {"fusion.place_body", "fusion.align_axis", "fusion.distribute_along"}
@@ -255,6 +263,90 @@ def _axis_letter(axis: Any) -> str:
         comps = [abs(float(c)) for c in axis[:3]]
         return "xyz"[comps.index(max(comps))]
     return "z"
+
+
+def _shifted_body(body: Any, translation_mm: list[float]) -> Any:
+    """Copia o corpo com a bbox transladada — o efeito de ``move_body`` SEM
+    executar. Usado pelo Gate B p/ medir a posição RESULTANTE antes do dispatch."""
+
+    bmin = [round(body.bbox_min_mm[i] + translation_mm[i], 4) for i in range(3)]
+    bmax = [round(body.bbox_max_mm[i] + translation_mm[i], 4) for i in range(3)]
+    return body.model_copy(update={"bbox_min_mm": bmin, "bbox_max_mm": bmax})
+
+
+def enforce_relative_coord(
+    state: ModelState | None,
+    tool_name: str,
+    args: dict[str, Any],
+    *,
+    overlap_tol_mm3: float = _RELATIVE_OVERLAP_TOL_MM3,
+    far_tol_mm: float = _RELATIVE_FAR_TOL_MM,
+) -> None:
+    """Gate B (F9 Pilar 3): recusa coordenada ABSOLUTA chutada num ``move_body``.
+
+    Mede a posição RESULTANTE do corpo (bbox transladada pela ``translation_mm``,
+    sem executar) e, se ela **sobrepõe** outro corpo OU fica **longe** de todos
+    (os dois bugs reais: tampa sobreposta / tampa a 80 mm), levanta
+    ``SpatialRefError(code=RELATIVE_COORD_FORBIDDEN)`` instruindo a usar
+    ``place_body`` declarativo (o backend mede as faces e encaixa com folga 0).
+
+    **INVARIANTE: só RECUSA** — nunca adivinha a posição certa. ``state`` None /
+    < 2 corpos / corpo-alvo ausente / bbox faltando ⇒ **no-op** (sem read-back não
+    há veredito; não inventa). Escopo v1: ``move_body`` (o vetor de chute
+    documentado); ``add_box`` fica de follow-up conservador.
+
+    Limitação conhecida (aceita, flag opt-in): um encaixe por contenção feito por
+    ``move_body`` cru (pino no furo → overlap esperado) seria recusado — sob a
+    flag ON o caminho correto é declarativo (``align_axis``/``relate_bodies``).
+    """
+
+    if tool_name != "fusion.move_body":
+        return
+    if state is None or len(state.bodies) < 2:
+        return
+    ref = args.get("body_ref") or args.get("body")
+    translation = args.get("translation_mm")
+    if not ref or not isinstance(translation, (list, tuple)) or len(translation) < 3:
+        return
+
+    from app.modeling.geometry_verifier import (
+        _bbox_overlap_volume,
+        _find_body,
+        _gap_along,
+        _mate_axis,
+    )
+
+    moving = _find_body(state, str(ref))
+    if moving is None or not (moving.bbox_min_mm and moving.bbox_max_mm):
+        return
+    moved = _shifted_body(moving, [float(t) for t in translation[:3]])
+    others = [
+        b for b in state.bodies if b is not moving and b.bbox_min_mm and b.bbox_max_mm
+    ]
+    if not others:
+        return
+
+    # Sobreposição: a posição resultante penetra outro corpo → sempre errado.
+    for other in others:
+        if _bbox_overlap_volume(moved, other) > overlap_tol_mm3:
+            raise SpatialRefError(
+                f"move_body posiciona '{ref}' SOBREPONDO o corpo '{other.name}' "
+                "(coordenada absoluta chutada). Use place_body declarativo: o "
+                "backend mede as faces e encaixa com folga 0, sem coordenada.",
+                code=RELATIVE_COORD_FORBIDDEN,
+            )
+
+    # Longe: o corpo móvel fica afastado de TODOS (não encaixa em nada). Mede a
+    # folga no eixo de maior separação de cada par; recusa se o vizinho mais
+    # próximo está além da tolerância (o caso "tampa a 80 mm").
+    nearest = min(abs(_gap_along(moved, o, _mate_axis(moved, o))) for o in others)
+    if nearest > far_tol_mm:
+        raise SpatialRefError(
+            f"move_body deixa '{ref}' a {nearest:.1f} mm do corpo mais próximo "
+            "(coordenada absoluta chutada — não encaixa em nada). Use place_body "
+            "declarativo p/ medir as faces e encostar.",
+            code=RELATIVE_COORD_FORBIDDEN,
+        )
 
 
 def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[ConcreteStep]:

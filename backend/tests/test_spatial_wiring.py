@@ -22,7 +22,7 @@ from app.core.contracts import (
     ModelStateFace,
 )
 from app.modeling.executor import ModelingExecutorService, _StepOutcome
-from app.modeling.spatial_ref import SpatialRefError
+from app.modeling.spatial_ref import RELATIVE_COORD_FORBIDDEN, SpatialRefError
 
 
 def _state() -> ModelState:
@@ -137,6 +137,28 @@ def test_absolute_coordinates_skip_resolution(monkeypatch: pytest.MonkeyPatch) -
     _enable(monkeypatch, state=None)  # se chamasse o probe, state=None quebraria refs
     ex = _executor()
     step = _step("fusion.add_box", center_mm=[10, 20, 30], width_mm=40)
+    out_step, expanded = ex._maybe_resolve_spatial(step, plan=_plan())
+    assert expanded is None and out_step is step
+
+
+def test_relative_enforcement_rejects_chute_move(monkeypatch: pytest.MonkeyPatch) -> None:
+    # F9 Pilar 3: flag ON + move_body cuja coordenada absoluta enfia a Tampa
+    # (z=20..23) DENTRO da caixa (z=0..20) → SpatialRefError tipado no executor.
+    monkeypatch.setattr(settings, "modeling_relative_enforcement_enabled", True, raising=False)
+    monkeypatch.setattr("app.modeling.model_state.capture_model_state", lambda _e, _p: _state())
+    ex = _executor()
+    step = _step("fusion.move_body", body_ref="Tampa", translation_mm=[0, 0, -10])
+    with pytest.raises(SpatialRefError) as exc:
+        ex._maybe_resolve_spatial(step, plan=_plan())
+    assert exc.value.code == RELATIVE_COORD_FORBIDDEN
+
+
+def test_relative_enforcement_off_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Flag OFF (default): o move_body "chute" passa direto, sem probe (regressão).
+    monkeypatch.setattr(settings, "modeling_relative_enforcement_enabled", False, raising=False)
+    monkeypatch.setattr(settings, "modeling_spatial_resolution_enabled", False, raising=False)
+    ex = _executor()
+    step = _step("fusion.move_body", body_ref="Tampa", translation_mm=[0, 0, -10])
     out_step, expanded = ex._maybe_resolve_spatial(step, plan=_plan())
     assert expanded is None and out_step is step
 

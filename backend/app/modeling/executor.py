@@ -507,6 +507,24 @@ class ModelingExecutorService:
 
         from app.core.config import settings
 
+        # F9 Pilar 3 (Gate B): enforcement de coordenada relativa. Independente da
+        # flag de resolução — RECUSA um move_body cuja coordenada absoluta sobreponha
+        # outro corpo OU o deixe longe de todos (bugs reais: tampa sobreposta / a
+        # 80 mm), levantando SpatialRefError tipado (tratado em :417). Só move_body,
+        # só com a flag ON → no máximo 1 probe extra; flag OFF = no-op puro.
+        if (
+            settings.modeling_relative_enforcement_enabled
+            and step.tool_name == "fusion.move_body"
+        ):
+            from app.modeling.model_state import capture_model_state
+            from app.modeling.spatial_resolver import enforce_relative_coord
+
+            enforce_relative_coord(
+                capture_model_state(self, plan),
+                step.tool_name,
+                dict(step.input_json or {}),
+            )
+
         # F8 Sub4: relação genérica (relate_bodies) → deriva medindo + expande nas
         # primitivas F7. Atrás da própria flag (desacopla do gate F7); flag OFF =
         # cai no caminho normal (o passo crua erra claro no adapter).

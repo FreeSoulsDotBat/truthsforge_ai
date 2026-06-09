@@ -285,6 +285,19 @@ class Settings(BaseModel):
             in {"1", "true", "yes", "on"}
         )
     )
+    # Enforcement de coordenada relativa — Gate B (Frente F9 Pilar 3, ADR-024).
+    # Quando ``true``, o executor RECUSA um ``move_body`` cuja coordenada absoluta
+    # sobreponha outro corpo OU deixe o corpo longe de todos (os bugs reais de
+    # tampa sobreposta / a 80 mm), levantando ``fusion.relative_coord_forbidden``
+    # e instruindo a usar ``place_body`` declarativo (o backend mede e encaixa).
+    # **INVARIANTE: só RECUSA** — nunca adivinha a posição certa. Default OFF;
+    # com OFF, o caminho de coordenada absoluta segue intacto (zero regressão).
+    modeling_relative_enforcement_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_RELATIVE_ENFORCEMENT_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",
