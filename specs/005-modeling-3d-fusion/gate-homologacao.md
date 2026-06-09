@@ -356,6 +356,15 @@ o P1 valida a fundação ANTES de confiar na camada declarativa por cima.
 > exibir card de aprovação do sub-passo, ou (b) reclassificar o `combine join`
 > gerado pelo resolver como auto-aprovável. Até lá, P6 com `alternate` (knuckles)
 > para no combine — esperado, não bug.
+>
+> **Placement estático DETERMINÍSTICO (2026-06-09, gate `m3d_plan_57e048`):** o
+> `place_body` (flush) deixou de emitir componente+junta e passou a um `move_body`
+> com **delta MEDIDO** (`target.center − anchor.center` no eixo da normal da face
+> ancla) → contato com **folga 0**, corpos separados, sem o LLM calcular
+> coordenada (a fonte da folga de 1,5 mm: o planner usava `move_body` absoluto). O
+> nudge agora PROÍBE `move_body`/`origin_mm` para posição RELATIVA. A junta segue
+> só p/ cinemática (`align_axis`/dobradiça). Sem combine ⇒ sem o gate high_risk
+> acima no caminho estático.
 
 ### F7.P1 — Fundação de montagem (joint + make_component + combine-DENTRO)
 

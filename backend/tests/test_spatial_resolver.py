@@ -68,14 +68,16 @@ def _state() -> ModelState:
                 stable_id="ID_TAMPA",
                 name="Tampa",
                 dimensions_mm=[60, 40, 3],
-                bbox_min_mm=[0, 0, 20],
-                bbox_max_mm=[60, 40, 23],
+                # Tampa FLUTUANDO 1,5 mm acima do topo da caixa (o bug real do
+                # gate): base em z=21.5, topo da caixa em z=20.
+                bbox_min_mm=[0, 0, 21.5],
+                bbox_max_mm=[60, 40, 24.5],
                 faces=[
                     ModelStateFace(
                         token="TAMPA_BOTTOM",
                         type="planar",
                         normal_axis="-z",
-                        center_mm=[30, 20, 20],
+                        center_mm=[30, 20, 21.5],
                     ),
                 ],
             ),
@@ -126,9 +128,12 @@ def test_inline_unresolved_ref_raises_typed() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 2) place_body → make_component + joint                                      #
+# 2) place_body → move_body DETERMINÍSTICO (mede faces, calcula o delta)       #
 # --------------------------------------------------------------------------- #
-def test_place_body_expands_to_component_and_rigid_joint() -> None:
+def test_place_body_static_deterministic_move_closes_gap() -> None:
+    # O bug do gate: tampa flutuando 1,5 mm. O backend MEDE as faces e calcula o
+    # delta EXATO (target.z=20 − anchor.z=21.5 = -1.5) → move_body. Folga 0, sem
+    # o LLM calcular coordenada. Corpos separados (sem componente/junta).
     steps, actions = expand_placement(
         "fusion.place_body",
         {
@@ -140,19 +145,15 @@ def test_place_body_expands_to_component_and_rigid_joint() -> None:
         },
         _state(),
     )
-    assert [s.tool_name for s in steps] == ["fusion.make_component", "fusion.joint"]
+    assert [s.tool_name for s in steps] == ["fusion.move_body"]
     assert steps[0].input_json["body_ref"] == "Tampa"
-    j = steps[1].input_json
-    assert j["joint_type"] == "rigid"
-    assert j["body_one"] == "Tampa" and j["face_token_one"] == "TAMPA_BOTTOM"
-    assert j["face_token_two"] == "CAIXA_TOP" and j["body_two"] == "Caixa"
+    assert steps[0].input_json["translation_mm"] == [0.0, 0.0, -1.5]  # fecha a folga
     assert actions[0].kind == "expand_placement"
 
 
-def test_place_body_accepts_semantic_role_descriptor() -> None:
-    # F8: o LLM aponta por role (sem copiar token). O MOVING (anchor) vira SELECTOR
-    # — resolvido na junta APÓS make_component (token fresco, sem edge_token_stale);
-    # o TARGET (referência, não-componentizada) mantém o token smart do entity_ref.
+def test_place_body_role_descriptor_measures_same_delta() -> None:
+    # F8: o LLM aponta por role (sem copiar token) → o backend mede as faces e
+    # chega no MESMO delta determinístico.
     steps, _ = expand_placement(
         "fusion.place_body",
         {
@@ -162,26 +163,8 @@ def test_place_body_accepts_semantic_role_descriptor() -> None:
         },
         _state(),
     )
-    j = steps[1].input_json
-    assert j["face_selector_one"] == "bottom"  # moving por selector (fresco na junta)
-    assert "face_token_one" not in j
-    assert j["face_token_two"] == "CAIXA_TOP"  # target por token smart
-
-
-def test_place_body_anchor_token_stays_token() -> None:
-    # @token explícito no anchor → mantém o token (back-compat); só ROLE vira
-    # selector. (O fix do staleness é p/ o caminho por role.)
-    steps, _ = expand_placement(
-        "fusion.place_body",
-        {
-            "body": "Tampa",
-            "anchor": "@token('TAMPA_BOTTOM')",
-            "target": {"body": "Caixa", "role": "top_planar"},
-        },
-        _state(),
-    )
-    j = steps[1].input_json
-    assert j["face_token_one"] == "TAMPA_BOTTOM" and "face_selector_one" not in j
+    assert steps[0].tool_name == "fusion.move_body"
+    assert steps[0].input_json["translation_mm"] == [0.0, 0.0, -1.5]
 
 
 def test_align_axis_accepts_predicate_descriptor() -> None:
@@ -405,7 +388,7 @@ def test_materialize_steps_inherits_seq_software_risk_with_fresh_ids() -> None:
         _state(),
     )
     steps = materialize_steps(original, concrete)
-    assert [s.tool_name for s in steps] == ["fusion.make_component", "fusion.joint"]
+    assert [s.tool_name for s in steps] == ["fusion.move_body"]
     assert all(s.seq == 7 and s.software is ModelingSoftware.fusion for s in steps)
     assert all(s.risk_level is ModelingRiskLevel.medium for s in steps)
     assert all(s.status is ModelingStepStatus.approved and not s.approval_required for s in steps)

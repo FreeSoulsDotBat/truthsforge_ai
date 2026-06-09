@@ -119,7 +119,8 @@ def test_place_body_expands_to_concrete_steps(monkeypatch: pytest.MonkeyPatch) -
     out_step, expanded = ex._maybe_resolve_spatial(step, plan=_plan())
     assert out_step is step
     assert expanded is not None
-    assert [s.tool_name for s in expanded] == ["fusion.make_component", "fusion.joint"]
+    # place_body → move_body determinístico (mede as faces, calcula o delta).
+    assert [s.tool_name for s in expanded] == ["fusion.move_body"]
     assert all(s.status is ModelingStepStatus.approved for s in expanded)
 
 

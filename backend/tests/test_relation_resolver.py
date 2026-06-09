@@ -35,9 +35,9 @@ def _state() -> ModelState:
     tampa = ModelStateBody(
         name="Tampa",
         stable_id="Tampa_id",
-        bbox_min_mm=[0, 0, 20],
-        bbox_max_mm=[60, 40, 23],
-        faces=[_face("tampa_bottom", "-z", center=[30, 20, 20])],
+        bbox_min_mm=[0, 0, 21.5],  # flutuando 1,5 mm acima do topo da caixa (z=20)
+        bbox_max_mm=[60, 40, 24.5],
+        faces=[_face("tampa_bottom", "-z", center=[30, 20, 21.5])],
     )
     caixa = ModelStateBody(
         name="Caixa",
@@ -61,18 +61,14 @@ def test_spec_from_args_requires_fields() -> None:
         spec_from_args({"kind": "flush_mate", "moving": "Tampa"})
 
 
-def test_resolve_relation_expands_to_component_and_joint() -> None:
+def test_resolve_relation_expands_to_deterministic_move() -> None:
     concrete, actions, derived = resolve_relation(
         {"kind": "flush_mate", "moving": "Tampa", "reference": "Caixa"}, _state()
     )
-    tools = [c.tool_name for c in concrete]
-    assert tools == ["fusion.make_component", "fusion.joint"]
-    joint = concrete[1].input_json
-    assert joint["joint_type"] == "rigid"
-    # moving (Tampa) por SELECTOR — resolvido na junta pós-make_component (fresco).
-    assert joint["face_selector_one"] == "bottom"
-    assert joint["face_token_two"] == "caixa_top"
-    assert joint["body_two"] == "Caixa"
+    # flush_mate → place_body → move_body determinístico (fecha a folga de 1,5 mm).
+    assert [c.tool_name for c in concrete] == ["fusion.move_body"]
+    mv = concrete[0].input_json
+    assert mv["body_ref"] == "Tampa" and mv["translation_mm"] == [0.0, 0.0, -1.5]
     # a primeira ação registra a derivação da relação (telemetria/auditoria).
     assert actions[0].kind == "derive_relation"
     # o derived devolvido carrega o role medido (observabilidade do trace).
@@ -153,7 +149,7 @@ def test_executor_resolves_relation_when_flag_on(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr("app.modeling.model_state.capture_model_state", lambda _e, _p: _state())
     step, expanded = _executor()._maybe_resolve_spatial(_relate_step(), plan=_plan())
     assert expanded is not None
-    assert [s.tool_name for s in expanded] == ["fusion.make_component", "fusion.joint"]
+    assert [s.tool_name for s in expanded] == ["fusion.move_body"]
 
 
 def test_executor_noop_when_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:

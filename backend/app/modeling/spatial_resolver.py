@@ -36,7 +36,12 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.core.contracts import ModelingPlanStep, ModelingStepStatus, ModelState
+from app.core.contracts import (
+    ModelingPlanStep,
+    ModelingStepStatus,
+    ModelState,
+    ModelStateFace,
+)
 from app.modeling.spatial_ref import (
     SpatialRefError,
     find_body,
@@ -216,32 +221,26 @@ def _face_token_of(ref: Any, state: ModelState | None = None) -> str | None:
     return None
 
 
-# Role do entity_ref → selector do handler _joint/_select_faces (script). Permite
-# resolver a face do MOVING na junta (pós-make_component, token fresco) em vez de
-# pré-resolver um token que vira stale.
-_ROLE_TO_SELECTOR: dict[str, str] = {
-    "bottom_planar": "bottom",
-    "bottom": "bottom",
-    "top_planar": "top",
-    "top": "top",
-    "open_boundary": "top",
-    "opening": "top",
-    "largest_planar": "largest",
-    "largest": "largest",
-}
+def _resolve_face(ref: Any, state: ModelState | None) -> ModelStateFace | None:
+    """Resolve um descritor de face (role/predicado/@token/{face:tok}) para a
+    ``ModelStateFace`` REAL (com center_mm + normal) — base do placement estático
+    determinístico (medir a face, não copiar token)."""
 
-
-def _face_selector_of(ref: Any) -> str | None:
-    """Selector de face (top/bottom/largest...) p/ um descritor de ROLE — usado no
-    lado MOVING da junta, resolvido no momento da junta (sobrevive ao
-    make_component). ``None`` quando o ref não é um role mapeável (token/predicado
-    caem no caminho do token)."""
-
-    if isinstance(ref, dict):
-        role = ref.get("role")
-        if isinstance(role, str):
-            return _ROLE_TO_SELECTOR.get(role.strip().lower())
+    token = _face_token_of(ref, state)
+    if token is None or state is None:
+        return None
+    for b in state.bodies:
+        for f in b.faces:
+            if f.token == token:
+                return f
     return None
+
+
+def _normal_axis_index(normal_axis: str | None) -> int:
+    """Eixo (0=x,1=y,2=z) da normal de uma face planar — o eixo do MATE. Default z."""
+
+    letter = (normal_axis or "+z").strip().lower()[-1:]
+    return {"x": 0, "y": 1, "z": 2}.get(letter, 2)
 
 
 def _owner_body_name(state: ModelState | None, face_token: str | None) -> str | None:
@@ -266,58 +265,58 @@ def _axis_letter(axis: Any) -> str:
 
 
 def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[ConcreteStep]:
+    """Placement estático DETERMINÍSTICO: o LLM declara a relação (face do corpo
+    encosta na face de destino); o backend MEDE as duas faces no read-back e
+    calcula a translação EXATA ao longo do eixo do mate → emite um ``move_body``
+    com o delta medido. Folga = 0 por construção, SEM o LLM calcular coordenada
+    (a fonte da folga de 1,5 mm). Corpos seguem SEPARADOS (sem componente/junta —
+    a junta é papel do align_axis, p/ cinemática)."""
+
     body = args.get("body") or args.get("body_ref")
     if not body:
         raise SpatialRefError("place_body exige 'body'")
     find_body(state, body)  # valida existência (erro tipado se não houver)
-    # ANCHOR (face do corpo MOVING): o moving vira componente (make_component)
-    # ANTES da junta, o que INVALIDA o entityToken pré-resolvido (erro
-    # edge_token_stale no gate). Quando o anchor é um ROLE (bottom/top/...),
-    # passamos um SELECTOR — o handler _joint resolve a face NO MOMENTO da junta,
-    # no proxy pós-make_component (token fresco). Senão, cai no token (back-compat).
-    anchor_sel = _face_selector_of(args.get("anchor"))
-    anchor_face = None if anchor_sel else _face_token_of(args.get("anchor"), state)
-    # TARGET (face de destino): a referência NÃO é componentizada → o token
-    # resolvido pelo entity_ref (escolha "smart" por área/posição) segue válido.
-    target_face = _face_token_of(args.get("target"), state)
-    if (anchor_sel is None and anchor_face is None) or target_face is None:
-        raise SpatialRefError(
-            "place_body: 'anchor' (face no corpo) e 'target' (face de destino) precisam "
-            "referenciar FACES — role ({body, role:'bottom_planar'}), @token('<face>') ou "
-            "{face:'<token>'}. O mate do Fusion casa faces, não coordenadas."
-        )
-    # mate/offset/clearance ainda NÃO são aplicados pelo handler _joint (gate
-    # P6): falha tipada em vez de virar no-op silencioso (hoje flush==coaxial e
-    # offset não afasta nada). Não prometemos o que não entregamos.
+
     mate = str(args.get("mate") or "flush").lower()
     if mate != "flush":
         raise SpatialRefError(
-            f"place_body: mate='{mate}' ainda não é suportado pela junta (gate P6); "
-            "use align_axis para coaxialidade."
+            f"place_body: mate='{mate}' ainda não suportado; use 'flush' (contato) ou "
+            "align_axis para coaxialidade."
         )
+    # offset/clearance: deslocamento ao longo do eixo do mate. Por ora só CONTATO
+    # (0): o sinal do offset depende da orientação da face e é fácil de errar —
+    # não prometemos o que não validamos. (Follow-up determinístico.)
     for opt in ("offset_mm", "clearance_mm"):
         if args.get(opt) not in (None, 0, 0.0):
             raise SpatialRefError(
-                f"place_body: '{opt}' ainda não é aplicado pela junta (gate P6)."
+                f"place_body: '{opt}' ainda não suportado (só contato/flush=0)."
             )
-    # Placement estático = junta rígida casando as duas faces. (revolute/cilíndrica
-    # móvel é papel de align_axis.) Anchor por SELECTOR (resolvido pós-make_component,
-    # fresco) ou token; target por token (referência não-componentizada).
-    jargs: dict[str, Any] = {
-        "joint_type": "rigid",
-        "body_one": body,
-        "body_two": _owner_body_name(state, target_face),
-        "face_token_two": target_face,
-    }
-    if anchor_sel:
-        jargs["face_selector_one"] = anchor_sel
-    else:
-        jargs["face_token_one"] = anchor_face
+
+    anchor_face = _resolve_face(args.get("anchor"), state)  # face do MOVING (mede)
+    target_face = _resolve_face(args.get("target"), state)  # face de DESTINO (mede)
+    if anchor_face is None or target_face is None:
+        raise SpatialRefError(
+            "place_body: 'anchor' (face no corpo) e 'target' (face de destino) precisam "
+            "referenciar FACES — role ({body, role:'bottom_planar'}), @token('<face>') ou "
+            "{face:'<token>'}. O placement mede as faces, não usa coordenada."
+        )
+    ac, tc = anchor_face.center_mm, target_face.center_mm
+    if not ac or not tc or len(ac) < 3 or len(tc) < 3:
+        raise SpatialRefError(
+            "place_body: faces sem center_mm medido — rode query_geometry (o delta "
+            "determinístico vem da medição do centro das faces)."
+        )
+    # Eixo do mate = normal da face ANCHOR (ex.: base da tampa = -z → eixo z). O
+    # delta zera a folga SÓ nesse eixo (mantém X/Y — não re-centra surpresa).
+    axis = _normal_axis_index(anchor_face.normal_axis)
+    delta = [0.0, 0.0, 0.0]
+    delta[axis] = round(tc[axis] - ac[axis], 4)
     return [
         ConcreteStep(
-            "fusion.make_component", {"body_ref": body, "name": body}, f"Componente {body}"
-        ),
-        ConcreteStep("fusion.joint", jargs, f"Monta {body} (flush)"),
+            "fusion.move_body",
+            {"body_ref": body, "translation_mm": delta},
+            f"Encaixa {body} (flush determinístico, Δ={delta})",
+        )
     ]
 
 

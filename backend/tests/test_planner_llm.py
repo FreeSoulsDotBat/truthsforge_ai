@@ -423,13 +423,13 @@ def test_planner_f7_placement_nudge_is_flag_gated(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(
         planner_mod.settings, "modeling_spatial_resolution_enabled", False, raising=False
     )
-    assert "POSICIONAMENTO PARAMÉTRICO (F7" not in _f7_system_prompt()
+    assert "POSICIONAMENTO DETERMINÍSTICO (F7" not in _f7_system_prompt()
 
     monkeypatch.setattr(
         planner_mod.settings, "modeling_spatial_resolution_enabled", True, raising=False
     )
     on = _f7_system_prompt()
-    assert "POSICIONAMENTO PARAMÉTRICO (F7" in on
+    assert "POSICIONAMENTO DETERMINÍSTICO (F7" in on
     assert "place_body" in on and "distribute_along" in on and "COMBINE-DENTRO" in on
 
 

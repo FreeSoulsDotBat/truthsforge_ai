@@ -492,8 +492,9 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "fusion.place_body",
         _FUSION,
         _ADD,
-        "Posiciona um corpo por referência declarativa (ancora face→face, mate "
-        "flush/coaxial); o resolver F7 expande em componente + junta (F7).",
+        "Posiciona um corpo encostando uma face na outra (flush) por referência "
+        "declarativa; o backend MEDE as faces e calcula a translação EXATA "
+        "(move_body determinístico, folga 0) — sem coordenada chutada (F7).",
     ),
     _t(
         "fusion.align_axis",
