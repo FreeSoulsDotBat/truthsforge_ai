@@ -23,6 +23,7 @@ from app.core.contracts import (
     ModelingExecutionMode,
     ModelingPlan,
     ModelingPlanStatus,
+    ModelingPlanStep,
     ModelingRiskLevel,
     ModelingStepStatus,
     now_utc,
@@ -88,6 +89,19 @@ def apply_plan_approval(plan: ModelingPlan, payload: ModelingApprovalRequest) ->
     )
 
 
+def _declarative_combines(step: ModelingPlanStep) -> bool:
+    """F7 — a expansão deste passo declarativo funde corpos (combine-DENTRO)?
+    ``distribute_along`` com ``alternate`` funde os nós no corpo-pai
+    (``combine_bodies``, high_risk). Marcar como aprovação-requerida no PLANO faz o
+    card de aprovação disclosar o combine ANTES de qualquer execução (escolha do
+    dono: human-in-the-loop p/ a fusão), em vez de bloquear a expansão no meio."""
+
+    if step.tool_name == "fusion.distribute_along":
+        alt = (step.input_json or {}).get("alternate")
+        return isinstance(alt, (list, tuple)) and len(alt) >= 2
+    return False
+
+
 def apply_modeling_policy(plan: ModelingPlan) -> ModelingPlan:
     """Apply local safety defaults before any MCP call can be executed.
 
@@ -101,7 +115,11 @@ def apply_modeling_policy(plan: ModelingPlan) -> ModelingPlan:
     for step in plan.steps:
         blocked = _is_blocked(step.tool_name)
         is_read_only = _is_read_only(step.tool_name)
-        is_high_risk = step.risk_level == ModelingRiskLevel.high or _is_high_risk(step.tool_name)
+        is_high_risk = (
+            step.risk_level == ModelingRiskLevel.high
+            or _is_high_risk(step.tool_name)
+            or _declarative_combines(step)
+        )
         requires_approval = not is_read_only and is_high_risk
         next_status = step.status
         if requires_approval and step.status == ModelingStepStatus.pending:

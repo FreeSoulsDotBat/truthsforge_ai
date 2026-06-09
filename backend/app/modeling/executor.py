@@ -656,8 +656,16 @@ class ModelingExecutorService:
         # plano; re-checá-lo re-bloquearia um placement já aprovado pelo humano).
         from app.modeling.tool_registry import is_blocked, is_high_risk
 
+        # Combine-DENTRO (high_risk) só auto-executa quando o passo declarativo FOI
+        # aprovado pelo dono no card do plano — apply_modeling_policy marca
+        # distribute_along+alternate como approval_required, então o card disclosa a
+        # fusão ANTES de executar. Sem essa aprovação → bloqueia (fail-safe da
+        # constituição: human-in-the-loop p/ a fusão dos corpos).
+        expansion_approved = (
+            original.approval_required and original.status == ModelingStepStatus.approved
+        )
         blocked = [c for c in concrete if is_high_risk(c.tool_name) or is_blocked(c.tool_name)]
-        if blocked:
+        if blocked and not expansion_approved:
             return self._spatial_expansion_blocked(original, blocked, plan)
 
         outcomes: list[_StepOutcome] = []

@@ -264,6 +264,55 @@ def test_run_expanded_blocks_high_risk_concrete(monkeypatch: pytest.MonkeyPatch)
     assert outcome.output["error_code"] == "fusion.spatial_expansion_requires_approval"
 
 
+def test_run_expanded_allows_combine_when_declarative_approved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Card de aprovação do sub-passo (dono): distribute_along+alternate vira
+    # approval_required no plano; APROVADO pelo card, o combine-DENTRO auto-executa.
+    ex = _executor()
+    called: list[str] = []
+    monkeypatch.setattr(
+        ex,
+        "_execute_single_step",
+        lambda s, *, plan, **_kw: (
+            called.append(s.tool_name)
+            or _StepOutcome(
+                step=s.model_copy(update={"status": ModelingStepStatus.completed}),
+                output={"ok": True},
+                tool_call_id=None,
+                event="e",
+                ok=True,
+            )
+        ),
+    )
+    concrete = [_step("fusion.add_cylinder"), _step("fusion.combine_bodies")]
+    approved = _step("fusion.distribute_along").model_copy(
+        update={"approval_required": True, "status": ModelingStepStatus.approved}
+    )
+    outcome = ex._run_expanded_steps(approved, concrete, _plan())
+    assert outcome.ok is True
+    assert called == ["fusion.add_cylinder", "fusion.combine_bodies"]  # combine rodou
+
+
+def test_policy_marks_distribute_with_alternate_as_approval() -> None:
+    # No PLANO, distribute_along COM alternate (combine-DENTRO) exige aprovação
+    # (o card disclosa a fusão); SEM alternate segue additive/auto.
+    from app.modeling.policy import apply_modeling_policy
+
+    plan = _plan().model_copy(
+        update={
+            "status": ModelingPlanStatus.draft,
+            "steps": [
+                _step("fusion.distribute_along", count=3, alternate=["Caixa", "Tampa"]),
+                _step("fusion.distribute_along", count=3),
+            ],
+        }
+    )
+    out = apply_modeling_policy(plan)
+    assert out.steps[0].approval_required is True
+    assert out.steps[1].approval_required is False
+
+
 def test_run_expanded_does_not_reblock_inherited_high_risk_level(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
