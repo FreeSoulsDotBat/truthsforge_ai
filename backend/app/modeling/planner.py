@@ -833,6 +833,15 @@ def _f7_placement_nudge() -> str:
 
     if not settings.modeling_spatial_resolution_enabled:
         return ""
+    relate = (
+        "  • `relate_bodies` {kind, moving:'Tampa', reference:'Caixa'}: RELAÇÃO\n"
+        "    declarativa de alto nível — kind ∈ flush_mate|cover_opening|\n"
+        "    coaxial_insert|hinge_along_shared_edge|seat_in_pocket. O backend DERIVE\n"
+        "    medindo as faces/arestas e expande nas primitivas acima. Prefira isto\n"
+        "    quando a relação tem NOME (encaixar, cobrir, dobradiça, inserir).\n"
+        if settings.modeling_relation_placement_enabled
+        else ""
+    )
     return (
         "- POSICIONAMENTO DETERMINÍSTICO (F7 — OBRIGATÓRIO para encostar/cobrir/\n"
         "  empilhar um corpo em outro): DECLARE a relação; o backend MEDE as faces\n"
@@ -854,7 +863,8 @@ def _f7_placement_nudge() -> str:
         "    'cylinder', diameter_mm, height_mm, name}, fit|spacing_mm,\n"
         "    alternate:[CorpoA, CorpoB]}: distribui N nós ao longo da ARESTA e\n"
         "    funde cada grupo no seu corpo — knuckles de dobradiça num passo só.\n"
-        "  • MONTAGEM: COMBINE-DENTRO (os nós da caixa fundem COM a caixa = 1\n"
+        + relate
+        + "  • MONTAGEM: COMBINE-DENTRO (os nós da caixa fundem COM a caixa = 1\n"
         "    sólido imprimível) e JUNTA-ENTRE (o movimento vem de uma junta entre\n"
         "    os componentes caixa↔tampa). NUNCA combine corpos que devem se mover\n"
         "    um em relação ao outro.\n"

@@ -608,8 +608,10 @@ DEPRECATED_PLANNER_TOOLS: frozenset[str] = frozenset(
 # Tools registradas mas AINDA NÃO oferecidas ao planner LLM — atrás de flag +
 # pendentes de gate Fusion (não ofereça um mecanismo não validado ao modelo). O
 # executor as resolve quando a flag liga; o owner valida via probe no gate; só
-# então entram no nudge/PLANNER_TOOLSET. F8 Sub4: relate_bodies (gate P6).
-UNRELEASED_PLANNER_TOOLS: frozenset[str] = frozenset({"fusion.relate_bodies"})
+# então entram no nudge/PLANNER_TOOLSET.
+# `fusion.relate_bodies` foi LIBERADO (2026-06-09) após o gate F8.R1 aprovar a
+# derivação `flush_mate` no Fusion real (tampa encostou flush medindo as faces).
+UNRELEASED_PLANNER_TOOLS: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------

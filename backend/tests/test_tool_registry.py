@@ -175,6 +175,8 @@ def test_planner_toolset_matches_allowlist() -> None:
         "fusion.place_body",
         "fusion.align_axis",
         "fusion.distribute_along",
+        # F8 Sub4: relate_bodies LIBERADO pós-gate F8.R1 (2026-06-09).
+        "fusion.relate_bodies",
         # knuckle_hinge / metric_screw: DEPRECADOS do planner (macros de produto,
         # não escalam). Seguem no adapter, mas o LLM não os escolhe — ver
         # DEPRECATED_PLANNER_TOOLS e test_deprecated_macros_excluded_from_planner.
@@ -238,9 +240,9 @@ def test_deprecated_macros_excluded_from_planner_but_kept_in_adapter() -> None:
     assert "fusion.make_component" in PLANNER_TOOLSET
 
 
-def test_relate_bodies_registered_but_unreleased() -> None:
-    """F8 Sub4: relate_bodies existe no registro (executor o resolve atrás de
-    flag) mas NÃO é oferecido ao planner até o gate Fusion validar."""
+def test_relate_bodies_released_after_gate() -> None:
+    """F8 Sub4: relate_bodies foi LIBERADO ao planner (2026-06-09) após o gate
+    F8.R1 aprovar a derivação flush_mate no Fusion real."""
     from app.modeling.tool_registry import (
         UNRELEASED_PLANNER_TOOLS,
         is_known,
@@ -248,8 +250,8 @@ def test_relate_bodies_registered_but_unreleased() -> None:
 
     assert is_known("fusion.relate_bodies")
     assert "fusion.relate_bodies" in FUSION_TOOLS
-    assert "fusion.relate_bodies" in UNRELEASED_PLANNER_TOOLS
-    assert "fusion.relate_bodies" not in PLANNER_TOOLSET  # dark até o gate
+    assert "fusion.relate_bodies" not in UNRELEASED_PLANNER_TOOLS
+    assert "fusion.relate_bodies" in PLANNER_TOOLSET  # liberado pós-gate
 
 
 def test_read_only_set_matches_allowlist() -> None:

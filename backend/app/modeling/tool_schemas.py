@@ -735,6 +735,39 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
             ),
         },
     ),
+    "fusion.relate_bodies": ToolSchema(
+        summary=(
+            "F8 — RELAÇÃO declarativa entre 2 corpos (vocabulário FECHADO): o "
+            "backend DERIVE a geometria MEDINDO as faces/arestas e expande nas "
+            "primitivas F7 (place_body/align_axis → junta). Prefira isto a "
+            "calcular posição quando a relação tem nome (encaixar, cobrir, "
+            "inserir coaxial, dobradiça)."
+        ),
+        args={
+            "kind": ArgSpec(
+                "Tipo da relação: 'flush_mate' (encosta face-a-face) | "
+                "'cover_opening' (tampa cobre a abertura de uma caixa ocada) | "
+                "'coaxial_insert' (pino no furo, eixos coincidem) | "
+                "'hinge_along_shared_edge' (dobradiça: junta revolute na aresta "
+                "comum) | 'seat_in_pocket' (peça assenta num rebaixo).",
+                type="string",
+                unit=None,
+                example="flush_mate",
+            ),
+            "moving": ArgSpec(
+                "Corpo que se MOVE para satisfazer a relação (nome).",
+                type="string",
+                unit=None,
+                example="Tampa",
+            ),
+            "reference": ArgSpec(
+                "Corpo de REFERÊNCIA (fica parado; nome).",
+                type="string",
+                unit=None,
+                example="Caixa",
+            ),
+        },
+    ),
     "fusion.knuckle_hinge": ToolSchema(
         summary=(
             "MACRO: dobradiça de nós (knuckles) que abre em torno de um pino "
