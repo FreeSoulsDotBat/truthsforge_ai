@@ -264,3 +264,57 @@ def test_assess_visual_findings_empty_when_flag_off(monkeypatch: pytest.MonkeyPa
     planner = _FakePlanner(gw, _vision_model())
     assert vc.assess_visual_findings(_FakeExecutor(), planner, _fusion_plan()) == []
     assert gw.calls == 0  # nem renderiza/chama a visão
+
+
+# ---------------------------------------------------------------------------
+# Loop visual NÃO-DESTRUTIVO: desfaz correção que duplica corpos
+# ---------------------------------------------------------------------------
+
+
+def test_duplicated_bodies_detects_recreate_variants() -> None:
+    assert vc._duplicated_bodies(["BoxOuter", "Lid"], ["BoxOuter", "Lid", "BoxOuter_fixed"]) == [
+        "BoxOuter_fixed"
+    ]
+    assert vc._duplicated_bodies(["Lid"], ["Lid", "Lid (1)", "Lid (2)"]) == ["Lid (1)", "Lid (2)"]
+    # corpo genuinamente novo (não-variante) NÃO é duplicata
+    assert vc._duplicated_bodies(["Caixa"], ["Caixa", "Tampa"]) == []
+    # variante cuja base não existia antes NÃO conta
+    assert vc._duplicated_bodies(["Caixa"], ["Caixa", "Pino_fixed"]) == []
+
+
+def test_visual_correction_reverts_when_it_duplicates(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vc.settings, "modeling_visual_verification_enabled", True, raising=False)
+    monkeypatch.setattr(vc.settings, "modeling_visual_max_rounds", 1, raising=False)
+    gw = _FakeVisionGateway(
+        [{"matches_intent": False, "issues": ["tampa torta"], "suggestion": "", "confidence": 0.8}]
+    )
+    planner = _FakePlanner(gw, _vision_model())
+    # ANTES da correção: [Caixa, Lid]; DEPOIS: o replan recriou Lid → Lid (1).
+    names = iter([["Caixa", "Lid"], ["Caixa", "Lid", "Lid (1)"]])
+    monkeypatch.setattr(vc, "_body_names", lambda _e, _p: next(names))
+    monkeypatch.setattr(vc, "_timeline_count", lambda _e, _p: 7)
+    monkeypatch.setattr(vc, "_apply_visual_correction", lambda *a, **k: True)
+    reverted: list[int | None] = []
+    monkeypatch.setattr(vc, "_rollback_to", lambda _e, _p, tc: (reverted.append(tc) or True))
+
+    vc.run_visual_correction(_FakeExecutor(), planner, _fusion_plan())
+    assert reverted == [7]  # desfez ao marcador pré-correção
+
+
+def test_visual_correction_keeps_non_duplicating_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vc.settings, "modeling_visual_verification_enabled", True, raising=False)
+    monkeypatch.setattr(vc.settings, "modeling_visual_max_rounds", 1, raising=False)
+    gw = _FakeVisionGateway(
+        [{"matches_intent": False, "issues": ["tampa torta"], "suggestion": "", "confidence": 0.8}]
+    )
+    planner = _FakePlanner(gw, _vision_model())
+    # correção EDITOU (mesmos corpos, sem variantes) → não reverte.
+    names = iter([["Caixa", "Lid"], ["Caixa", "Lid"]])
+    monkeypatch.setattr(vc, "_body_names", lambda _e, _p: next(names))
+    monkeypatch.setattr(vc, "_timeline_count", lambda _e, _p: 7)
+    monkeypatch.setattr(vc, "_apply_visual_correction", lambda *a, **k: True)
+    reverted: list[int | None] = []
+    monkeypatch.setattr(vc, "_rollback_to", lambda _e, _p, tc: (reverted.append(tc) or True))
+
+    vc.run_visual_correction(_FakeExecutor(), planner, _fusion_plan())
+    assert reverted == []  # correção limpa preservada

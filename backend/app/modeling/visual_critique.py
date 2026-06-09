@@ -16,6 +16,7 @@ import asyncio
 import base64
 import concurrent.futures
 import logging
+import re
 from typing import Any
 
 from app.core.config import settings
@@ -193,6 +194,90 @@ def assess_visual_findings(executor: Any, planner: Any, plan: ModelingPlan) -> l
     ]
 
 
+# Variante de nome que o Fusion gera ao RECRIAR um corpo já existente
+# (BoxOuter_fixed, Lid (1)) — a assinatura da duplicação destrutiva.
+_DUP_RE = re.compile(r"^(?P<base>.+?)(?:_fixed| \(\d+\))$")
+
+
+def _duplicated_bodies(before_names: list[str], after_names: list[str]) -> list[str]:
+    """Corpos NOVOS cujo nome é uma variante (``_fixed``/`` (N)``) de um corpo que
+    JÁ existia antes da correção — a assinatura de uma correção que RECRIOU em vez
+    de editar. Puro/determinístico (testável em mock)."""
+
+    before = set(before_names)
+    out: list[str] = []
+    for name in after_names:
+        if name in before:
+            continue
+        m = _DUP_RE.match(name)
+        if m and m.group("base") in before:
+            out.append(name)
+    return out
+
+
+def _body_names(executor: Any, plan: ModelingPlan) -> list[str]:
+    """Nomes dos corpos atuais via read-back (best-effort; ``[]`` em falha)."""
+
+    try:
+        from app.modeling.model_state import capture_model_state
+
+        state = capture_model_state(executor, plan)
+    except Exception:  # noqa: BLE001
+        return []
+    if state is None:
+        return []
+    return [b.name for b in state.bodies if b.name]
+
+
+def _timeline_count(executor: Any, plan: ModelingPlan) -> int | None:
+    """Contagem de features da timeline (marcador de rollback) via probe
+    ``query_timeline``. ``None`` p/ não-fusion / falha."""
+
+    if getattr(plan, "software_choice", None) != ModelingSoftware.fusion:
+        return None
+    probe = ModelingPlanStep(
+        seq=1,
+        title="Probe da timeline (marcador de rollback da correção visual)",
+        software=ModelingSoftware.fusion,
+        tool_name="fusion.query_timeline",
+        risk_level=ModelingRiskLevel.low,
+        status=ModelingStepStatus.approved,
+        input_json={},
+    )
+    try:
+        outcome = executor._execute_single_step(probe, plan=plan)
+    except Exception:  # noqa: BLE001
+        return None
+    if not getattr(outcome, "ok", False):
+        return None
+    inner = inner_fusion_payload(outcome.output) if isinstance(outcome.output, dict) else None
+    tc = inner.get("timeline_count") if isinstance(inner, dict) else None
+    return int(tc) if isinstance(tc, (int, float)) else None
+
+
+def _rollback_to(executor: Any, plan: ModelingPlan, target_count: int | None) -> bool:
+    """Reverte a timeline ao ``target_count`` (desfaz a correção que duplicou).
+    Best-effort; ``False`` se não há marcador ou falhou."""
+
+    if target_count is None:
+        return False
+    step = ModelingPlanStep(
+        seq=1,
+        title="Reverter correção visual (evita duplicação de corpos)",
+        software=ModelingSoftware.fusion,
+        tool_name="fusion.rollback_timeline",
+        risk_level=ModelingRiskLevel.low,
+        approval_required=False,
+        status=ModelingStepStatus.approved,
+        input_json={"target_count": int(target_count)},
+    )
+    try:
+        outcome = executor._execute_single_step(step, plan=plan)
+        return bool(getattr(outcome, "ok", False))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _apply_visual_correction(
     executor: Any,
     planner: Any,
@@ -210,12 +295,24 @@ def _apply_visual_correction(
     except Exception:  # noqa: BLE001
         state_block = None
     issues_text = "\n".join(f"- {issue}" for issue in issues[:8])
+    existing = ", ".join(_body_names(executor, plan)) or "(desconhecidos)"
     payload = ModelingPlanCreate(
         prompt=(
             "Corrija o modelo ATUAL com base nestas DIVERGÊNCIAS VISUAIS "
             "apontadas por revisão de imagem (mantenha o resto intacto):\n"
             + issues_text
-            + "\n\nIntenção original: "
+            + "\n\nCorpos que JÁ EXISTEM: "
+            + existing
+            + "\n\nREGRAS DA CORREÇÃO (obrigatórias):\n"
+            "- EDITE os corpos existentes pelo NOME (move_body, fillet, hole, "
+            "shell_body, set_parameter, place_body...). NÃO recrie um corpo que já "
+            "existe — add_box/add_cylinder de um corpo já presente é PROIBIDO "
+            "(gera duplicata).\n"
+            "- Só crie um corpo NOVO (com nome novo) se a divergência for um corpo "
+            "genuinamente FALTANTE.\n"
+            "- A revisão de imagem pode errar; se as divergências não fizerem "
+            "sentido geométrico, devolva um plano vazio.\n"
+            "\nIntenção original: "
             + (intent or "")[:1500]
         ),
         kind=ModelingPlanKind.edit,
@@ -234,12 +331,15 @@ def _apply_visual_correction(
 
 
 def run_visual_correction(executor: Any, planner: Any, plan: ModelingPlan) -> dict[str, Any] | None:
-    """Loop visual: render → crítica → (replan edição) → re-render → re-crítica.
+    """Loop visual NÃO-DESTRUTIVO: render → crítica → (replan EDIÇÃO) → mede →
+    se a correção DUPLICOU corpos (``_fixed``/`` (N)``), DESFAZ (rollback) e para.
 
     Reusa ``planner.create_plan`` (edição) + ``executor``. Best-effort, atrás de
-    flag. Devolve o veredito final (ou ``None`` se não rodou). Teto de rodadas
-    de correção em ``settings.modeling_visual_max_rounds``.
-    """
+    flag. A correção é instruída a EDITAR corpos existentes (não recriar) e um
+    guard determinístico reverte qualquer correção que mesmo assim recrie — assim
+    o loop nunca persiste a explosão de duplicados. Teto em
+    ``settings.modeling_visual_max_rounds``."""
+
     if not settings.modeling_visual_verification_enabled:
         return None
     if getattr(plan, "software_choice", None) != ModelingSoftware.fusion:
@@ -281,6 +381,26 @@ def run_visual_correction(executor: Any, planner: Any, plan: ModelingPlan) -> di
             return verdict
         if round_idx >= max_rounds:
             return verdict  # esgotou as rodadas de correção
+
+        # Correção NÃO-DESTRUTIVA: mede o ANTES (nomes + marcador de rollback),
+        # aplica, mede o DEPOIS. Se duplicou corpos, DESFAZ e para.
+        before_names = _body_names(executor, plan)
+        before_tl = _timeline_count(executor, plan)
         if not _apply_visual_correction(executor, planner, plan, intent, issues):
             return verdict
+        dups = _duplicated_bodies(before_names, _body_names(executor, plan))
+        if dups:
+            reverted = _rollback_to(executor, plan, before_tl)
+            tracer.record(
+                "visual.correction_reverted",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.warn,
+                message=(
+                    f"Correção visual DESCARTADA: duplicaria {len(dups)} corpo(s) "
+                    f"({', '.join(dups[:5])}). Rollback={'ok' if reverted else 'falhou'}."
+                ),
+                payload={"duplicated": dups[:10], "reverted": reverted, "round": round_idx},
+                plan_id=plan.id,
+            )
+            return verdict  # não insiste numa correção que piora
     return verdict

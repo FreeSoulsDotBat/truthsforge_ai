@@ -212,14 +212,15 @@ class Settings(BaseModel):
     modeling_visual_max_rounds: int = Field(
         default_factory=lambda: _env_int("TRUTHS_FORGE_MODELING_VISUAL_MAX_ROUNDS", 2)
     )
-    # AÇÃO do loop visual: o replan corretivo que RECRIA corpos (e quando a visão
-    # alucina — "tampa ausente"/"groove inexistente" — duplica em BoxOuter_fixed/
-    # Lid (1)). É um FOOTGUN ao reaproveitar a env do gate F7 (visual ON). Por isso
-    # o replan destrutivo é OPT-IN explícito (default OFF): com a flag visual ON mas
-    # esta OFF, a visão só PERCEBE (read-back/laudo), nunca recria. A verificação
-    # primária é a auto-crítica GEOMÉTRICA (F8); a visão entra como achado semântico
-    # no veredito (ver modeling_self_critique_enabled). Ligue só p/ reproduzir o loop
-    # legado deliberadamente.
+    # AÇÃO do loop visual (replan corretivo). Agora NÃO-DESTRUTIVO: a correção é
+    # instruída a EDITAR corpos existentes (não recriar) e um guard determinístico
+    # REVERTE (rollback) qualquer correção que mesmo assim duplique corpos
+    # (BoxOuter_fixed/Lid (1)) — ver visual_critique.run_visual_correction. Mesmo
+    # seguro, é OPT-IN (default OFF): é um replan via LLM (lento, a visão pode
+    # alucinar) e a verificação PRIMÁRIA é a auto-crítica GEOMÉTRICA (F8), com a
+    # visão entrando como achado semântico do veredito (ver
+    # modeling_self_critique_enabled). Ligue p/ deixar a visão ATUAR (com a rede
+    # de segurança do rollback), não só reportar.
     modeling_visual_autocorrect_enabled: bool = Field(
         default_factory=lambda: (
             os.getenv("TRUTHS_FORGE_MODELING_VISUAL_AUTOCORRECT_ENABLED", "false").lower()
