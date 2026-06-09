@@ -95,7 +95,8 @@ if ($place) {
 "==================== GEOMETRIA LIDA (query_geometry) ===================="
 try {
   $tc = Invoke-RestMethod "$ApiBase/api/3d/tool-calls?plan_id=$PlanId&limit=80" -TimeoutSec 15
-  $qg = $tc | Where-Object { $_.tool_name -match 'query_geometry' -and $_.response_json.result.message } | Select-Object -Last 1
+  $qg = $tc | Where-Object { $_.tool_name -match 'query_geometry' -and $_.response_json.result.message } |
+    Sort-Object created_at -Descending | Select-Object -First 1  # o read-back MAIS RECENTE
   if ($qg) {
     $geo = $qg.response_json.result.message | ConvertFrom-Json
     foreach ($b in $geo.bodies) {
