@@ -457,11 +457,18 @@ verdict`. Rode um build simples, ex.: caixa 60×40×20 ocada + tampa.
    `verdict` e geometria **idêntica**.
 
 ### F8.R1 — Relação genérica (flush_mate) → montagem nativa
+> ✅ **APROVADO no Fusion real (2026-06-09)** via `scripts/gate_f8r1.ps1`: `flush_mate`
+> derivou MEDINDO (`bottom_planar` da Tampa ↔ `top_planar` da Caixa) → `place_body` →
+> `move_body[0,0,20]` → Tampa encostou exato no topo (z=20, folga 0); proveniência
+> registrou. Gotcha: `relate_bodies` está em `UNRELEASED_PLANNER_TOOLS`, então o
+> validador de `PATCH /plans` o barra — libere `UNRELEASED_PLANNER_TOOLS=frozenset()`
+> temporariamente (reload) p/ o plano literal e REVERTA. Já pode ser released ao planner.
+
 Ligue `TRUTHS_FORGE_MODELING_RELATION_PLACEMENT_ENABLED=true`. O `fusion.relate_bodies`
-está **dark no planner** (não validado) — dirija por **plano literal** (fallback
-abaixo): primeiro `add_box 'Caixa'` (ocada) + `add_box 'Tampa'`, depois um passo
-`tool_name="fusion.relate_bodies"` com `input_json={kind:"flush_mate", moving:"Tampa",
-reference:"Caixa"}`.
+está **dark no planner** (não validado) — dirija por **plano literal** (use
+`scripts/gate_f8r1.ps1 <PLAN_ID>` sobre um plano parado em `waiting_approval`):
+`add_box 'Caixa'` + `add_box 'Tampa'`, depois `tool_name="fusion.relate_bodies"` com
+`input_json={kind:"flush_mate", moving:"Tampa", reference:"Caixa"}`.
 
 **Observar (filtre por `relation_resolved`):**
 1. `executor.relation_resolved` com `kind=flush_mate` e
