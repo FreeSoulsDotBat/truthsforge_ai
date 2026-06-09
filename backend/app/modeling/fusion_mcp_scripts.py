@@ -514,6 +514,24 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return ("+" if value > 0 else "-") + axis
 
 
+        def _face_is_open_boundary(face):
+            # F9 Pilar 2: a face esta na borda de uma ABERTURA? Marca True quando
+            # tem ao menos uma aresta OPEN (pertence a 1 so face) — a definicao
+            # padrao de borda de superficie aberta (tampa removida / shell aberto).
+            # Solido fechado (toda aresta com 2 faces) -> False, e o open_boundary
+            # cai no fallback documentado (maior planar +z). None se nao avaliavel.
+            try:
+                for _i in range(face.edges.count):
+                    try:
+                        if face.edges.item(_i).faces.count <= 1:
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
+                return None
+            return False
+
+
         def _select_faces(body, selector):
             # Onda C + G2.1: faces semanticas. Suportados:
             #   top / bottom (planar no zmax/zmin) — Onda C
@@ -3422,6 +3440,8 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                             round((fbb.minPoint.y + fbb.maxPoint.y) * 5.0, 2),
                             round((fbb.minPoint.z + fbb.maxPoint.z) * 5.0, 2),
                         ],
+                        # F9 Pilar 2 / F8 cover_opening: borda de abertura medida no B-Rep.
+                        "is_open_boundary": _face_is_open_boundary(f),
                     }})
                 edges_out = []
                 for ei in range(min(body.edges.count, limit)):
