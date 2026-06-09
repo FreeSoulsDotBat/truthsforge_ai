@@ -136,6 +136,21 @@ def test_parser_reads_f7_bbox_and_edge_endpoints() -> None:
     assert straight.direction == [0, 0, 1] and straight.is_circular is False
 
 
+def test_parser_preserves_is_open_boundary() -> None:
+    # F9 F0: o parser descartava ``is_open_boundary`` (a borda de abertura que
+    # o script mede); sem ele ``cover_opening`` e o estado semântico cegam.
+    faces = [
+        {"face_token": "TOK_OPEN", "type": "planar", "is_open_boundary": True},
+        {"face_token": "TOK_SOLID", "type": "planar", "is_open_boundary": False},
+        {"face_token": "TOK_LEGACY", "type": "planar"},  # adapter antigo -> None
+    ]
+    state = model_state_from_query_output(_query_inner(faces=faces))
+    by_token = {f.token: f for f in state.bodies[0].faces}
+    assert by_token["TOK_OPEN"].is_open_boundary is True
+    assert by_token["TOK_SOLID"].is_open_boundary is False
+    assert by_token["TOK_LEGACY"].is_open_boundary is None
+
+
 def test_parser_returns_none_without_bodies() -> None:
     assert model_state_from_query_output({"message": "vazio"}) is None
     assert model_state_from_query_output(None) is None

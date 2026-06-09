@@ -63,6 +63,10 @@ def model_state_from_query_output(output: dict[str, Any] | None) -> ModelState |
                 radius_mm=f.get("radius_mm"),
                 normal_axis=f.get("normal_axis"),
                 center_mm=f.get("center_mm"),
+                # F9 F0: o script emite ``is_open_boundary`` (borda de abertura), mas
+                # o parser o descartava — cegava ``cover_opening`` e o estado
+                # semântico (Pilar 2). None no mock/adapters antigos.
+                is_open_boundary=f.get("is_open_boundary"),
             )
             for f in rb.get("faces", [])
             if isinstance(f, dict)
