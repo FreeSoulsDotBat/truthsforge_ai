@@ -150,7 +150,9 @@ def test_place_body_expands_to_component_and_rigid_joint() -> None:
 
 
 def test_place_body_accepts_semantic_role_descriptor() -> None:
-    # F8: o LLM aponta por role (sem copiar token) → resolve p/ o entityToken.
+    # F8: o LLM aponta por role (sem copiar token). O MOVING (anchor) vira SELECTOR
+    # — resolvido na junta APÓS make_component (token fresco, sem edge_token_stale);
+    # o TARGET (referência, não-componentizada) mantém o token smart do entity_ref.
     steps, _ = expand_placement(
         "fusion.place_body",
         {
@@ -161,7 +163,25 @@ def test_place_body_accepts_semantic_role_descriptor() -> None:
         _state(),
     )
     j = steps[1].input_json
-    assert j["face_token_one"] == "TAMPA_BOTTOM" and j["face_token_two"] == "CAIXA_TOP"
+    assert j["face_selector_one"] == "bottom"  # moving por selector (fresco na junta)
+    assert "face_token_one" not in j
+    assert j["face_token_two"] == "CAIXA_TOP"  # target por token smart
+
+
+def test_place_body_anchor_token_stays_token() -> None:
+    # @token explícito no anchor → mantém o token (back-compat); só ROLE vira
+    # selector. (O fix do staleness é p/ o caminho por role.)
+    steps, _ = expand_placement(
+        "fusion.place_body",
+        {
+            "body": "Tampa",
+            "anchor": "@token('TAMPA_BOTTOM')",
+            "target": {"body": "Caixa", "role": "top_planar"},
+        },
+        _state(),
+    )
+    j = steps[1].input_json
+    assert j["face_token_one"] == "TAMPA_BOTTOM" and "face_selector_one" not in j
 
 
 def test_align_axis_accepts_predicate_descriptor() -> None:

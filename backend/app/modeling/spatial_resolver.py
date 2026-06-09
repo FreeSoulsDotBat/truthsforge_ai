@@ -216,6 +216,34 @@ def _face_token_of(ref: Any, state: ModelState | None = None) -> str | None:
     return None
 
 
+# Role do entity_ref → selector do handler _joint/_select_faces (script). Permite
+# resolver a face do MOVING na junta (pós-make_component, token fresco) em vez de
+# pré-resolver um token que vira stale.
+_ROLE_TO_SELECTOR: dict[str, str] = {
+    "bottom_planar": "bottom",
+    "bottom": "bottom",
+    "top_planar": "top",
+    "top": "top",
+    "open_boundary": "top",
+    "opening": "top",
+    "largest_planar": "largest",
+    "largest": "largest",
+}
+
+
+def _face_selector_of(ref: Any) -> str | None:
+    """Selector de face (top/bottom/largest...) p/ um descritor de ROLE — usado no
+    lado MOVING da junta, resolvido no momento da junta (sobrevive ao
+    make_component). ``None`` quando o ref não é um role mapeável (token/predicado
+    caem no caminho do token)."""
+
+    if isinstance(ref, dict):
+        role = ref.get("role")
+        if isinstance(role, str):
+            return _ROLE_TO_SELECTOR.get(role.strip().lower())
+    return None
+
+
 def _owner_body_name(state: ModelState | None, face_token: str | None) -> str | None:
     if not face_token:
         return None
@@ -242,13 +270,21 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
     if not body:
         raise SpatialRefError("place_body exige 'body'")
     find_body(state, body)  # valida existência (erro tipado se não houver)
-    anchor_face = _face_token_of(args.get("anchor"), state)
+    # ANCHOR (face do corpo MOVING): o moving vira componente (make_component)
+    # ANTES da junta, o que INVALIDA o entityToken pré-resolvido (erro
+    # edge_token_stale no gate). Quando o anchor é um ROLE (bottom/top/...),
+    # passamos um SELECTOR — o handler _joint resolve a face NO MOMENTO da junta,
+    # no proxy pós-make_component (token fresco). Senão, cai no token (back-compat).
+    anchor_sel = _face_selector_of(args.get("anchor"))
+    anchor_face = None if anchor_sel else _face_token_of(args.get("anchor"), state)
+    # TARGET (face de destino): a referência NÃO é componentizada → o token
+    # resolvido pelo entity_ref (escolha "smart" por área/posição) segue válido.
     target_face = _face_token_of(args.get("target"), state)
-    if anchor_face is None or target_face is None:
+    if (anchor_sel is None and anchor_face is None) or target_face is None:
         raise SpatialRefError(
             "place_body: 'anchor' (face no corpo) e 'target' (face de destino) precisam "
-            "referenciar FACES — @token('<face>') ou {face:'<token>'}. O mate do Fusion "
-            "casa faces, não coordenadas."
+            "referenciar FACES — role ({body, role:'bottom_planar'}), @token('<face>') ou "
+            "{face:'<token>'}. O mate do Fusion casa faces, não coordenadas."
         )
     # mate/offset/clearance ainda NÃO são aplicados pelo handler _joint (gate
     # P6): falha tipada em vez de virar no-op silencioso (hoje flush==coaxial e
@@ -264,16 +300,19 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
             raise SpatialRefError(
                 f"place_body: '{opt}' ainda não é aplicado pela junta (gate P6)."
             )
-    # Placement estático = junta rígida casando as duas faces resolvidas.
-    # (revolute/cilíndrica móvel é papel de align_axis.) body_two=None é
-    # tolerado: o handler resolve a face por token (findEntityByToken).
+    # Placement estático = junta rígida casando as duas faces. (revolute/cilíndrica
+    # móvel é papel de align_axis.) Anchor por SELECTOR (resolvido pós-make_component,
+    # fresco) ou token; target por token (referência não-componentizada).
     jargs: dict[str, Any] = {
         "joint_type": "rigid",
         "body_one": body,
-        "face_token_one": anchor_face,
         "body_two": _owner_body_name(state, target_face),
         "face_token_two": target_face,
     }
+    if anchor_sel:
+        jargs["face_selector_one"] = anchor_sel
+    else:
+        jargs["face_token_one"] = anchor_face
     return [
         ConcreteStep(
             "fusion.make_component", {"body_ref": body, "name": body}, f"Componente {body}"

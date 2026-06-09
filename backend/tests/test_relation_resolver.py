@@ -69,7 +69,8 @@ def test_resolve_relation_expands_to_component_and_joint() -> None:
     assert tools == ["fusion.make_component", "fusion.joint"]
     joint = concrete[1].input_json
     assert joint["joint_type"] == "rigid"
-    assert joint["face_token_one"] == "tampa_bottom"
+    # moving (Tampa) por SELECTOR — resolvido na junta pós-make_component (fresco).
+    assert joint["face_selector_one"] == "bottom"
     assert joint["face_token_two"] == "caixa_top"
     assert joint["body_two"] == "Caixa"
     # a primeira ação registra a derivação da relação (telemetria/auditoria).
