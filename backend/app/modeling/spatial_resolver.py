@@ -669,11 +669,87 @@ def _prototype_step(
     return ConcreteStep(f"fusion.add_{primitive}", base, f"Nó {name}")
 
 
+# F7/F8 estendido: aresta por ROLE (em vez de token chutado). Cada palavra-chave
+# soma um sentido; o role é a aresta reta cujo PONTO-MÉDIO é mais extremo nessa
+# direção (rear_top = +y+z = a aresta horizontal do fundo-topo). Espelha o
+# entity_ref de faces — o LLM declara a intenção, o backend MEDE.
+_EDGE_DIR: dict[str, tuple[float, float, float]] = {
+    "rear": (0.0, 1.0, 0.0),
+    "back": (0.0, 1.0, 0.0),
+    "front": (0.0, -1.0, 0.0),
+    "top": (0.0, 0.0, 1.0),
+    "bottom": (0.0, 0.0, -1.0),
+    "left": (-1.0, 0.0, 0.0),
+    "right": (1.0, 0.0, 0.0),
+}
+_EDGE_POS_TOL = 0.1  # mm — margem p/ separar a aresta extrema da 2ª (senão ambíguo)
+
+
+def _resolve_edge_by_role(role: str, body_name: Any, state: ModelState | None) -> str:
+    """Resolve um role de aresta ({body, role:'rear_top'|'longest'|...}) para o
+    edge_token REAL, MEDINDO o ModelState. Ambíguo/sem aresta → erro tipado
+    (NUNCA chuta) — espelha ``entity_ref._resolve_face_by_role`` para arestas."""
+
+    body = find_body(state, body_name)  # erro tipado se o corpo não existir
+    straight = [
+        e
+        for e in body.edges
+        if e.token and not e.is_circular and e.start_point_mm and e.end_point_mm
+    ]
+    if not straight:
+        raise SpatialRefError(
+            f"distribute_along: corpo '{body_name}' sem aresta reta medida — rode "
+            "query_geometry (o role da aresta vem da medição)."
+        )
+    role = role.strip().lower()
+    if role in ("longest", "longer", "maior", "mais_longa"):
+        return max(straight, key=lambda e: e.length_mm or 0.0).token  # type: ignore[return-value]
+
+    direction = [0.0, 0.0, 0.0]
+    if not any(word in role for word in _EDGE_DIR):
+        raise SpatialRefError(
+            f"distribute_along: role de aresta desconhecido: {role!r} "
+            "(use 'longest' ou combinação rear/front + top/bottom + left/right)."
+        )
+    for word, vec in _EDGE_DIR.items():
+        if word in role:
+            direction = [direction[i] + vec[i] for i in range(3)]
+
+    def _score(e: Any) -> float:
+        mid = [(e.start_point_mm[i] + e.end_point_mm[i]) / 2.0 for i in range(3)]
+        return sum(mid[i] * direction[i] for i in range(3))
+
+    ranked = sorted(straight, key=_score, reverse=True)
+    top = ranked[0]
+    if len(ranked) > 1 and abs(_score(top) - _score(ranked[1])) <= _EDGE_POS_TOL:
+        raise SpatialRefError(
+            f"distribute_along: role '{role}' ambíguo em '{body_name}' (≥2 arestas no "
+            "extremo) — qualifique melhor o role."
+        )
+    return top.token  # type: ignore[return-value]
+
+
+def _resolve_edge_token(edge_ref: Any, state: ModelState | None) -> str:
+    """Normaliza o campo ``edge`` do distribute_along para um edge_token REAL:
+    descritor ``{body, role}`` → mede; token real → valida e passa; token
+    chutado/inexistente → erro tipado pedindo o descritor (NUNCA chuta)."""
+
+    if isinstance(edge_ref, dict) and edge_ref.get("role") and edge_ref.get("body"):
+        return _resolve_edge_by_role(str(edge_ref["role"]), edge_ref["body"], state)
+    if isinstance(edge_ref, str) and edge_ref.strip():
+        find_edge(state, edge_ref)  # valida; SpatialRefError tipado se não existir
+        return edge_ref
+    raise SpatialRefError(
+        "distribute_along: 'edge' precisa ser um edge_token real OU um descritor "
+        "{body, role:'rear_top'} (o backend mede a aresta — não invente token)."
+    )
+
+
 def _expand_distribute_along(args: dict[str, Any], state: ModelState | None) -> list[ConcreteStep]:
-    edge_tok = args.get("edge")
+    edge_tok = _resolve_edge_token(args.get("edge"), state)
     raw_count = args.get("count")
-    if not edge_tok or raw_count is None:
-        raise SpatialRefError("distribute_along exige 'edge' (token) e 'count' >= 1")
+    if raw_count is None:
+        raise SpatialRefError("distribute_along exige 'edge' e 'count' >= 1")
     # count/spacing_mm podem vir como @-ref ou número — resolve_scalar (no-op em
     # número) garante erro TIPADO em vez de ValueError cru que escaparia do
     # execute_plan inteiro.

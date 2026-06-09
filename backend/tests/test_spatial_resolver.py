@@ -30,6 +30,8 @@ from app.modeling.spatial_ref import (
 from app.modeling.spatial_resolver import (
     F7_PLACEMENT_TOOLS,
     _compute_place_delta,
+    _resolve_edge_by_role,
+    _resolve_edge_token,
     enforce_relative_coord,
     expand_placement,
     materialize_steps,
@@ -473,6 +475,88 @@ def test_materialize_steps_inherits_seq_software_risk_with_fresh_ids() -> None:
     # IDs novos e distintos (não colidem em tool_calls).
     ids = [s.id for s in steps]
     assert len(set(ids)) == len(ids) and original.id not in ids
+
+
+# --------------------------------------------------------------------------- #
+# 2b) Aresta por ROLE no distribute_along (gate dobradiça: token chutado)      #
+# --------------------------------------------------------------------------- #
+def _box_with_top_edges() -> ModelState:
+    """Caixa 60x40x20 com as 4 arestas do TOPO (front/rear ao longo de x;
+    left/right ao longo de y) — pra resolver role posicional sem chutar token."""
+    return ModelState(
+        bodies=[
+            ModelStateBody(
+                name="Caixa",
+                stable_id="C",
+                bbox_min_mm=[0, 0, 0],
+                bbox_max_mm=[60, 40, 20],
+                edges=[
+                    ModelStateEdge(
+                        token="TOP_FRONT", length_mm=60, is_circular=False,
+                        start_point_mm=[0, 0, 20], end_point_mm=[60, 0, 20],
+                    ),
+                    ModelStateEdge(
+                        token="TOP_REAR", length_mm=60, is_circular=False,
+                        start_point_mm=[0, 40, 20], end_point_mm=[60, 40, 20],
+                    ),
+                    ModelStateEdge(
+                        token="TOP_LEFT", length_mm=40, is_circular=False,
+                        start_point_mm=[0, 0, 20], end_point_mm=[0, 40, 20],
+                    ),
+                    ModelStateEdge(
+                        token="TOP_RIGHT", length_mm=40, is_circular=False,
+                        start_point_mm=[60, 0, 20], end_point_mm=[60, 40, 20],
+                    ),
+                ],
+            )
+        ]
+    )
+
+
+def test_resolve_edge_by_role_positional_and_longest() -> None:
+    st = _box_with_top_edges()
+    # rear_top = +y+z → a aresta de trás do topo (a dobradiça).
+    assert _resolve_edge_by_role("rear_top", "Caixa", st) == "TOP_REAR"
+    assert _resolve_edge_by_role("front_top", "Caixa", st) == "TOP_FRONT"
+    # longest → uma das arestas de 60 mm (front/rear).
+    assert _resolve_edge_by_role("longest", "Caixa", st) in ("TOP_FRONT", "TOP_REAR")
+
+
+def test_resolve_edge_role_ambiguous_and_unknown_are_typed() -> None:
+    st = _box_with_top_edges()
+    # 'top' sozinho → as 4 arestas do topo empatam → ambíguo (NUNCA chuta).
+    with pytest.raises(SpatialRefError):
+        _resolve_edge_by_role("top", "Caixa", st)
+    with pytest.raises(SpatialRefError):
+        _resolve_edge_by_role("diagonal", "Caixa", st)
+
+
+def test_resolve_edge_token_descriptor_real_and_invented() -> None:
+    st = _box_with_top_edges()
+    # descritor {body, role} → mede a aresta real (o fix do gate da dobradiça).
+    assert _resolve_edge_token({"body": "Caixa", "role": "rear_top"}, st) == "TOP_REAR"
+    # token REAL do read-back → passa.
+    assert _resolve_edge_token("TOP_REAR", st) == "TOP_REAR"
+    # token INVENTADO (o bug do gate) → erro tipado, nunca chuta.
+    with pytest.raises(SpatialRefError):
+        _resolve_edge_token("@token('REAR_TOP_EDGE')", st)
+
+
+def test_distribute_along_resolves_edge_by_role() -> None:
+    st = _box_with_top_edges()
+    steps, _ = expand_placement(
+        "fusion.distribute_along",
+        {
+            "edge": {"body": "Caixa", "role": "rear_top"},
+            "count": 3,
+            "prototype": {
+                "primitive": "cylinder", "diameter_mm": 5, "height_mm": 8, "name": "Knuckle",
+            },
+        },
+        st,
+    )
+    # 3 nós distribuídos ao longo da aresta medida (sem token chutado).
+    assert sum(1 for s in steps if s.tool_name == "fusion.add_cylinder") == 3
 
 
 # --------------------------------------------------------------------------- #

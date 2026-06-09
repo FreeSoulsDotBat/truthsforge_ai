@@ -690,10 +690,13 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
         ),
         args={
             "edge": ArgSpec(
-                "Aresta-guia — edge_token (F1) ao longo do qual distribuir.",
-                type="string",
+                "Aresta-guia: descritor {body, role} (o backend MEDE a aresta real — "
+                "PREFIRA isto, NUNCA invente token) ou um edge_token REAL do "
+                "read-back. Roles: 'longest' | combinação rear/front + top/bottom + "
+                "left/right (ex.: 'rear_top' = aresta de trás do topo, a dobradiça).",
+                type="object",
                 unit=None,
-                example="@token('E_HINGE') ou 'E_HINGE'",
+                example={"body": "Caixa", "role": "rear_top"},
             ),
             "count": ArgSpec(
                 "Quantidade de nós a distribuir.",
