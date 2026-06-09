@@ -25,6 +25,9 @@
    TRUTHS_FORGE_MODELING_PROVENANCE_ENABLED=true                # F8 (proveniência: o que cada passo mudou) — Gate F8.D1
    TRUTHS_FORGE_MODELING_SELF_CRITIQUE_ENABLED=true             # F8 (auto-crítica: faltou/demais/errado/certo) — Gate F8.D1
    TRUTHS_FORGE_MODELING_RELATION_PLACEMENT_ENABLED=true        # F8 (relação genérica relate_bodies) — só p/ o Gate F8.R1
+   TRUTHS_FORGE_MODELING_RELATIVE_ENFORCEMENT_ENABLED=true      # F9 (Gate B: recusa coordenada absoluta chutada) — Gate F9
+   TRUTHS_FORGE_MODELING_ALIGN_MODES_ENABLED=true               # F9 (align center/coplanar/gap/edge/corner) — Gate F9
+   TRUTHS_FORGE_MODELING_SEMANTIC_STATE_ENABLED=true            # F9 (roles/touches/body_label no <model-state>) — Gate F9
    # F6 (sanitizer determinístico) já vem ON por padrão; só desligue p/ depurar planner cru.
    ```
    > As 3 flags de capacidade (loop/hierárquico/reconciliação) só fazem efeito
@@ -477,6 +480,47 @@ Probe (molde `_gate_f7_probe.py`): **(a)** `SketchCurve.attributes` sobrevive a
 `extrude`+recompute? **(b)** `entityToken` de face sobrevive a mudar 1 parâmetro de
 dimensão (não só re-run)? Resultado define se o diff afirma `deleted` ou marca
 `uncertain`, e se curvas entram no escopo. Sem isso, F8 cobre só corpo/face/aresta.
+
+---
+
+## Gate F9 — Posicionamento relativo + estado semântico + enforcement (ADR-024)
+
+Código entregue mock-verde, atrás de **três flags próprias** (default OFF). Gateie
+**uma flag por vez** (são independentes). Pré-requisito comum: F0 já corrige o parser
+do `ModelState` p/ preservar `is_open_boundary` (sem flag).
+
+> **F5 (toque no script, p/ o dono):** o estado semântico e o `cover_opening` dependem
+> de `is_open_boundary` MEDIDO no B-Rep. Hoje `fusion_mcp_scripts._query_geometry` NÃO
+> emite o campo (só o mock/teste o seta) → no Fusion real `roles`/`body_label` ficam sem
+> a abertura. Enriquecer `_query_geometry` p/ marcar a face de borda de abertura
+> (loop de edges com 1 só face adjacente) é o trabalho do Gate F9.P2 abaixo.
+
+### F9.P1 — Modos de alinhamento (`align`)
+Ligue `TRUTHS_FORGE_MODELING_ALIGN_MODES_ENABLED=true` (+ `SPATIAL_RESOLUTION` p/ o
+`place_body` existir). Rode caixa+tampa dirigindo o `place_body` com `align`:
+1. `align:"coplanar"` numa tampa criada deslocada lateralmente → encosta no topo MAS
+   **mantém o offset** (não recentra). Compare com `align:"center"` (centra).
+2. `align:"gap"` + `gap_mm:2` → tampa fica **2 mm acima** do topo (folga do lado certo).
+3. `align:"edge"`/`"corner"` num par de caixas axiais → alinha pela borda/canto.
+4. **Erro tipado:** `edge`/`corner` num corpo rotacionado → `fusion.bbox_not_axis_aligned`
+   (NUNCA alinha torto); `gap` com faces coincidentes → `fusion.gap_side_undeterminable`.
+5. **Regressão:** flag **OFF** → `align` IGNORADO, `place_body` centra como antes.
+
+### F9.P3 — Enforcement de coordenada relativa (Gate B)
+Ligue `TRUTHS_FORGE_MODELING_RELATIVE_ENFORCEMENT_ENABLED=true`. Force um `move_body`
+de coordenada absoluta (plano literal): crie `Caixa` + `Tampa` e mova a Tampa
+1. para DENTRO da Caixa (sobreposição) → **recusa** `fusion.relative_coord_forbidden`;
+2. para 80 mm longe de tudo → **recusa** (mesma); o chat instrui a usar `place_body`.
+3. Um `move_body` que encosta limpo (folga 0) → **passa**.
+4. **Regressão:** flag **OFF** → o `move_body` absoluto passa direto (sem probe).
+
+### F9.P2 — Estado semântico no `<model-state>`
+Ligue `TRUTHS_FORGE_MODELING_SEMANTIC_STATE_ENABLED=true` (+ o toque F5 no script p/
+`is_open_boundary` real). Rode caixa ocada + tampa e inspecione o `<model-state>`:
+1. faces com `papéis=top_planar/bottom_planar/open_boundary`; corpos com
+   `papel=container`/`papel=lid` e linhas `encosta em '<corpo>'`.
+2. O planner ECOA o role no `place_body` (anchor/target por role, sem token chutado).
+3. **Regressão:** flag **OFF** → bloco `<model-state>` idêntico ao atual (sem semântica).
 
 ---
 

@@ -433,6 +433,33 @@ def test_planner_f7_placement_nudge_is_flag_gated(monkeypatch: pytest.MonkeyPatc
     assert "place_body" in on and "distribute_along" in on and "COMBINE-DENTRO" in on
 
 
+def test_planner_f9_relative_nudge_is_flag_gated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F9 F4: cada bloco do nudge relativo (align/semântica/enforcement) só entra
+    com a SUA flag ON; todas OFF ⇒ vazio (nada muda no prompt, zero regressão)."""
+
+    from app.modeling import planner as planner_mod
+
+    s = planner_mod.settings
+    for flag in (
+        "modeling_align_modes_enabled",
+        "modeling_semantic_state_enabled",
+        "modeling_relative_enforcement_enabled",
+    ):
+        monkeypatch.setattr(s, flag, False, raising=False)
+    assert planner_mod._f9_relative_nudge() == ""
+
+    monkeypatch.setattr(s, "modeling_align_modes_enabled", True, raising=False)
+    align = planner_mod._f9_relative_nudge()
+    assert "`align`" in align and "coplanar" in align and "gap_mm" in align
+
+    monkeypatch.setattr(s, "modeling_semantic_state_enabled", True, raising=False)
+    sem = planner_mod._f9_relative_nudge()
+    assert "papéis=" in sem and "encosta em" in sem
+
+    monkeypatch.setattr(s, "modeling_relative_enforcement_enabled", True, raising=False)
+    assert "RECUSA" in planner_mod._f9_relative_nudge()
+
+
 def test_create_llm_plan_rejects_tool_outside_allowlist() -> None:
     payload = ModelingPlanCreate(prompt="qualquer coisa")
     response = {

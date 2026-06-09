@@ -240,6 +240,23 @@ Isso respeita **RF-023** (sem script livre/shell/destrutivo no caminho feliz) na
 
 **Consequências.** Flags próprias por subsistema (`modeling_provenance_enabled`, `modeling_self_critique_enabled`, `modeling_relation_placement_enabled`) desacoplam os gates; `fusion.relate_bodies` fica **dark no planner** (`UNRELEASED_PLANNER_TOOLS`) até o gate validar. Reusa o resolver F7 (place_body/align_axis/joint) — a relação não é motor novo. **Débitos honestos:** veredito cross-bloco (acúmulo a nível de turno) e curvas de sketch ficam pós-spike; medir o eixo de cilindro e `is_open_boundary` reais são trabalho do gate (enriquecer `query_geometry`). Gates pendentes: F8.D1 (proveniência+crítica), F8.R1 (relação), Spike de identidade sob edição paramétrica.
 
+## ADR-024 - Posicionamento relativo declarativo + estado semântico passo-a-passo + enforcement (Front F9)
+
+**Status: Aceito (2026-06-09).** Referências: spec 005 Front F9; gate `specs/005-modeling-3d-fusion/gate-homologacao.md` › Gate F9. Evolui o ADR-023.
+
+**Contexto.** Os gates do F8 fecharam a fundação determinística (caixa+tampa encaixa por MEDIÇÃO das faces), mas o dono levantou dois limites ao ver o snap concêntrico: (a) **"sempre ao centro está errado"** — o `place_body` só centra nos 3 eixos, mas posicionamento real é relativo e DIRECIONAL (coplanar, com folga, por borda/canto); (b) **o que passa de step a step é geometria crua** (tokens/centros), sem a SEMÂNTICA (quem encosta em quem, qual face é abertura, papel do corpo), então o LLM volta a chutar coordenada absoluta — a raiz dos bugs "tampa a 80 mm" e "corpos sobrepostos".
+
+**Decisão.** Ampliar o vocabulário de relação, passar estado SEMÂNTICO entre steps e RECUSAR a coordenada chutada — tudo mock-primeiro, flag-gated, default OFF, zero regressão:
+1. **Modos de alinhamento** (`spatial_resolver`, flag `modeling_align_modes_enabled`): campo `align` no `place_body` — `center` (default, snap concêntrico = comportamento atual bit-a-bit) | `coplanar` (só o eixo da normal) | `gap`+`gap_mm` (folga no lado MEDIDO da face âncora) | `edge`/`corner` (alinha por borda/canto via AABB). `cover_opening` segue `center`.
+2. **Estado semântico** (`semantic_state`, flag `modeling_semantic_state_enabled`): ao capturar o `ModelState`, DERIVA por medição `roles` de face (reusa o ranking do `entity_ref`), `touches`/`BodyAdjacency` entre corpos (reusa `geometry_verifier`) e `body_label` (container/lid). Injetado no `<model-state>` p/ o LLM ECOAR a semântica.
+3. **Enforcement — Gate B** (`spatial_resolver.enforce_relative_coord`, flag `modeling_relative_enforcement_enabled`): RECUSA um `move_body` cuja coordenada absoluta sobreponha outro corpo OU o deixe longe de todos → `fusion.relative_coord_forbidden`, instruindo a usar `place_body`.
+
+**Invariantes (inegociáveis, herdados do F8).** NUNCA chuta: `gap` sem lado → `fusion.gap_side_undeterminable`; `edge`/`corner` em corpo rotacionado (AABB não confiável) → `fusion.bbox_not_axis_aligned`; `body_label` ambíguo → None. O enforcement RECUSA, nunca adivinha a posição certa. O estado semântico é DERIVADO por medição, nunca declarado pelo LLM. Mock-primeiro + flag-gated + **zero regressão com flag OFF** (`align` ignorado = `center`; nenhuma derivação roda; coordenada absoluta intacta).
+
+**Escopo COMPLETO (decisão do dono).** A crítica adversarial recomendou cortar `edge`/`corner` e `body_label` (dependem de AABB, quebram em corpo rotacionado / heurística some no estado quebrado); o dono optou por incluí-los COM a salvaguarda do invariante (rotacionado/ambíguo ⇒ erro tipado, nunca palpite). Cortados de fato: Gate A no sanitizer por `body_count` (frágil; o Gate B geométrico é o enforcement real) e classe `RelativeCoordError` dedicada (reusa `SpatialRefError` + `code`).
+
+**Consequências.** Cada flag é independente (gates incrementais). Reusa `entity_ref._resolve_face_by_role`, `geometry_verifier._gap_along`/`_bbox_overlap_volume`, `spatial_resolver._resolve_face`/`find_body`. Novos contratos: `BodyAdjacency`, `ModelStateFace.roles`, `ModelStateBody.touches`/`body_label`. F0 corrige um bug de read-back pré-existente (o parser do `ModelState` descartava `is_open_boundary`, cegando `cover_opening` e o estado semântico). Gate Fusion F9 (dono): tocar `query_geometry` p/ emitir `is_open_boundary` real + validar `roles`/`touches`/modos no Fusion.
+
 ## DT-011 / DT-012 - Bloqueios de plataforma (sheet metal e sculpt)
 
 **Status: Confirmado no Fusion real (2026-05-29).**

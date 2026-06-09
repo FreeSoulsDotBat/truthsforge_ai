@@ -866,6 +866,42 @@ def _f7_placement_nudge() -> str:
     )
 
 
+def _f9_relative_nudge() -> str:
+    """Posicionamento RELATIVO + estado semântico (Frente F9) — cada bloco só
+    aparece com a sua flag ON. Ensina o vocabulário de ``align`` do place_body,
+    como LER a semântica do ``<model-state>`` (papéis/adjacência/rótulo) e avisa
+    que a coordenada absoluta chutada será RECUSADA. Vazio com todas OFF."""
+
+    parts: list[str] = []
+    if settings.modeling_align_modes_enabled:
+        parts.append(
+            "- ALINHAMENTO do `place_body` (campo `align`, escolha o MODO certo em\n"
+            "  vez de aceitar 'centralizar tudo'):\n"
+            "  • `center` (default): centra E encosta nos 3 eixos (tampa concêntrica).\n"
+            "  • `coplanar`: só encosta no eixo da normal, MANTÉM o offset em-plano\n"
+            "    (use quando o corpo já está na posição lateral certa).\n"
+            "  • `gap` + `gap_mm`: encosta deixando uma FOLGA medida (junta de\n"
+            "    expansão, respiro) — o backend escolhe o lado pela face âncora.\n"
+            "  • `edge`/`corner`: alinha por BORDA/CANTO (via caixa-limite). Só p/\n"
+            "    corpos alinhados aos eixos — rotacionado vira erro (use center).\n"
+        )
+    if settings.modeling_semantic_state_enabled:
+        parts.append(
+            "- LEIA a semântica do `<model-state>` antes de posicionar: cada face traz\n"
+            "  `papéis=` (top_planar/bottom_planar/open_boundary/...) p/ você apontar\n"
+            "  por ROLE em vez de copiar token; cada corpo traz `papel=` (container/\n"
+            "  lid) e linhas `encosta em`/`interfere com` (a montagem ATUAL). Use isso\n"
+            "  p/ decidir o próximo passo — NÃO recrie um corpo que já está montado.\n"
+        )
+    if settings.modeling_relative_enforcement_enabled:
+        parts.append(
+            "- O backend RECUSA (erro tipado) um `fusion.move_body` cuja coordenada\n"
+            "  absoluta sobreponha outro corpo ou o deixe longe de tudo. Posicione\n"
+            "  relativo via `place_body` — não tente acertar o [x,y,z] na mão.\n"
+        )
+    return "".join(parts)
+
+
 def _build_messages(
     payload: ModelingPlanCreate,
     knowledge_bases: list[KnowledgeBase],
@@ -1041,6 +1077,7 @@ def _build_messages(
         '  gate: 1 dos 4 furos veio com `face: "Placa.top_face"` +\n'
         "  `Placa.bounding_box.max_x - 20 mm`, e o Fusion rejeitou o sketch.\n"
         + _f7_placement_nudge()
+        + _f9_relative_nudge()
         + "\n"
         "Ferramentas disponíveis (com argumentos/unidades/exemplos quando conhecidos):\n"
         + tool_schemas.render_tool_schemas(list(PLANNER_TOOLSET))
