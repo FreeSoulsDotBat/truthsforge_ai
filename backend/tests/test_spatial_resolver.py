@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.config import settings
 from app.core.contracts import (
     ModelingPlanStep,
     ModelingRiskLevel,
@@ -20,9 +21,15 @@ from app.core.contracts import (
     ModelStateEdge,
     ModelStateFace,
 )
-from app.modeling.spatial_ref import RELATIVE_COORD_FORBIDDEN, SpatialRefError
+from app.modeling.spatial_ref import (
+    ALIGN_GAP_SIDE_UNDETERMINABLE,
+    BBOX_NOT_AXIS_ALIGNED,
+    RELATIVE_COORD_FORBIDDEN,
+    SpatialRefError,
+)
 from app.modeling.spatial_resolver import (
     F7_PLACEMENT_TOOLS,
+    _compute_place_delta,
     enforce_relative_coord,
     expand_placement,
     materialize_steps,
@@ -484,3 +491,136 @@ def test_enforce_noop_for_non_move_tool_and_missing_args() -> None:
     # Corpo-alvo ausente no estado → no-op.
     absent = {"body_ref": "Inexistente", "translation_mm": [0, 0, 80]}
     enforce_relative_coord(st, "fusion.move_body", absent)
+
+
+# --------------------------------------------------------------------------- #
+# 4) F9 Pilar 1 — modos de alinhamento do place_body (_compute_place_delta)    #
+# --------------------------------------------------------------------------- #
+def _aligned_body(name: str, bmin: list[float], bmax: list[float]) -> ModelStateBody:
+    """Corpo com bbox + UMA face planar de normal cardinal (= alinhado aos eixos,
+    pré-requisito de edge/corner)."""
+    return ModelStateBody(
+        name=name,
+        bbox_min_mm=bmin,
+        bbox_max_mm=bmax,
+        faces=[ModelStateFace(token=f"{name}_BOT", type="planar", normal_axis="-z")],
+    )
+
+
+def test_compute_delta_center_is_concentric_snap() -> None:
+    # center (default) = snap concêntrico nos 3 eixos (regressão bit-a-bit do atual).
+    assert _compute_place_delta("center", [10, 5, 21.5], [30, 20, 20], 2) == [20.0, 15.0, -1.5]
+
+
+def test_compute_delta_coplanar_moves_only_normal_axis() -> None:
+    # coplanar: só o eixo da normal encosta; NÃO recentraliza o plano (mantém o
+    # offset em-plano que o planner deu).
+    assert _compute_place_delta("coplanar", [10, 5, 21.5], [30, 20, 20], 2) == [0.0, 0.0, -1.5]
+
+
+def test_compute_delta_gap_opens_on_anchor_side() -> None:
+    # anchor ACIMA do alvo → a folga abre p/ cima (sinal medido, não fixo).
+    assert _compute_place_delta("gap", [30, 20, 21.5], [30, 20, 20], 2, gap_mm=2) == [0.0, 0.0, 0.5]
+    # anchor ABAIXO → a folga abre p/ baixo (anchor já está 2 mm abaixo → fica).
+    assert _compute_place_delta("gap", [30, 20, 18], [30, 20, 20], 2, gap_mm=2) == [0.0, 0.0, 0.0]
+
+
+def test_compute_delta_gap_coincident_faces_is_typed_error() -> None:
+    # Faces coincidentes no eixo do mate + folga≠0 → lado indeterminável → erro
+    # tipado (NUNCA chuta o lado).
+    with pytest.raises(SpatialRefError) as exc:
+        _compute_place_delta("gap", [30, 20, 20], [30, 20, 20], 2, gap_mm=2)
+    assert exc.value.code == ALIGN_GAP_SIDE_UNDETERMINABLE
+    # gap_mm=0 degenera p/ coplanar (folga 0) → sem erro.
+    assert _compute_place_delta("gap", [30, 20, 20], [30, 20, 20], 2, gap_mm=0) == [0.0, 0.0, 0.0]
+
+
+def test_compute_delta_corner_aligns_both_in_plane_mins() -> None:
+    moving = _aligned_body("Tampa", [5, 5, 21.5], [25, 15, 24.5])
+    ref = _aligned_body("Caixa", [0, 0, 0], [60, 40, 20])
+    # ac = centro da face inferior do moving; tc = centro do topo do ref.
+    delta = _compute_place_delta(
+        "corner", [15, 10, 21.5], [30, 20, 20], 2, moving=moving, reference=ref
+    )
+    # x,y: min do moving (5,5) → min do ref (0,0); z: flush (20-21.5).
+    assert delta == [-5.0, -5.0, -1.5]
+
+
+def test_compute_delta_edge_aligns_dominant_axis_centers_other() -> None:
+    moving = _aligned_body("Tampa", [5, 5, 21.5], [25, 15, 24.5])
+    ref = _aligned_body("Caixa", [0, 0, 0], [60, 40, 20])
+    delta = _compute_place_delta(
+        "edge", [15, 10, 21.5], [30, 20, 20], 2, moving=moving, reference=ref
+    )
+    # eixo dominante do ref = x (60>40): alinha min (0-5); y centra (20-10); z flush.
+    assert delta == [-5.0, 10.0, -1.5]
+
+
+def test_compute_delta_edge_corner_reject_rotated_body() -> None:
+    # Corpo "rotacionado": planar SEM normal cardinal → AABB não confiável → recusa.
+    rotated = ModelStateBody(
+        name="Girada",
+        bbox_min_mm=[0, 0, 0],
+        bbox_max_mm=[10, 10, 10],
+        faces=[ModelStateFace(token="R_F", type="planar", normal_axis=None)],
+    )
+    ref = _aligned_body("Caixa", [0, 0, 0], [60, 40, 20])
+    for mode in ("edge", "corner"):
+        with pytest.raises(SpatialRefError) as exc:
+            _compute_place_delta(mode, [5, 5, 10], [30, 20, 20], 2, moving=rotated, reference=ref)
+        assert exc.value.code == BBOX_NOT_AXIS_ALIGNED
+
+
+def test_compute_delta_edge_corner_require_bboxes() -> None:
+    ref = _aligned_body("Caixa", [0, 0, 0], [60, 40, 20])
+    no_bbox = ModelStateBody(name="X", faces=[ModelStateFace(type="planar", normal_axis="-z")])
+    with pytest.raises(SpatialRefError):
+        _compute_place_delta("corner", [0, 0, 0], [0, 0, 0], 2, moving=no_bbox, reference=ref)
+
+
+def test_compute_delta_unknown_mode_is_typed_error() -> None:
+    with pytest.raises(SpatialRefError):
+        _compute_place_delta("diagonal", [0, 0, 0], [1, 1, 1], 2)
+
+
+def test_place_body_align_honored_only_when_flag_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Tampa DESLOCADA em y (centro y=60) p/ distinguir center (recentra) de
+    # coplanar (mantém o offset). Caixa topo em z=20, centro [30,20,20].
+    st = ModelState(
+        bodies=[
+            ModelStateBody(
+                name="Caixa",
+                bbox_min_mm=[0, 0, 0],
+                bbox_max_mm=[60, 40, 20],
+                faces=[
+                    ModelStateFace(
+                        token="CX_TOP", type="planar", normal_axis="+z", center_mm=[30, 20, 20]
+                    )
+                ],
+            ),
+            ModelStateBody(
+                name="Tampa",
+                bbox_min_mm=[0, 40, 21.5],
+                bbox_max_mm=[60, 80, 24.5],
+                faces=[
+                    ModelStateFace(
+                        token="TP_BOT", type="planar", normal_axis="-z", center_mm=[30, 60, 21.5]
+                    )
+                ],
+            ),
+        ]
+    )
+    args = {
+        "body": "Tampa",
+        "anchor": "@token('TP_BOT')",
+        "target": "@token('CX_TOP')",
+        "align": "coplanar",
+    }
+    # Flag ON: coplanar move só em z (mantém o offset em y).
+    monkeypatch.setattr(settings, "modeling_align_modes_enabled", True, raising=False)
+    on_steps, _ = expand_placement("fusion.place_body", args, st)
+    assert on_steps[0].input_json["translation_mm"] == [0.0, 0.0, -1.5]
+    # Flag OFF: align IGNORADO → center recentraliza (delta_y = 20-60 = -40).
+    monkeypatch.setattr(settings, "modeling_align_modes_enabled", False, raising=False)
+    off_steps, _ = expand_placement("fusion.place_body", args, st)
+    assert off_steps[0].input_json["translation_mm"] == [0.0, -40.0, -1.5]

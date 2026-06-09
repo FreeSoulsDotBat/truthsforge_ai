@@ -43,6 +43,8 @@ from app.core.contracts import (
     ModelStateFace,
 )
 from app.modeling.spatial_ref import (
+    ALIGN_GAP_SIDE_UNDETERMINABLE,
+    BBOX_NOT_AXIS_ALIGNED,
     RELATIVE_COORD_FORBIDDEN,
     SpatialRefError,
     find_body,
@@ -349,18 +351,148 @@ def enforce_relative_coord(
         )
 
 
+_AXIS_TO_INDEX = {"x": 0, "y": 1, "z": 2}
+_PLACE_ALIGN_MODES = frozenset({"center", "coplanar", "gap", "edge", "corner"})
+
+
+def _mate_axis_index(target_face: ModelStateFace, ac: list[float], tc: list[float]) -> int:
+    """Eixo do mate: a normal CARDINAL da face-alvo se houver; senão o eixo de
+    maior separação entre os centros (fallback robusto p/ face não-planar)."""
+
+    na = target_face.normal_axis
+    if isinstance(na, str):
+        letter = na.strip().lower().lstrip("+-")
+        if letter in _AXIS_TO_INDEX:
+            return _AXIS_TO_INDEX[letter]
+    return max(range(3), key=lambda i: abs(tc[i] - ac[i]))
+
+
+def _is_axis_aligned(body: Any) -> bool:
+    """Heurística p/ edge/corner: o corpo está alinhado aos eixos do mundo? A
+    evidência vem das normais das faces planares (cardinais quando alinhado). Sem
+    NENHUMA planar cardinal o corpo parece rotacionado → a AABB não representa as
+    bordas reais e o caller RECUSA (NUNCA chuta uma borda torta). Sem faces
+    planares (cilindro/esfera) não há como afirmar rotação → assume alinhado."""
+
+    planar = [f for f in (body.faces or []) if f.type == "planar"]
+    if not planar:
+        return True
+    return any(
+        isinstance(f.normal_axis, str)
+        and f.normal_axis.strip().lower().lstrip("+-") in _AXIS_TO_INDEX
+        for f in planar
+    )
+
+
+def _owner_body(state: ModelState | None, face_token: str | None) -> Any | None:
+    if not face_token:
+        return None
+    for b in state.bodies if state else []:
+        if any(f.token == face_token for f in b.faces):
+            return b
+    return None
+
+
+def _compute_place_delta(
+    align: str,
+    ac: list[float],
+    tc: list[float],
+    na: int,
+    *,
+    gap_mm: float = 0.0,
+    moving: Any | None = None,
+    reference: Any | None = None,
+) -> list[float]:
+    """Calcula o delta de translação do place_body por MODO de alinhamento (F9
+    Pilar 1). ``center`` reproduz o snap concêntrico atual bit-a-bit; os demais
+    são direcionais. Erros tipados (NUNCA chuta) p/ gap-sem-lado e AABB rotacionada."""
+
+    if align == "center":
+        # Snap CONCÊNTRICO (comportamento histórico): o centro da face ANCHOR mapeia
+        # no centro da face TARGET nos 3 eixos → centra E encosta (folga 0).
+        return [round(tc[i] - ac[i], 4) for i in range(3)]
+
+    if align == "coplanar":
+        # Só o eixo da normal: as faces ficam coplanares (folga 0) SEM recentralizar
+        # — respeita o offset em-plano que o planner deu de propósito.
+        delta = [0.0, 0.0, 0.0]
+        delta[na] = round(tc[na] - ac[na], 4)
+        return delta
+
+    if align == "gap":
+        # Coplanar + folga N no LADO em que a face ANCHOR já está (sinal medido, não
+        # fixo). Faces coincidentes com folga≠0 → lado indeterminável → erro tipado.
+        delta = [0.0, 0.0, 0.0]
+        base = tc[na] - ac[na]
+        if gap_mm:
+            side = ac[na] - tc[na]
+            if abs(side) < 1e-6:
+                raise SpatialRefError(
+                    "place_body align='gap': faces coincidentes no eixo do mate — o lado "
+                    "da folga é indeterminável. Posicione o corpo do lado desejado antes "
+                    "ou use align='coplanar' (folga 0).",
+                    code=ALIGN_GAP_SIDE_UNDETERMINABLE,
+                )
+            base += gap_mm * (1.0 if side > 0 else -1.0)
+        delta[na] = round(base, 4)
+        return delta
+
+    if align in ("edge", "corner"):
+        if (
+            moving is None
+            or reference is None
+            or not (moving.bbox_min_mm and moving.bbox_max_mm)
+            or not (reference.bbox_min_mm and reference.bbox_max_mm)
+        ):
+            raise SpatialRefError(
+                f"place_body align='{align}': exige a bbox dos dois corpos — rode "
+                "query_geometry (a borda/canto vem da caixa-limite medida)."
+            )
+        if not (_is_axis_aligned(moving) and _is_axis_aligned(reference)):
+            raise SpatialRefError(
+                f"place_body align='{align}' usa a caixa-limite (AABB), que só representa "
+                "as bordas reais de corpos alinhados aos eixos; este corpo parece "
+                "rotacionado. Use align='center'/'coplanar' (medem faces).",
+                code=BBOX_NOT_AXIS_ALIGNED,
+            )
+        # Eixo do mate: flush (faces encostam). Eixos no plano: alinha o bbox-min do
+        # MOVING ao do REFERENCE — corner = ambos os eixos; edge = só o de MAIOR
+        # extensão do reference (o outro centra, como center).
+        in_plane = [i for i in range(3) if i != na]
+        delta = [0.0, 0.0, 0.0]
+        delta[na] = round(tc[na] - ac[na], 4)
+        dom = max(in_plane, key=lambda i: reference.bbox_max_mm[i] - reference.bbox_min_mm[i])
+        for i in in_plane:
+            if align == "corner" or i == dom:
+                delta[i] = round(reference.bbox_min_mm[i] - moving.bbox_min_mm[i], 4)
+            else:
+                delta[i] = round(tc[i] - ac[i], 4)
+        return delta
+
+    raise SpatialRefError(
+        f"place_body: align='{align}' desconhecido. Use "
+        "center | coplanar | gap | edge | corner."
+    )
+
+
 def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[ConcreteStep]:
     """Placement estático DETERMINÍSTICO: o LLM declara a relação (face do corpo
-    encosta na face de destino); o backend MEDE as duas faces no read-back e
-    calcula a translação EXATA ao longo do eixo do mate → emite um ``move_body``
-    com o delta medido. Folga = 0 por construção, SEM o LLM calcular coordenada
-    (a fonte da folga de 1,5 mm). Corpos seguem SEPARADOS (sem componente/junta —
-    a junta é papel do align_axis, p/ cinemática)."""
+    encosta na face de destino) + o MODO de alinhamento (``align``); o backend MEDE
+    as duas faces no read-back e calcula a translação EXATA → emite um ``move_body``
+    com o delta medido. Folga = 0 por construção (ou ``gap_mm`` no modo gap), SEM o
+    LLM calcular coordenada (a fonte da folga de 1,5 mm). Corpos seguem SEPARADOS
+    (sem componente/junta — a junta é papel do align_axis, p/ cinemática).
+
+    ``align`` (F9 Pilar 1, atrás de ``modeling_align_modes_enabled``): center
+    (default, snap concêntrico) | coplanar | gap | edge | corner. Flag OFF ⇒ align
+    IGNORADO, sempre center (regressão bit-a-bit)."""
+
+    from app.core.config import settings
 
     body = args.get("body") or args.get("body_ref")
     if not body:
         raise SpatialRefError("place_body exige 'body'")
-    find_body(state, body)  # valida existência (erro tipado se não houver)
+    moving = find_body(state, body)  # valida existência (erro tipado se não houver)
 
     mate = str(args.get("mate") or "flush").lower()
     if mate != "flush":
@@ -368,14 +500,25 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
             f"place_body: mate='{mate}' ainda não suportado; use 'flush' (contato) ou "
             "align_axis para coaxialidade."
         )
-    # offset/clearance: deslocamento ao longo do eixo do mate. Por ora só CONTATO
-    # (0): o sinal do offset depende da orientação da face e é fácil de errar —
-    # não prometemos o que não validamos. (Follow-up determinístico.)
+    # offset/clearance: legado (o eixo/sinal eram fáceis de errar). A folga direcional
+    # agora é o modo align='gap' com gap_mm (lado medido). Mantém a recusa do legado.
     for opt in ("offset_mm", "clearance_mm"):
         if args.get(opt) not in (None, 0, 0.0):
             raise SpatialRefError(
-                f"place_body: '{opt}' ainda não suportado (só contato/flush=0)."
+                f"place_body: '{opt}' ainda não suportado (use align='gap' + gap_mm)."
             )
+
+    # F9 Pilar 1: modo de alinhamento (flag OFF ⇒ sempre center = regressão).
+    align = (
+        str(args.get("align") or "center").lower()
+        if settings.modeling_align_modes_enabled
+        else "center"
+    )
+    if align not in _PLACE_ALIGN_MODES:
+        raise SpatialRefError(
+            f"place_body: align='{align}' desconhecido. Use "
+            "center | coplanar | gap | edge | corner."
+        )
 
     anchor_face = _resolve_face(args.get("anchor"), state)  # face do MOVING (mede)
     target_face = _resolve_face(args.get("target"), state)  # face de DESTINO (mede)
@@ -391,18 +534,27 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
             "place_body: faces sem center_mm medido — rode query_geometry (o delta "
             "determinístico vem da medição do centro das faces)."
         )
-    # Snap CONCÊNTRICO: o centro da face ANCHOR mapeia EXATAMENTE no centro da face
-    # TARGET nas 3 direções → a tampa CENTRA no topo da caixa E encosta (folga 0),
-    # ONDE QUER que o add_box a tenha criado. (Mate-axis-only deixava a tampa longe
-    # quando o planner a criava deslocada em X/Y — gate m3d_plan_fc7bc5.)
-    delta = [round(tc[i] - ac[i], 4) for i in range(3)]
+
+    na = _mate_axis_index(target_face, ac, tc)
+    reference = _owner_body(state, target_face.token) if align in ("edge", "corner") else None
+    gap_mm = _coerce_float(args.get("gap_mm") or args.get("gap"))
+    delta = _compute_place_delta(
+        align, ac, tc, na, gap_mm=gap_mm, moving=moving, reference=reference
+    )
     return [
         ConcreteStep(
             "fusion.move_body",
             {"body_ref": body, "translation_mm": delta},
-            f"Encaixa {body} (flush determinístico, Δ={delta})",
+            f"Encaixa {body} (flush '{align}', Δ={delta})",
         )
     ]
+
+
+def _coerce_float(value: Any) -> float:
+    try:
+        return float(value) if value is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _expand_align_axis(args: dict[str, Any], state: ModelState | None) -> list[ConcreteStep]:

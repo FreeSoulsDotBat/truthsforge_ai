@@ -41,6 +41,8 @@ from app.core.contracts import (
 __all__ = [
     "SPATIAL_REF_UNRESOLVED",
     "RELATIVE_COORD_FORBIDDEN",
+    "BBOX_NOT_AXIS_ALIGNED",
+    "ALIGN_GAP_SIDE_UNDETERMINABLE",
     "SpatialRefError",
     "is_spatial_ref",
     "parse_at_expr",
@@ -58,6 +60,13 @@ SPATIAL_REF_UNRESOLVED = "fusion.spatial_ref_unresolved"
 # outro corpo ou o deixa longe de todos — recusada p/ forçar place_body
 # declarativo (o backend mede e encaixa). Erro tipado, NUNCA um palpite.
 RELATIVE_COORD_FORBIDDEN = "fusion.relative_coord_forbidden"
+# F9 Pilar 1 (align edge/corner): a caixa-limite (AABB) só representa as bordas
+# reais do corpo se ele estiver alinhado aos eixos; rotacionado → recusa (a
+# alternativa seria alinhar a AABB, não o corpo). NUNCA chuta uma borda torta.
+BBOX_NOT_AXIS_ALIGNED = "fusion.bbox_not_axis_aligned"
+# F9 Pilar 1 (align gap): faces coincidentes no eixo do mate → o lado da folga é
+# indeterminável; pede reposicionar/usar coplanar, em vez de chutar o sinal.
+ALIGN_GAP_SIDE_UNDETERMINABLE = "fusion.gap_side_undeterminable"
 
 Vec3 = tuple[float, float, float]
 

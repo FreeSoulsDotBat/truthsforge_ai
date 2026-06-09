@@ -298,6 +298,18 @@ class Settings(BaseModel):
             in {"1", "true", "yes", "on"}
         )
     )
+    # Modos de alinhamento do place_body — Frente F9 Pilar 1 (ADR-024). Quando
+    # ``true``, o campo ``align`` é honrado: ``center`` (default, snap concêntrico
+    # = comportamento atual), ``coplanar`` (só o eixo da normal), ``gap`` (folga
+    # ``gap_mm`` no lado do corpo), ``edge``/``corner`` (alinha por borda/canto via
+    # AABB; corpo rotacionado → ``fusion.bbox_not_axis_aligned``). Default OFF; com
+    # OFF, ``align`` é IGNORADO e o placement é sempre ``center`` (zero regressão).
+    modeling_align_modes_enabled: bool = Field(
+        default_factory=lambda: (
+            os.getenv("TRUTHS_FORGE_MODELING_ALIGN_MODES_ENABLED", "false").lower()
+            in {"1", "true", "yes", "on"}
+        )
+    )
     allowed_origins_raw: str = Field(
         default_factory=lambda: os.getenv(
             "TRUTHS_FORGE_ALLOWED_ORIGINS",
