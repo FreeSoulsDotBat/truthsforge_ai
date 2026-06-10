@@ -164,6 +164,39 @@ def test_loop_exhausts_iterations_and_rolls_back() -> None:
     assert result.plan.steps[1].id in result.blocked_step_ids
 
 
+def test_loop_exhausted_divergence_fails_plan_explicitly() -> None:
+    """RF-011/CS-003: divergência geométrica que persiste pelas 5 iterações
+    termina como FALHA explícita (plano ``failed``), não como sucesso com o
+    plano preso em ``running``."""
+
+    store = _FakeStore()
+    executor = _ScriptedExecutor(store, decide=lambda step: True)  # tool sempre ok
+    rollbacks: list[str] = []
+
+    def verifier(step, output):
+        return {"expected_mm": 40, "measured_mm": 30}  # nunca converge
+
+    def corrector(step, output, attempt):
+        return step.model_copy(update={"input_json": {**step.input_json, "_try": attempt}})
+
+    loop = ModelingAgentLoop(
+        executor,
+        corrector=corrector,
+        verifier=verifier,
+        rollback=lambda plan: rollbacks.append(plan.id),
+    )
+    result = loop.run(_plan(_step(1, "fusion.extrude_profile"), _step(2, "fusion.hole")))
+
+    assert result.plan.status is ModelingPlanStatus.failed
+    failed_step = result.plan.steps[0]
+    assert failed_step.status is ModelingStepStatus.failed
+    assert "Divergência geométrica persistente" in (failed_step.error or "")
+    assert rollbacks == [result.plan.id]
+    # Passo 2 ficou bloqueado (o motor PAROU).
+    assert result.plan.steps[1].id in result.blocked_step_ids
+    assert any("divergência geométrica persistente" in event.lower() for event in result.events)
+
+
 def test_loop_corrects_on_geometric_divergence_even_when_tool_ok() -> None:
     store = _FakeStore()
     executor = _ScriptedExecutor(store, decide=lambda step: True)  # tool sempre ok

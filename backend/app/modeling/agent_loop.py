@@ -34,6 +34,8 @@ from app.core.contracts import (
     ModelingPlan,
     ModelingPlanStatus,
     ModelingPlanStep,
+    ModelingRiskLevel,
+    ModelingSoftware,
     ModelingStepStatus,
     ModelingTraceLevel,
     ModelingTraceSource,
@@ -114,6 +116,7 @@ class ModelingAgentLoop:
                 settled[idx] = outcome.step
                 self._persist_progress(plan, settled)
                 attempt = 0
+                applied_corrections = 0
                 # Computa a divergência geométrica UMA vez por iteração e
                 # reaproveita tanto na condição de correção quanto no payload do
                 # corretor (o verifier desempacota o envelope + json.loads;
@@ -153,6 +156,7 @@ class ModelingAgentLoop:
                     )
                     if corrected is None:
                         break
+                    applied_corrections += 1
                     current = corrected
                     outcome = self.executor._execute_single_step(current, plan=plan)
                     settled[idx] = outcome.step
@@ -160,13 +164,41 @@ class ModelingAgentLoop:
                     divergence = self._compute_divergence(current, outcome)
 
                 executed_step_ids.append(step.id)
-                suffix = f" (após {attempt} correção(ões))" if attempt else ""
+                # Conta só correções APLICADAS: quando o corretor desiste na 1ª
+                # tentativa, nenhum delta rodou e o evento não deve sugerir o
+                # oposto.
+                suffix = (
+                    f" (após {applied_corrections} correção(ões))"
+                    if applied_corrections
+                    else ""
+                )
                 events.append(outcome.event + suffix)
                 if outcome.tool_call_id is not None:
                     tool_call_ids.append(outcome.tool_call_id)
 
                 if not outcome.ok or bool(divergence):
                     # Esgotou as iterações sem sucesso → PARA + rollback (RF-011).
+                    if outcome.ok and divergence:
+                        # Tool OK mas geometria divergente ao esgotar: sem isto o
+                        # step ficava ``completed`` e o plano terminava ``running``
+                        # — o orchestrator reportava EXECUTION_COMPLETED (sucesso
+                        # falso, contra RF-011/CS-003 "término sempre explícito").
+                        failed_step = outcome.step.model_copy(
+                            update={
+                                "status": ModelingStepStatus.failed,
+                                "error": (
+                                    "Divergência geométrica persistente após "
+                                    f"{self.max_iterations} correções "
+                                    f"(esperado × medido): {divergence}"
+                                ),
+                            }
+                        )
+                        settled[idx] = failed_step
+                        self._persist_progress(plan, settled)
+                        events.append(
+                            f"Step {step.seq}: divergência geométrica persistente — "
+                            "execução interrompida e revertida (RF-011)."
+                        )
                     blocked_step_ids.append(step.id)
                     aborted = True
                     self._tracer.record(
@@ -177,7 +209,11 @@ class ModelingAgentLoop:
                             f"Step {step.seq} esgotou {self.max_iterations} correções; "
                             "revertendo e parando."
                         ),
-                        payload={"step_id": step.id, "tool_name": current.tool_name},
+                        payload={
+                            "step_id": step.id,
+                            "tool_name": current.tool_name,
+                            "divergence": divergence,
+                        },
                         plan_id=plan.id,
                     )
                     self._do_rollback(plan)
@@ -303,6 +339,16 @@ class ModelingAgentLoop:
             self.rollback(plan)
         except Exception as exc:  # noqa: BLE001 - rollback é best-effort
             logger.error("Rollback do plano %s falhou: %s", plan.id, exc, exc_info=True)
+            # RF-024: a falha da reversão precisa aparecer no diagnóstico do
+            # dono (trace), não só no log do servidor.
+            self._tracer.record(
+                "agent_loop.rollback_failed",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.error,
+                message=f"Rollback do plano falhou: {exc}",
+                payload={"plan_id": plan.id, "error": str(exc)},
+                plan_id=plan.id,
+            )
 
 
 def build_dimension_verifier(
@@ -444,6 +490,67 @@ def combine_verifiers(*verifiers: GeometryVerifier) -> GeometryVerifier:
     return verifier
 
 
+def build_timeline_rollback(
+    executor: ModelingExecutorService, plan: ModelingPlan
+) -> PlanRollback | None:
+    """RF-011/DT-005: rollback nativo via timeline do Fusion para o loop.
+
+    Captura a contagem da timeline ANTES da execução (probe read-only
+    ``fusion.query_timeline``) e devolve um callable que reverte o documento
+    até esse marker (``fusion.rollback_timeline``) quando o loop esgota as
+    correções — o mesmo primitivo já validado pelo undo de edição (T3.6).
+
+    ``None`` quando não há marker disponível (software não-fusion, Fusion
+    offline, transporte mock sem ``timeline_count``): o loop registra
+    ``agent_loop.rollback_skipped`` como antes. Best-effort por contrato —
+    a captura nunca bloqueia a execução.
+    """
+
+    if plan.software_choice is not ModelingSoftware.fusion:
+        return None
+    probe = ModelingPlanStep(
+        seq=1,
+        title="Capturar marker da timeline (rollback do loop)",
+        software=ModelingSoftware.fusion,
+        tool_name="fusion.query_timeline",
+        risk_level=ModelingRiskLevel.low,
+        status=ModelingStepStatus.approved,
+        input_json={},
+    )
+    try:
+        outcome = executor._execute_single_step(probe, plan=plan)
+    except Exception:  # noqa: BLE001 - captura é best-effort
+        logger.warning("captura do marker de rollback falhou; loop sem rollback", exc_info=True)
+        return None
+    if not outcome.ok or not isinstance(outcome.output, dict):
+        return None
+    payload = inner_fusion_payload(outcome.output) or {}
+    marker = payload.get("timeline_count")
+    if not isinstance(marker, int) or marker < 0:
+        return None
+
+    def rollback(failed_plan: ModelingPlan) -> None:
+        revert = ModelingPlanStep(
+            seq=1,
+            title=f"Reverter timeline ao marker {marker} (RF-011)",
+            software=ModelingSoftware.fusion,
+            tool_name="fusion.rollback_timeline",
+            risk_level=ModelingRiskLevel.high,
+            # A aprovação única do plano cobre a reversão ao estado seguro
+            # (RF-009/RF-011); o loop não pausa para reaprovar o rollback.
+            status=ModelingStepStatus.approved,
+            input_json={"target_count": marker},
+        )
+        outcome = executor._execute_single_step(revert, plan=failed_plan)
+        if not outcome.ok:
+            raise RuntimeError(
+                f"fusion.rollback_timeline para marker {marker} falhou: "
+                f"{outcome.output.get('error_code') or outcome.output}"
+            )
+
+    return rollback
+
+
 def run_plan_with_optional_loop(
     executor: ModelingExecutorService,
     planner: Any,
@@ -492,6 +599,9 @@ def run_plan_with_optional_loop(
                 build_dimension_verifier(),
                 build_surface_verifier(),
             ),
+            # RF-011/DT-005: rollback nativo (timeline) capturado pré-execução;
+            # None (não-fusion/offline/mock) mantém o rollback_skipped de antes.
+            rollback=build_timeline_rollback(executor, plan),
         )
         result = loop.run(plan)
     else:
@@ -695,6 +805,7 @@ __all__ = [
     "PlanRollback",
     "build_dimension_verifier",
     "build_surface_verifier",
+    "build_timeline_rollback",
     "combine_verifiers",
     "run_plan_with_optional_loop",
 ]

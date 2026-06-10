@@ -551,7 +551,7 @@ class ModelingPlannerService:
                         self._tracer.record(
                             "planner.llm_retry",
                             source=ModelingTraceSource.backend,
-                            level=ModelingTraceLevel.warning,
+                            level=ModelingTraceLevel.warn,
                             message=f"Planner LLM falhou ({exc}); 1 nova tentativa.",
                         )
                         continue
