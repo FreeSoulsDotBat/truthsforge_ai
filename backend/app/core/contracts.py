@@ -797,7 +797,10 @@ class ProjectFolderDeleteResult(BaseModel):
 class ModelingCapability(BaseModel):
     software: ModelingSoftware
     connected: bool = False
-    transport: Literal["stdio", "http", "mock", "local"] = "mock"
+    # ``mcp_http`` = servidor MCP standalone (ADR-017). Sem ele no Literal,
+    # GET /api/3d/capabilities estourava ValidationError (500) exatamente no
+    # modo standalone e derrubava o diagnóstico da UI.
+    transport: Literal["stdio", "http", "mock", "local", "mcp_http"] = "mock"
     tools: list[str] = Field(default_factory=list)
     status: str = "adapter_mock"
     detail: str = ""

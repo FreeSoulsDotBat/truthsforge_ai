@@ -2,8 +2,8 @@
 
 Fase 1 usa um ``inputSchema`` permissivo por tool — os schemas ricos (args,
 unidades, exemplos) entram com o asset ``tool_schemas.py`` (fidelity) na Fase
-2/4. A allowlist exposta é exatamente ``FUSION_TOOLS`` (já exclui
-``fusion.run_script`` — RF-023).
+2/4. A allowlist exposta é ``FUSION_TOOLS`` (já exclui ``fusion.run_script``
+— RF-023) filtrada pelos handlers executáveis do script (paridade list/call).
 """
 
 from __future__ import annotations
@@ -19,12 +19,28 @@ from app.modeling.fusion_adapter import FUSION_TOOLS
 _PERMISSIVE_INPUT_SCHEMA: dict = {"type": "object", "additionalProperties": True}
 
 
+def executable_fusion_tools() -> tuple[str, ...]:
+    """Interseção registry × handlers do script (paridade list/call real).
+
+    ``FUSION_TOOLS`` pode conter tools registradas sem handler executável
+    (ex.: ``fusion.relate_bodies``, UNRELEASED — o resolver F7 a expande
+    ANTES do dispatch). Expor essas tools no ``tools/list`` fazia clientes
+    externos receberem ``fusion.autodesk_mcp_error`` ao invocá-las, além de
+    penalizar a saúde do adapter.
+    """
+
+    from app.modeling.fusion_mcp_scripts import FUSION_SCRIPT_TOOLS
+
+    script_tools = set(FUSION_SCRIPT_TOOLS)
+    return tuple(name for name in FUSION_TOOLS if name in script_tools)
+
+
 def build_fusion_tools() -> list[mtypes.Tool]:
     # Fonte: a allowlist executável do adapter (derivada do tool_registry, já
-    # com ``fusion.run_script`` excluído — RF-023). É o mesmo conjunto que o
-    # ``execute`` aceita, garantindo paridade list/call.
+    # com ``fusion.run_script`` excluído — RF-023) filtrada pelos handlers
+    # reais do script, garantindo paridade list/call.
     tools: list[mtypes.Tool] = []
-    for name in sorted(FUSION_TOOLS):
+    for name in sorted(executable_fusion_tools()):
         descriptor = tool_registry.descriptor(name)
         description = (
             descriptor.description

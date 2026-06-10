@@ -323,6 +323,25 @@ def test_is_high_risk_only_true_for_high_risk_category() -> None:
     assert not is_high_risk("blender.no_such_tool")
 
 
+def test_fusion_registry_tools_have_script_handlers() -> None:
+    """Contrato cross-layer (fusion-operations.md §5): toda tool fusion do
+    registry tem handler executável em ``fusion_mcp_scripts``, exceto as
+    expandidas pelo resolver ANTES do dispatch (lista explícita). Foi a falta
+    deste teste que deixou ``fusion.relate_bodies`` ser exposta inexecutável
+    pelo MCP standalone."""
+
+    from app.modeling.fusion_mcp_scripts import FUSION_SCRIPT_TOOLS
+
+    sem_handler_por_design = {
+        "fusion.relate_bodies",  # F7: o resolver expande ANTES do dispatch
+        "fusion.run_script",  # RF-023: nunca executável (nem exposto)
+    }
+    missing = set(FUSION_TOOLS) - set(FUSION_SCRIPT_TOOLS) - sem_handler_por_design
+    assert not missing, f"tools fusion sem handler executável: {sorted(missing)}"
+    orphan_handlers = set(FUSION_SCRIPT_TOOLS) - set(FUSION_TOOLS)
+    assert not orphan_handlers, f"handlers sem registro na allowlist: {sorted(orphan_handlers)}"
+
+
 def test_is_destructive_only_true_for_destructive_category() -> None:
     assert is_destructive("fusion.delete_body")
     assert not is_destructive("blender.apply_bevel")

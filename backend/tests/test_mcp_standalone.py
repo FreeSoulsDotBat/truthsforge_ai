@@ -106,7 +106,14 @@ def test_list_tools_exposes_fusion_allowlist(mcp_server):
                     return [tool.name for tool in listed.tools]
 
     names = asyncio.run(_go())
-    assert set(names) == set(ADAPTER_FUSION_TOOLS)
+    from app.modeling.mcp_standalone.tools import executable_fusion_tools
+
+    # Paridade list/call real: só tools com handler executável no script são
+    # expostas (fusion.relate_bodies é UNRELEASED/expandida pré-dispatch e
+    # ficaria inexecutável para um cliente externo).
+    assert set(names) == set(executable_fusion_tools())
+    assert set(names) <= set(ADAPTER_FUSION_TOOLS)
+    assert "fusion.relate_bodies" not in names
     # run_script nunca é exposto (RF-023).
     assert "fusion.run_script" not in names
 
