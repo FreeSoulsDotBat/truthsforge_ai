@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { modeling3dApi } from "../api";
-import type { ModelingPlan, ModelingPlanStatus } from "../types";
+import type { ModelingExecutionResult, ModelingPlan, ModelingPlanStatus } from "../types";
 import { useModelingPlanActions } from "./useModelingPlanActions";
 
 vi.mock("../api", () => ({
@@ -43,7 +43,9 @@ describe("useModelingPlanActions — recuperação de queda de rede no execute",
       exec = await result.current.approve("p1");
     });
 
-    expect(exec?.plan.status).toBe("completed");
+    // O `exec` é reatribuído dentro do closure do `act`; o CFA externo não
+    // enxerga a escrita e estreita p/ `null`. O cast restaura a união real.
+    expect((exec as ModelingExecutionResult | null)?.plan.status).toBe("completed");
     expect(result.current.error).toBeNull(); // NÃO mostra "falhou"
   });
 

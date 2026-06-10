@@ -131,6 +131,29 @@ describe("ModelingPlanCard", () => {
     expect(onRevise).toHaveBeenCalledTimes(1);
   });
 
+  it("C: surfaces which step failed and why on a failed plan", () => {
+    render(
+      <ModelingPlanCard
+        plan={plan({
+          status: "failed",
+          steps: [
+            step({ seq: 1, tool_name: "fusion.add_box", status: "completed" }),
+            step({
+              seq: 9,
+              tool_name: "fusion.distribute_along",
+              status: "failed",
+              error: "role 'rear_top' ambíguo em 'BoxOuter'"
+            })
+          ]
+        })}
+      />
+    );
+    const detail = screen.getByTestId("modeling-plan-failed-detail");
+    expect(detail.textContent).toContain("Passo 9");
+    expect(detail.textContent).toContain("fusion.distribute_along");
+    expect(detail.textContent).toContain("rear_top");
+  });
+
   it("disables approve/reject while busy", () => {
     render(<ModelingPlanCard plan={plan()} onApprove={vi.fn()} onReject={vi.fn()} isBusy />);
     expect((screen.getByTestId("modeling-plan-approve") as HTMLButtonElement).disabled).toBe(true);
