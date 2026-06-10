@@ -16,6 +16,7 @@ import { useId, useMemo, useState } from "react";
 
 import { Badge } from "../../../components/ui/Badge";
 import { cn } from "../../../lib/utils";
+import { statusLabel } from "../modeling-format";
 import type { ModelingPlan, ModelingPlanEdit, ModelingPlanStep, ModelingRiskLevel } from "../types";
 
 interface DraftStep {
@@ -91,22 +92,6 @@ const RISK_BADGE_CLASS: Record<ModelingRiskLevel, string> = {
   medium: "bg-[color-mix(in_srgb,var(--ember)_12%,transparent)] text-forge-amber border-forge-amber/40",
   high: "bg-[color-mix(in_srgb,var(--err)_12%,transparent)] text-forge-red border-forge-red/60"
 };
-
-const STATUS_LABEL: Record<string, string> = {
-  draft: "rascunho",
-  waiting_approval: "aguardando aprovação",
-  approved: "aprovado",
-  running: "executando",
-  completed: "concluído",
-  rejected: "rejeitado",
-  failed: "falhou",
-  pending: "pendente"
-};
-
-function statusLabel(status: string | undefined | null): string {
-  if (!status) return "—";
-  return STATUS_LABEL[status] ?? status;
-}
 
 function highRiskSteps(steps: ModelingPlanStep[]): ModelingPlanStep[] {
   return steps.filter((step) => step.risk_level === "high" || step.approval_required === true);

@@ -76,8 +76,9 @@ export function EnableModeling3DDialog({
             Ativar modelagem 3D no chat
           </h3>
           <p className="text-sm text-forge-muted">
-            O próximo chat será marcado como 3D e JUDITE executará adições e alterações normais via MCP fluido. Deleções
-            e ações destrutivas continuam abrindo aprovação humana.
+            O próximo chat será marcado como 3D: JUDITE faz a descoberta, propõe um plano e espera a sua aprovação antes
+            de executar. Edições posteriores seguras autoexecutam; deleções e ações destrutivas sempre abrem aprovação
+            humana.
           </p>
         </div>
         <div className="mt-4 grid gap-3">
@@ -94,8 +95,8 @@ export function EnableModeling3DDialog({
             </select>
           </label>
           <p className="rounded-md border border-forge-line bg-forge-ink-deep px-3 py-2 text-xs text-forge-muted">
-            Modo: fluido allowlistado. O plano estruturado fica auditável no chat, sem etapa separada de aprovação para
-            operações seguras.
+            Modo: plano com aprovação. Todo plano primário para no card (Aprovar / Rejeitar / Editar) antes de executar;
+            edições seguras no modelo pronto rodam no fluxo fluido allowlistado.
           </p>
         </div>
         <div className="mt-4 flex justify-end gap-2">

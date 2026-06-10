@@ -2,6 +2,7 @@ import { CheckCircle2, Pencil, Undo2, XCircle } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "../../../components/ui/Badge";
+import { statusLabel } from "../modeling-format";
 import type { ModelingPlan } from "../types";
 
 /**
@@ -52,6 +53,7 @@ export function ModelingEditCard({ plan, isBusy, onRollback }: ModelingEditCardP
 
   const [pending, setPending] = useState(false);
   const [rolledBack, setRolledBack] = useState(false);
+  const [rollbackError, setRollbackError] = useState<string | null>(null);
   // Edições concluídas E falhas podem ser desfeitas: uma edição que falhou no
   // meio já aplicou passos parciais (ex.: o 1º fillet entrou antes do 2º falhar),
   // então o rollback ao ponto pré-edição é justamente o que se quer.
@@ -64,9 +66,14 @@ export function ModelingEditCard({ plan, isBusy, onRollback }: ModelingEditCardP
   const handleRollback = async () => {
     if (!onRollback) return;
     setPending(true);
+    setRollbackError(null);
     try {
       const ok = await onRollback(plan.id);
       if (ok !== false) setRolledBack(true);
+    } catch {
+      // O contrato do prop permite callbacks que lançam; sem este catch o
+      // erro virava unhandled rejection e sumia sem render (RNF-006).
+      setRollbackError("Falha ao desfazer a edição. Tente novamente.");
     } finally {
       setPending(false);
     }
@@ -85,14 +92,17 @@ export function ModelingEditCard({ plan, isBusy, onRollback }: ModelingEditCardP
         </div>
         <div className="flex flex-wrap gap-1">
           <Badge>{plan.software_choice}</Badge>
-          <Badge>{plan.status}</Badge>
+          <Badge>{statusLabel(plan.status)}</Badge>
           <Badge>edição</Badge>
         </div>
       </header>
       <p className="mt-1 line-clamp-2 text-forge-muted">{summary}</p>
       <p className="mt-1 text-forge-muted">
         {executedCount} etapa(s) executada(s)
-        {failedCount > 0 ? ` · ${failedCount} com falha` : ""} · sem aprovação adicional (allowlist segura).
+        {failedCount > 0 ? ` · ${failedCount} com falha` : ""}
+        {plan.approval_required
+          ? " · aprovada por você (etapa de risco)."
+          : " · sem aprovação adicional (allowlist segura)."}
       </p>
       {rolledBack ? (
         <p className="mt-1.5 flex items-center gap-1 text-forge-muted" data-testid="modeling-edit-rolled-back">
@@ -110,6 +120,11 @@ export function ModelingEditCard({ plan, isBusy, onRollback }: ModelingEditCardP
             <Undo2 size={12} aria-hidden />
             {pending ? "Desfazendo…" : "Desfazer última edição"}
           </button>
+          {rollbackError ? (
+            <p className="mt-1 text-forge-red" role="alert" data-testid="modeling-edit-rollback-error">
+              {rollbackError}
+            </p>
+          ) : null}
         </div>
       ) : null}
     </section>

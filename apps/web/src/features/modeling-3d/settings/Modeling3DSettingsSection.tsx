@@ -29,8 +29,8 @@ export function Modeling3DSettingsSection({ software, onSoftwareChange }: Modeli
           </select>
         </label>
         <p className="rounded-md border border-forge-line bg-forge-ink-deep px-3 py-2 text-xs text-forge-muted">
-          Execução: fluida allowlistada. Adições e alterações normais podem autoexecutar; deleções, ações destrutivas e
-          high-risk exigem aprovação humana.
+          Execução: todo plano primário para no card para a sua aprovação antes de rodar. Edições seguras no modelo
+          pronto autoexecutam (allowlist); deleções, ações destrutivas e high-risk sempre exigem aprovação humana.
         </p>
       </div>
     </div>

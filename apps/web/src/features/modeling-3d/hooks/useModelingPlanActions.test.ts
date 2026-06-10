@@ -38,7 +38,9 @@ describe("useModelingPlanActions — recuperação de queda de rede no execute",
     api.getPlan.mockResolvedValue(plan("completed")); // backend terminou apesar da queda
 
     const { result } = renderHook(() => useModelingPlanActions());
-    let exec: Awaited<ReturnType<typeof result.current.approve>> = null;
+    // `null as ...` evita o narrowing do TS para o literal `null` (a atribuição
+    // acontece dentro do closure do act e não é rastreada pelo compilador).
+    let exec = null as Awaited<ReturnType<typeof result.current.approve>>;
     await act(async () => {
       exec = await result.current.approve("p1");
     });

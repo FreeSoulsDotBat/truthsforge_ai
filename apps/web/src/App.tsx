@@ -78,6 +78,7 @@ import {
 } from "./features/dashboard/dashboard-sections";
 import { WarningBanner } from "./components/ui/WarningBanner";
 import { EnableModeling3DDialog, ModelingDiagnosticsModal } from "./features/modeling-3d/components";
+import { modeling3dApi } from "./features/modeling-3d/api";
 import { isModeling3DChat } from "./features/modeling-3d/chat-domain";
 import { useModeling3dChat, useModelingPlanActions } from "./features/modeling-3d/hooks";
 import type { ModelingPlanCardActions } from "./components/app-chat";
@@ -520,6 +521,17 @@ function App() {
   const activeSessionIsModeling3D = isModeling3DChat(activeSession);
   const modeling3dEnabled = nextChatIs3D || activeSessionIsModeling3D;
   const activeModelingPlanId = activeSession?.modeling_plan_id ?? null;
+  // RF-024: o trace_id chega no metadata SSE do plano; sem repassá-lo ao modal
+  // de diagnóstico os eventos de UI viram no-op e o trace perde os spans do
+  // planner (gravados com plan_id nulo — ver docs/3d-modeling-debug.md §4).
+  const activeModelingTraceId = useMemo(() => {
+    if (!activeSession || !activeModelingPlanId) return null;
+    for (let index = activeSession.messages.length - 1; index >= 0; index -= 1) {
+      const plan = messageMetadata(activeSession.messages[index]).modeling_plan;
+      if (plan?.id === activeModelingPlanId) return plan.trace_id ?? null;
+    }
+    return null;
+  }, [activeSession, activeModelingPlanId]);
 
   const applyChatTitleToSession = useCallback((sessionId: string, title: string) => {
     const normalizedTitle = normalizeRequiredChatTitle(title);
@@ -568,32 +580,67 @@ function App() {
     [setSessions]
   );
 
+  // Anti-replay (C5): quando uma ação do card falha (ex.: 409 — o card veio de
+  // uma mensagem persistida e o plano já rodou/foi rejeitado), reconcilia o
+  // card com o estado REAL do backend para ele parar de oferecer "Aprovar".
+  const reconcileModelingPlan = useCallback(
+    async (planId: string) => {
+      try {
+        const plan = await modeling3dApi.getPlan(planId);
+        const stage =
+          plan.status === "completed"
+            ? "editing"
+            : plan.status === "failed"
+              ? "failed"
+              : plan.status === "rejected"
+                ? "discovery"
+                : "planning";
+        applyPlanToSession(plan, stage);
+      } catch {
+        // Backend indisponível: mantém o card como está (o erro da ação já
+        // aparece na superfície do hook).
+      }
+    },
+    [applyPlanToSession]
+  );
+
   const handleApproveModelingPlan = useCallback(
     async (planId: string) => {
       const execution = await modelingPlanActionsRuntime.approve(planId);
-      if (!execution) return;
-      const next = execution.plan.status === "failed" ? "editing" : "editing";
+      if (!execution) {
+        void reconcileModelingPlan(planId);
+        return;
+      }
+      // DT-008: falha de execução leva ao estágio `failed` (distinto de
+      // sucesso) — espelha a state machine do backend.
+      const next = execution.plan.status === "failed" ? "failed" : "editing";
       applyPlanToSession(execution.plan, next);
     },
-    [applyPlanToSession, modelingPlanActionsRuntime]
+    [applyPlanToSession, modelingPlanActionsRuntime, reconcileModelingPlan]
   );
 
   const handleRejectModelingPlan = useCallback(
     async (planId: string, reason: string) => {
       const rejected = await modelingPlanActionsRuntime.reject(planId, reason);
-      if (!rejected) return;
+      if (!rejected) {
+        void reconcileModelingPlan(planId);
+        return;
+      }
       applyPlanToSession(rejected, "discovery");
     },
-    [applyPlanToSession, modelingPlanActionsRuntime]
+    [applyPlanToSession, modelingPlanActionsRuntime, reconcileModelingPlan]
   );
 
   const handleRetryModelingPlan = useCallback(
     async (planId: string) => {
       const execution = await modelingPlanActionsRuntime.retry(planId);
-      if (!execution) return;
-      applyPlanToSession(execution.plan, "editing");
+      if (!execution) {
+        void reconcileModelingPlan(planId);
+        return;
+      }
+      applyPlanToSession(execution.plan, execution.plan.status === "failed" ? "failed" : "editing");
     },
-    [applyPlanToSession, modelingPlanActionsRuntime]
+    [applyPlanToSession, modelingPlanActionsRuntime, reconcileModelingPlan]
   );
 
   const handleReviseModelingPlan = useCallback(
@@ -1303,8 +1350,16 @@ function App() {
                   ...session,
                   is_modeling_3d: true,
                   modeling_software_preference: plan.software_choice,
+                  // No fluxo P1 o plano chega em `waiting_approval` (gate de
+                  // aprovação): o chat está PLANEJANDO, não executando.
                   modeling_stage:
-                    plan.status === "completed" ? "editing" : plan.status === "failed" ? "failed" : "executing",
+                    plan.status === "completed"
+                      ? "editing"
+                      : plan.status === "failed"
+                        ? "failed"
+                        : plan.status === "waiting_approval" || plan.status === "draft"
+                          ? "planning"
+                          : "executing",
                   modeling_plan_id: plan.id,
                   messages
                 };
@@ -2229,6 +2284,7 @@ function App() {
           open={modelingDiagnosticsOpen}
           planId={activeModelingPlanId}
           projectId={activeSessionProjectId}
+          traceId={activeModelingTraceId}
           onClose={() => setModelingDiagnosticsOpen(false)}
         />
       )}
