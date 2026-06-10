@@ -9,6 +9,20 @@
 
 ## Estado atual
 
+> **2026-06-10 — Varredura completa + correções (branch
+> `claude/hopeful-brahmagupta-jc4bg6`).** Auditoria integral do módulo 3D
+> contra a spec v4 encontrou ~135 achados (5 críticos) — relatório completo
+> com arquivo:linha em [`auditoria-2026-06-10.md`](./auditoria-2026-06-10.md).
+> Os críticos e os altos mecânicos foram corrigidos na própria branch (ver
+> seção "Correções aplicadas" do relatório): enforcement da categoria
+> `destructive` (P6/P8), gate anti-replay de planos (409), caminho vivo do
+> card consolidado no orchestrator (DT-006/DT-008/RF-007), rollback nativo
+> injetado no loop (RF-011), exaustão por divergência falha explícito,
+> `mcp_http` no contrato, Gate B sem exceção crua, build web verde
+> (RNF-004). **Pendências que exigem o dono**: ADR-022×`move_body` assado,
+> `is_open_boundary`, RF-026 (artifacts do Fusion), relatório esperado×medido
+> na UI (RF-012/013), badges mock/real (RF-002), add-in legado (11/55 tools).
+
 Refatoração v2 (chat-first integral + título obrigatório). **Onda 5
 concluída localmente** na branch `codex/3d-chat-title-required`; falta
 PR/merge.
