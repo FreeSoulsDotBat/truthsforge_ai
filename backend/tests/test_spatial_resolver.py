@@ -26,6 +26,7 @@ from app.modeling.spatial_ref import (
     BBOX_NOT_AXIS_ALIGNED,
     RELATIVE_COORD_FORBIDDEN,
     SpatialRefError,
+    find_edge,
 )
 from app.modeling.spatial_resolver import (
     F7_PLACEMENT_TOOLS,
@@ -557,6 +558,87 @@ def test_distribute_along_resolves_edge_by_role() -> None:
     )
     # 3 nós distribuídos ao longo da aresta medida (sem token chutado).
     assert sum(1 for s in steps if s.tool_name == "fusion.add_cylinder") == 3
+
+
+def _box_fragmented_rear_top() -> ModelState:
+    """BoxOuter 60x40x20 cuja aresta de trás-topo (y=40, z=20, ao longo de x)
+    está PARTIDA em 3 fragmentos colineares — o que acontece de fato quando os
+    knuckles da dobradiça são fundidos AO LONGO dela (step 8). + a aresta de
+    frente-topo intacta (score menor)."""
+    return ModelState(
+        bodies=[
+            ModelStateBody(
+                name="BoxOuter",
+                stable_id="B",
+                bbox_min_mm=[0, 0, 0],
+                bbox_max_mm=[60, 40, 20],
+                edges=[
+                    ModelStateEdge(
+                        token="REAR_A", length_mm=18, is_circular=False,
+                        start_point_mm=[0, 40, 20], end_point_mm=[18, 40, 20],
+                    ),
+                    ModelStateEdge(
+                        token="REAR_B", length_mm=16, is_circular=False,
+                        start_point_mm=[22, 40, 20], end_point_mm=[38, 40, 20],
+                    ),
+                    ModelStateEdge(
+                        token="REAR_C", length_mm=18, is_circular=False,
+                        start_point_mm=[42, 40, 20], end_point_mm=[60, 40, 20],
+                    ),
+                    ModelStateEdge(
+                        token="TOP_FRONT", length_mm=60, is_circular=False,
+                        start_point_mm=[0, 0, 20], end_point_mm=[60, 0, 20],
+                    ),
+                ],
+            )
+        ]
+    )
+
+
+def test_resolve_edge_role_merges_collinear_fragments() -> None:
+    """Gate dobradiça (step 9): a aresta de trás-topo partida pelos knuckles
+    fundidos vira fragmentos COLINEARES; o resolver os funde no span completo em
+    vez de errar 'ambíguo' — fragmentos da mesma reta NÃO são ambíguos."""
+    st = _box_fragmented_rear_top()
+    tok = _resolve_edge_by_role("rear_top", "BoxOuter", st)
+    edge = find_edge(st, tok)
+    assert edge.start_point_mm == [0, 40, 20]
+    assert edge.end_point_mm == [60, 40, 20]
+    assert edge.length_mm == 60
+
+
+def test_distribute_along_uses_merged_collinear_span() -> None:
+    """distribute_along sobre o corpo com a aresta fragmentada distribui ao longo
+    do SPAN COMPLETO (coaxial com os knuckles do step 8), não de um fragmento —
+    é o que faz os furos coaxiais (step 9) baterem com os knuckles."""
+    st = _box_fragmented_rear_top()
+    steps, _ = expand_placement(
+        "fusion.distribute_along",
+        {
+            "edge": {"body": "BoxOuter", "role": "rear_top"},
+            "count": 5,
+            "spacing_mm": 12.5,
+            "prototype": {
+                "name": "Hole", "primitive": "cylinder", "diameter_mm": 2.2, "height_mm": 6,
+            },
+        },
+        st,
+    )
+    xs = sorted(
+        round(s.input_json["origin_mm"][0], 2)
+        for s in steps
+        if s.tool_name == "fusion.add_cylinder"
+    )
+    # span 0..60, 5 nós spacing 12.5 centralizados → 5/17.5/30/42.5/55 (não 0..18).
+    assert xs == [5.0, 17.5, 30.0, 42.5, 55.0]
+
+
+def test_resolve_edge_role_non_collinear_tie_still_ambiguous() -> None:
+    """Salvaguarda do invariante: empate NÃO-colinear (ex.: 'top' = as 4 arestas
+    do topo, retas distintas) continua erro tipado — só funde a MESMA reta."""
+    st = _box_fragmented_rear_top()
+    with pytest.raises(SpatialRefError):
+        _resolve_edge_by_role("top", "BoxOuter", st)
 
 
 # --------------------------------------------------------------------------- #

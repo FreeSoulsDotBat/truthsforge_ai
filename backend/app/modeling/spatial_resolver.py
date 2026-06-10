@@ -40,6 +40,7 @@ from app.core.contracts import (
     ModelingPlanStep,
     ModelingStepStatus,
     ModelState,
+    ModelStateEdge,
     ModelStateFace,
 )
 from app.modeling.spatial_ref import (
@@ -683,6 +684,63 @@ _EDGE_DIR: dict[str, tuple[float, float, float]] = {
     "right": (1.0, 0.0, 0.0),
 }
 _EDGE_POS_TOL = 0.1  # mm — margem p/ separar a aresta extrema da 2ª (senão ambíguo)
+_EDGE_COLLINEAR_TOL = 0.1  # mm — desvio perpendicular p/ tratar fragmentos como a MESMA reta
+
+
+def _merge_collinear_edges(
+    tied: list[ModelStateEdge], body: Any, role: str
+) -> str | None:
+    """F7: fragmentos COLINEARES (mesma reta) de uma aresta partida por features
+    fundidas ao longo dela — ex.: knuckles soldados na aresta da dobradiça — NÃO
+    são ambíguos: são a MESMA aresta conceitual fragmentada. Funde-os no span
+    completo (min..max ao longo da direção comum), injeta um edge sintético no
+    ``body`` (o ModelState aqui é um read-back descartável por-passo) e devolve o
+    token. ``None`` se as candidatas NÃO forem colineares — aí o chamador ergue
+    erro tipado (arestas geometricamente distintas, ambiguidade real). Mantém o
+    invariante: NUNCA chuta — só funde o que é, medidamente, a mesma reta."""
+
+    base = tied[0]
+    p0 = [float(c) for c in base.start_point_mm]  # type: ignore[union-attr]
+    d = [float(base.end_point_mm[i]) - p0[i] for i in range(3)]  # type: ignore[index]
+    dlen = sum(c * c for c in d) ** 0.5
+    if dlen <= 1e-9:
+        return None
+    d = [c / dlen for c in d]  # unitário da reta de referência
+
+    pts: list[list[float]] = []
+    for e in tied:
+        if not e.start_point_mm or not e.end_point_mm:
+            return None
+        pts.append([float(c) for c in e.start_point_mm])
+        pts.append([float(c) for c in e.end_point_mm])
+
+    # Colinearidade: cada endpoint a ≤ tol da reta (p0, d) na perpendicular.
+    for pt in pts:
+        w = [pt[i] - p0[i] for i in range(3)]
+        t = sum(w[i] * d[i] for i in range(3))
+        perp = sum((pt[i] - (p0[i] + t * d[i])) ** 2 for i in range(3)) ** 0.5
+        if perp > _EDGE_COLLINEAR_TOL:
+            return None  # não-colinear → ambiguidade real
+
+    # Span: projeta todos os endpoints em d e pega min..max.
+    ts = [sum((pt[i] - p0[i]) * d[i] for i in range(3)) for pt in pts]
+    t_lo, t_hi = min(ts), max(ts)
+    if (t_hi - t_lo) <= 1e-6:
+        return None
+    start = [round(p0[i] + t_lo * d[i], 4) for i in range(3)]
+    end = [round(p0[i] + t_hi * d[i], 4) for i in range(3)]
+    token = f"__merged__{role}__{body.name or 'body'}"
+    body.edges.append(
+        ModelStateEdge(
+            token=token,
+            is_circular=False,
+            start_point_mm=start,
+            end_point_mm=end,
+            direction=[round(c, 6) for c in d],
+            length_mm=round(t_hi - t_lo, 4),
+        )
+    )
+    return token
 
 
 def _resolve_edge_by_role(role: str, body_name: Any, state: ModelState | None) -> str:
@@ -721,10 +779,17 @@ def _resolve_edge_by_role(role: str, body_name: Any, state: ModelState | None) -
 
     ranked = sorted(straight, key=_score, reverse=True)
     top = ranked[0]
-    if len(ranked) > 1 and abs(_score(top) - _score(ranked[1])) <= _EDGE_POS_TOL:
+    tied = [e for e in ranked if abs(_score(e) - _score(top)) <= _EDGE_POS_TOL]
+    if len(tied) > 1:
+        # Empate no extremo: fragmentos colineares (aresta partida por features
+        # fundidas ao longo dela — ex.: knuckles na dobradiça) são a MESMA reta e
+        # se fundem no span completo; só erra quando são NÃO-colineares.
+        merged = _merge_collinear_edges(tied, body, role)
+        if merged is not None:
+            return merged
         raise SpatialRefError(
-            f"distribute_along: role '{role}' ambíguo em '{body_name}' (≥2 arestas no "
-            "extremo) — qualifique melhor o role."
+            f"distribute_along: role '{role}' ambíguo em '{body_name}' (≥2 arestas "
+            "NÃO-colineares no extremo) — qualifique melhor o role."
         )
     return top.token  # type: ignore[return-value]
 
