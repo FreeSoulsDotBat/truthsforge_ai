@@ -322,7 +322,16 @@ def enforce_relative_coord(
     moving = _find_body(state, str(ref))
     if moving is None or not (moving.bbox_min_mm and moving.bbox_max_mm):
         return
-    moved = _shifted_body(moving, [float(t) for t in translation[:3]])
+    try:
+        deltas = [float(t) for t in translation[:3]]
+    except (TypeError, ValueError):
+        # Componente declarativo (``@body(...).bbox...``/objeto-ref) na
+        # translação: este é exatamente o caminho que o Gate B quer INCENTIVAR
+        # — a resolução inline (downstream) mede e materializa o delta. Sem
+        # este guard, o ``float()`` estourava ValueError crua e derrubava o
+        # execute_plan inteiro (ADR-024: erro tipado, nunca exceção crua).
+        return
+    moved = _shifted_body(moving, deltas)
     others = [
         b for b in state.bodies if b is not moving and b.bbox_min_mm and b.bbox_max_mm
     ]

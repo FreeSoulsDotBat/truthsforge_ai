@@ -727,6 +727,23 @@ def test_enforce_allows_clean_flush_move() -> None:
     )  # não levanta
 
 
+def test_enforce_skips_declarative_translation_components() -> None:
+    """ADR-024: componente declarativo (@ref) na translação é o caminho BOM —
+    o Gate B não pode estourar exceção crua; a resolução inline (downstream)
+    materializa o delta medido."""
+
+    enforce_relative_coord(
+        _state(),
+        "fusion.move_body",
+        {"body_ref": "Tampa", "translation_mm": [0, 0, "@body('Caixa').bbox.max_z + 2"]},
+    )  # não levanta (nem ValueError crua, nem SpatialRefError)
+    enforce_relative_coord(
+        _state(),
+        "fusion.move_body",
+        {"body_ref": "Tampa", "translation_mm": [0, 0, {"face": "TOK"}]},
+    )  # objeto-ref idem
+
+
 def test_enforce_noop_without_state_or_other_bodies() -> None:
     # NUNCA inventa veredito: sem read-back (state None) ou com 1 só corpo → no-op.
     far = {"body_ref": "Tampa", "translation_mm": [0, 0, 80]}
