@@ -40,6 +40,7 @@ from typing import Any
 from app.core.config import settings
 from app.core.contracts import (
     AuditEvent,
+    ChatMessage,
     ChatModelingStage,
     ChatSession,
     ModelingApprovalDecision,
@@ -620,13 +621,34 @@ class ModelingChatOrchestrator:
         # ADR-013 gate: never execute a plan the user hasn't approved. Guards
         # the split two-call flow against a direct ``execute`` that skips
         # ``approve_plan_only``. ``completed`` is allowed so a retry in
-        # ``editing`` can re-run. See AGENTS.md "Preserve human-in-the-loop".
-        if plan.status not in (ModelingPlanStatus.approved, ModelingPlanStatus.completed):
+        # ``editing`` can re-run; ``failed`` is the explicit retry from the
+        # card and ``running`` the resume after a dropped connection. See
+        # AGENTS.md "Preserve human-in-the-loop".
+        if plan.status not in (
+            ModelingPlanStatus.approved,
+            ModelingPlanStatus.completed,
+            ModelingPlanStatus.failed,
+            ModelingPlanStatus.running,
+        ):
             raise ValueError(
                 f"Plano {plan_id!r} não está aprovado (status={plan.status.value!r}); "
                 "aprove antes de executar."
             )
-        if chat.modeling_stage is ChatModelingStage.approved:
+        if (
+            chat.modeling_stage is ChatModelingStage.planning
+            and plan.status is ModelingPlanStatus.approved
+        ):
+            # Catch-up de estágio: plano aprovado implicitamente pela policy
+            # (modo safe_auto sem high-risk) executado direto pelo card — o
+            # chat ainda está em ``planning``; registra a aprovação antes de
+            # iniciar a execução para a state machine não ficar para trás.
+            chat = self._set_stage(
+                chat,
+                ChatModelingEvent.PLAN_APPROVED,
+                audit="modeling.chat.plan_approved",
+                extra={"plan_id": plan_id, "implicit": True},
+            )
+        if chat.modeling_stage in (ChatModelingStage.approved, ChatModelingStage.failed):
             chat = self._set_stage(
                 chat,
                 ChatModelingEvent.EXECUTION_STARTED,
@@ -652,6 +674,12 @@ class ModelingChatOrchestrator:
                     "blocked_step_ids": execution.blocked_step_ids,
                 },
             )
+        if plan.kind is ModelingPlanKind.primary and chat.modeling_plan_id != plan_id:
+            # Vincula o plano primário ao chat (contexto das próximas edições).
+            # Planos de edição NUNCA sobrescrevem o vínculo — o histórico
+            # completo vive no plano primário (contrato do rollback, T3.6).
+            chat = chat.model_copy(update={"modeling_plan_id": plan_id, "updated_at": now_utc()})
+            self.store.upsert_chat_session(chat)
 
         self._tracer.record(
             "executor.plan_finished",
@@ -722,7 +750,37 @@ class ModelingChatOrchestrator:
             plan_id=plan_id,
             reason=reason,
         )
+        self._record_rejection_message(updated, plan_id, reason)
         return updated, rejected
+
+    def _record_rejection_message(self, chat: ChatSession, plan_id: str, reason: str) -> None:
+        """RF-007: a justificativa da rejeição precisa entrar no HISTÓRICO do
+        chat — é dali que a descoberta do próximo turno lê o contexto. Sem
+        isso a UI coleta a justificativa e o motor replaneja às cegas.
+        Best-effort: nunca quebra a rejeição."""
+
+        if not reason or not hasattr(self.store, "add_message"):
+            return
+        try:
+            self.store.add_message(
+                ChatMessage(
+                    session_id=chat.id,
+                    role="assistant",
+                    content=(
+                        "Plano rejeitado pelo usuário. Justificativa: "
+                        f"{reason}\nVou retomar as perguntas de descoberta "
+                        "considerando essa justificativa."
+                    ),
+                    metadata={
+                        "provider": "modeling_3d",
+                        "persona": "JUDITE",
+                        "response_mode": "modeling_3d",
+                        "modeling_plan_rejection": {"plan_id": plan_id, "reason": reason},
+                    },
+                )
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Falha ao registrar justificativa de rejeição no chat.", exc_info=True)
 
     # ------------------------------------------------------------------
     # editing (mini-plans)
@@ -1012,6 +1070,24 @@ class ModelingChatOrchestrator:
         )
         execution = self._run_execution(approved)
 
+        if execution.plan.status is ModelingPlanStatus.failed:
+            # DT-008 no caminho de edição: falha NÃO é reportada como edição
+            # aplicada. O chat permanece no estágio atual (o modelo anterior
+            # segue válido) e a auditoria registra a falha explicitamente.
+            self._audit(
+                "modeling.chat.edit_failed",
+                chat_id=chat.id,
+                plan_id=plan.id,
+                executed_step_ids=execution.executed_step_ids,
+                blocked_step_ids=execution.blocked_step_ids,
+            )
+            return EditPlanOutcome(
+                chat=chat,
+                plan=execution.plan,
+                execution=execution,
+                requires_approval=False,
+            )
+
         updated = self._set_stage(
             chat,
             ChatModelingEvent.EDIT_AUTO_EXECUTED,
@@ -1044,6 +1120,17 @@ class ModelingChatOrchestrator:
             ),
         )
         execution = self._run_execution(approved)
+        if execution.plan.status is ModelingPlanStatus.failed:
+            # Falha da edição high-risk aprovada: não registra como "aplicada";
+            # o chat permanece no estágio atual e a falha fica auditável.
+            self._audit(
+                "modeling.chat.edit_failed",
+                chat_id=chat.id,
+                plan_id=plan_id,
+                executed_step_ids=execution.executed_step_ids,
+                blocked_step_ids=execution.blocked_step_ids,
+            )
+            return chat, execution.plan, execution
         updated = self._set_stage(
             chat,
             ChatModelingEvent.EDIT_HIGH_RISK_APPROVED,
@@ -1069,6 +1156,7 @@ class ModelingChatOrchestrator:
             audit="modeling.chat.edit_high_risk_rejected",
             extra={"plan_id": plan_id, "reason": reason},
         )
+        self._record_rejection_message(updated, plan_id, reason)
         return updated, rejected
 
     # ------------------------------------------------------------------

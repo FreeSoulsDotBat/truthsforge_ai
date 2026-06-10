@@ -563,7 +563,16 @@ def build_modeling_3d_stream_response(
             if hasattr(store, "upsert_chat_session"):
                 store.upsert_chat_session(titled_session)
             yield _sse("session_title", {"session_id": session.id, "title": title})
-        if executed:
+        if executed and plan.status == ModelingPlanStatus.failed:
+            # DT-008 no caminho de edição: falha não pode ser anunciada como
+            # "Edição aplicada" — o usuário precisa saber que nada mudou.
+            yield _runtime_status(
+                "modeling_3d_plan",
+                "Edição falhou",
+                "A execução da edição falhou; o modelo anterior permanece. "
+                "Veja o diagnóstico do plano para detalhes.",
+            )
+        elif executed:
             yield _runtime_status(
                 "modeling_3d_plan",
                 "Edição aplicada (modo fluido)",

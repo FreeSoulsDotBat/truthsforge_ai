@@ -119,6 +119,56 @@ class ModelingPlanNotExecutable(Exception):
         self.status = status
 
 
+APPROVABLE_PLAN_STATUSES: frozenset[ModelingPlanStatus] = frozenset(
+    {
+        ModelingPlanStatus.draft,
+        ModelingPlanStatus.waiting_approval,
+        ModelingPlanStatus.approved,  # idempotente
+        ModelingPlanStatus.rejected,  # re-rejeição idempotente (só p/ reject)
+    }
+)
+
+EXECUTABLE_PLAN_STATUSES: frozenset[ModelingPlanStatus] = frozenset(
+    {
+        ModelingPlanStatus.approved,
+        ModelingPlanStatus.failed,  # retry explícito do card
+        ModelingPlanStatus.running,  # retomada após queda de conexão
+        # draft (plan_only) segue permitido: o executor bloqueia todos os
+        # steps e devolve o no-op "modo planejamento" (contrato existente).
+        ModelingPlanStatus.draft,
+    }
+)
+
+
+def ensure_plan_approvable(plan: ModelingPlan, decision: ModelingApprovalDecision) -> None:
+    """Gate anti-replay compartilhado por service e rotas (fonte única).
+
+    Plano ``waiting_approval``/``draft`` aceita aprovar/rejeitar; plano
+    ``rejected`` só aceita re-rejeição idempotente (RF-007: rejeição volta
+    para a descoberta, não ressuscita como aprovado); estados terminais ou em
+    execução não aceitam decisão nenhuma.
+    """
+
+    if plan.status not in APPROVABLE_PLAN_STATUSES:
+        raise ModelingPlanNotApprovable(plan.id, plan.status)
+    if (
+        plan.status == ModelingPlanStatus.rejected
+        and decision != ModelingApprovalDecision.reject
+    ):
+        raise ModelingPlanNotApprovable(plan.id, plan.status)
+
+
+def ensure_plan_executable(plan: ModelingPlan) -> None:
+    """Gate de execução compartilhado por service e rotas (fonte única).
+
+    Plano ``waiting_approval``/``rejected`` não executa sem aprovação e plano
+    ``completed`` não re-executa (anti-replay, C5 da varredura 2026-06-10).
+    """
+
+    if plan.status not in EXECUTABLE_PLAN_STATUSES:
+        raise ModelingPlanNotExecutable(plan.id, plan.status)
+
+
 class ModelingRollbackUnavailable(Exception):
     """Plano de edição sem ponto de rollback (timeline pré-edição não capturada).
 
@@ -250,28 +300,11 @@ class ModelingService:
     # approval & step decisions (kept inline; mutate only the persisted plan)
     # ------------------------------------------------------------------
 
-    _APPROVABLE_STATUSES = frozenset(
-        {
-            ModelingPlanStatus.draft,
-            ModelingPlanStatus.waiting_approval,
-            ModelingPlanStatus.approved,  # idempotente
-            ModelingPlanStatus.rejected,  # re-rejeição idempotente (só p/ reject)
-        }
-    )
-
     def approve_plan(self, plan_id: str, payload: ModelingApprovalRequest) -> ModelingPlan:
         # DT-006: mutação de aprovação centralizada em ``policy.apply_plan_approval``
         # (fonte única compartilhada com o ModelingChatOrchestrator).
         plan = self._get_plan_or_raise(plan_id)
-        if plan.status not in self._APPROVABLE_STATUSES:
-            raise ModelingPlanNotApprovable(plan_id, plan.status)
-        if (
-            plan.status == ModelingPlanStatus.rejected
-            and payload.decision != ModelingApprovalDecision.reject
-        ):
-            # RF-007: plano rejeitado volta para a descoberta/replanejamento;
-            # um card antigo não pode ressuscitá-lo como aprovado.
-            raise ModelingPlanNotApprovable(plan_id, plan.status)
+        ensure_plan_approvable(plan, payload.decision)
         result = apply_plan_approval(plan, payload)
         self.store.upsert_modeling_plan(result)
         if payload.decision != ModelingApprovalDecision.reject:
@@ -396,24 +429,9 @@ class ModelingService:
     # execution (delegated)
     # ------------------------------------------------------------------
 
-    _EXECUTABLE_STATUSES = frozenset(
-        {
-            ModelingPlanStatus.approved,
-            ModelingPlanStatus.failed,  # retry explícito do card
-            ModelingPlanStatus.running,  # retomada após queda de conexão
-            # draft (plan_only) segue permitido: o executor bloqueia todos os
-            # steps e devolve o no-op "modo planejamento" (contrato existente).
-            ModelingPlanStatus.draft,
-        }
-    )
-
     def execute_plan(self, plan_id: str) -> ModelingExecutionResult:
         plan = self._get_plan_or_raise(plan_id)
-        # Gate de aprovação no endpoint do card (ADR-013/RF-008): plano
-        # ``waiting_approval``/``rejected`` não executa sem aprovação e plano
-        # ``completed`` não re-executa (anti-replay, C5 da varredura).
-        if plan.status not in self._EXECUTABLE_STATUSES:
-            raise ModelingPlanNotExecutable(plan_id, plan.status)
+        ensure_plan_executable(plan)
         # O card (routes/modeling.py → /plans/{id}/execute) executa FORA de um
         # trace aberto. Sem isto, todo ``self._tracer.record(...)`` do executor
         # e do loop vira no-op (observability.record: ``tid is None`` → None) e o
