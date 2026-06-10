@@ -181,6 +181,58 @@ def test_loop_corrects_on_geometric_divergence_even_when_tool_ok() -> None:
     assert executor.calls == [("fusion.extrude_profile", True), ("fusion.extrude_profile", True)]
 
 
+def test_loop_persists_failed_durably_when_corrector_raises() -> None:
+    """B (observabilidade): se o corretor estoura exceção (ex.: LLM/timeout/
+    cancelamento), o plano NÃO pode congelar em ``approved`` — o desfecho
+    ``failed`` e o passo que falhou precisam estar duráveis na store ANTES de a
+    exceção propagar. Era a raiz do "deu falha mas não consigo confirmar":
+    o upsert terminal vivia só no fim do laço e era pulado na exceção."""
+
+    import pytest
+
+    store = _FakeStore()
+    executor = _ScriptedExecutor(store, decide=lambda step: False)  # passo 1 falha
+
+    def boom_corrector(step, output, attempt):
+        raise RuntimeError("corretor estourou (simula LLM/timeout)")
+
+    loop = ModelingAgentLoop(executor, corrector=boom_corrector)
+    plan = _plan(_step(1, "fusion.hole"), _step(2, "fusion.extrude_profile"))
+
+    with pytest.raises(RuntimeError):
+        loop.run(plan)
+
+    persisted = store.plans[plan.id]
+    assert persisted.status is ModelingPlanStatus.failed  # não ficou em `approved`
+    # o passo que falhou ficou durável (carimbado antes do corretor estourar)
+    assert persisted.steps[0].status is ModelingStepStatus.failed
+    assert persisted.steps[0].output_json is not None
+
+
+def test_loop_persists_running_snapshot_each_step() -> None:
+    """B: o plano é persistido a CADA passo (status=running) — não só no fim.
+    Garante estado parcial verdadeiro se a request cair no meio do build."""
+
+    seen_status: list[ModelingPlanStatus] = []
+
+    class _SpyStore(_FakeStore):
+        def upsert_modeling_plan(self, plan: ModelingPlan) -> ModelingPlan:
+            seen_status.append(plan.status)
+            return super().upsert_modeling_plan(plan)
+
+    store = _SpyStore()
+    executor = _ScriptedExecutor(store, decide=lambda step: True)
+    loop = ModelingAgentLoop(executor, corrector=lambda s, o, a: s)
+    result = loop.run(
+        _plan(_step(1, "fusion.add_box"), _step(2, "fusion.extrude_profile"))
+    )
+
+    # houve ao menos um snapshot `running` antes do `completed` final
+    assert ModelingPlanStatus.running in seen_status
+    assert seen_status[-1] is ModelingPlanStatus.completed
+    assert result.plan.status is ModelingPlanStatus.completed
+
+
 def test_build_dimension_verifier_compares_list_dims() -> None:
     """C (verifier): expected_dimensions_mm e o read-back das tools são listas
     [x,y,z]. O verifier compara por eixo; bbox z=0 (cut consumiu a peça) diverge.

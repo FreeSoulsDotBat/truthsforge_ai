@@ -85,88 +85,159 @@ class ModelingAgentLoop:
         blocked_step_ids: list[str] = []
         events: list[str] = []
         tool_call_ids: list[str] = []
-        next_steps: list[ModelingPlanStep] = []
+        # B (observabilidade): mantemos o estado COMPLETO dos passos (mesmo
+        # comprimento de ``plan.steps``) e o PERSISTIMOS a cada passo — não só
+        # no fim. Sem isto, uma exceção no corretor (LLM longo) ou a queda da
+        # request HTTP deixava o plano congelado em ``approved`` sem o erro do
+        # passo, e a verdade só vivia no ``/trace``. Com o snapshot incremental
+        # + o ``finally`` de desfecho, a falha sempre vira durável no plano que
+        # o front lê. Ver memory: modeling-gate-observability.
+        settled: list[ModelingPlanStep] = list(plan.steps)
         aborted = False
 
-        for step in plan.steps:
-            if aborted:
-                # RF-011: após esgotar a correção de um passo, o motor PARA;
-                # os passos seguintes ficam bloqueados (estado consistente).
-                blocked_step_ids.append(step.id)
-                next_steps.append(step)
-                continue
-            if step.error:
-                blocked_step_ids.append(step.id)
-                next_steps.append(step)
-                continue
-            if step.approval_required and step.status != ModelingStepStatus.approved:
-                blocked_step_ids.append(step.id)
-                next_steps.append(step)
-                continue
+        try:
+            for idx, step in enumerate(plan.steps):
+                if aborted:
+                    # RF-011: após esgotar a correção de um passo, o motor PARA;
+                    # os passos seguintes ficam bloqueados (estado consistente).
+                    blocked_step_ids.append(step.id)
+                    continue
+                if step.error:
+                    blocked_step_ids.append(step.id)
+                    continue
+                if step.approval_required and step.status != ModelingStepStatus.approved:
+                    blocked_step_ids.append(step.id)
+                    continue
 
-            current = step
-            outcome = self.executor._execute_single_step(current, plan=plan)
-            attempt = 0
-            # Computa a divergência geométrica UMA vez por iteração e reaproveita
-            # tanto na condição de correção quanto no payload do corretor (o
-            # verifier desempacota o envelope + json.loads; rodá-lo 2x por passo
-            # é desperdício no caminho quente do loop).
-            divergence = self._compute_divergence(current, outcome)
-            while (not outcome.ok or bool(divergence)) and attempt < self.max_iterations:
-                attempt += 1
-                # Tool OK mas geometria divergente (verifier): injeta a
-                # divergência no output p/ o corretor enxergar (o
-                # build_correction_context formata "esperado × medido").
-                self._tracer.record(
-                    "agent_loop.correction_attempt",
-                    source=ModelingTraceSource.backend,
-                    level=ModelingTraceLevel.warn,
-                    message=f"Step {current.seq}: auto-correção {attempt}/{self.max_iterations}",
-                    payload={
-                        "step_id": step.id,
-                        "tool_name": current.tool_name,
-                        "error_code": outcome.output.get("error_code"),
-                        "divergence": divergence,
-                    },
-                    plan_id=plan.id,
-                )
-                corrector_output = outcome.output
-                if divergence is not None:
-                    corrector_output = {**outcome.output, "verification_divergence": divergence}
-                corrected = (
-                    self.corrector(current, corrector_output, attempt) if self.corrector else None
-                )
-                if corrected is None:
-                    break
-                current = corrected
+                current = step
                 outcome = self.executor._execute_single_step(current, plan=plan)
+                settled[idx] = outcome.step
+                self._persist_progress(plan, settled)
+                attempt = 0
+                # Computa a divergência geométrica UMA vez por iteração e
+                # reaproveita tanto na condição de correção quanto no payload do
+                # corretor (o verifier desempacota o envelope + json.loads;
+                # rodá-lo 2x por passo é desperdício no caminho quente do loop).
                 divergence = self._compute_divergence(current, outcome)
+                while (not outcome.ok or bool(divergence)) and attempt < self.max_iterations:
+                    attempt += 1
+                    # Tool OK mas geometria divergente (verifier): injeta a
+                    # divergência no output p/ o corretor enxergar (o
+                    # build_correction_context formata "esperado × medido").
+                    self._tracer.record(
+                        "agent_loop.correction_attempt",
+                        source=ModelingTraceSource.backend,
+                        level=ModelingTraceLevel.warn,
+                        message=(
+                            f"Step {current.seq}: auto-correção "
+                            f"{attempt}/{self.max_iterations}"
+                        ),
+                        payload={
+                            "step_id": step.id,
+                            "tool_name": current.tool_name,
+                            "error_code": outcome.output.get("error_code"),
+                            "divergence": divergence,
+                        },
+                        plan_id=plan.id,
+                    )
+                    corrector_output = outcome.output
+                    if divergence is not None:
+                        corrector_output = {
+                            **outcome.output,
+                            "verification_divergence": divergence,
+                        }
+                    corrected = (
+                        self.corrector(current, corrector_output, attempt)
+                        if self.corrector
+                        else None
+                    )
+                    if corrected is None:
+                        break
+                    current = corrected
+                    outcome = self.executor._execute_single_step(current, plan=plan)
+                    settled[idx] = outcome.step
+                    self._persist_progress(plan, settled)
+                    divergence = self._compute_divergence(current, outcome)
 
-            executed_step_ids.append(step.id)
-            suffix = f" (após {attempt} correção(ões))" if attempt else ""
-            events.append(outcome.event + suffix)
-            if outcome.tool_call_id is not None:
-                tool_call_ids.append(outcome.tool_call_id)
-            next_steps.append(outcome.step)
+                executed_step_ids.append(step.id)
+                suffix = f" (após {attempt} correção(ões))" if attempt else ""
+                events.append(outcome.event + suffix)
+                if outcome.tool_call_id is not None:
+                    tool_call_ids.append(outcome.tool_call_id)
 
-            if not outcome.ok or bool(divergence):
-                # Esgotou as iterações sem sucesso → PARA + rollback (RF-011).
-                blocked_step_ids.append(step.id)
-                aborted = True
-                self._tracer.record(
-                    "agent_loop.exhausted",
-                    source=ModelingTraceSource.backend,
-                    level=ModelingTraceLevel.error,
-                    message=(
-                        f"Step {step.seq} esgotou {self.max_iterations} correções; "
-                        "revertendo e parando."
-                    ),
-                    payload={"step_id": step.id, "tool_name": current.tool_name},
-                    plan_id=plan.id,
-                )
-                self._do_rollback(plan)
+                if not outcome.ok or bool(divergence):
+                    # Esgotou as iterações sem sucesso → PARA + rollback (RF-011).
+                    blocked_step_ids.append(step.id)
+                    aborted = True
+                    self._tracer.record(
+                        "agent_loop.exhausted",
+                        source=ModelingTraceSource.backend,
+                        level=ModelingTraceLevel.error,
+                        message=(
+                            f"Step {step.seq} esgotou {self.max_iterations} correções; "
+                            "revertendo e parando."
+                        ),
+                        payload={"step_id": step.id, "tool_name": current.tool_name},
+                        plan_id=plan.id,
+                    )
+                    self._do_rollback(plan)
+        except BaseException:
+            # B: NUNCA deixar o plano sem desfecho durável. Qualquer exceção
+            # (corretor estourou, rollback, cancelamento da task) persiste
+            # ``failed`` com o estado de passos já apurado — o passo que falhou
+            # já foi carimbado via ``_persist_progress`` ANTES do corretor — e
+            # então propaga (o 500 ao chamador continua sinalizando a falha).
+            self._persist_progress(plan, settled, status=ModelingPlanStatus.failed)
+            self._tracer.flush(current_trace_id())
+            raise
 
-        has_failed_step = any(step.status == ModelingStepStatus.failed for step in next_steps)
+        return self._finalize(
+            plan,
+            settled,
+            executed_step_ids=executed_step_ids,
+            blocked_step_ids=blocked_step_ids,
+            tool_call_ids=tool_call_ids,
+            events=events,
+            aborted=aborted,
+        )
+
+    def _persist_progress(
+        self,
+        plan: ModelingPlan,
+        settled: list[ModelingPlanStep],
+        *,
+        status: ModelingPlanStatus = ModelingPlanStatus.running,
+    ) -> ModelingPlan:
+        """B: grava o estado corrente do plano (snapshot durável por passo).
+
+        Default ``running`` durante o laço (estado parcial verdadeiro se a
+        request cair no meio); ``failed`` no ``except`` de desfecho. Idempotente
+        a menos do ``updated_at``."""
+
+        updated = plan.model_copy(
+            update={
+                "steps": list(settled),
+                "status": status,
+                "updated_at": now_utc(),
+            }
+        )
+        self.executor.store.upsert_modeling_plan(updated)
+        return updated
+
+    def _finalize(
+        self,
+        plan: ModelingPlan,
+        settled: list[ModelingPlanStep],
+        *,
+        executed_step_ids: list[str],
+        blocked_step_ids: list[str],
+        tool_call_ids: list[str],
+        events: list[str],
+        aborted: bool,
+    ) -> ModelingExecutionResult:
+        """Desfecho do caminho feliz: status terminal + auditoria + flush."""
+
+        has_failed_step = any(s.status == ModelingStepStatus.failed for s in settled)
         if has_failed_step:
             status = ModelingPlanStatus.failed
         elif blocked_step_ids:
@@ -174,10 +245,7 @@ class ModelingAgentLoop:
         else:
             status = ModelingPlanStatus.completed
 
-        updated = plan.model_copy(
-            update={"steps": next_steps, "status": status, "updated_at": now_utc()}
-        )
-        self.executor.store.upsert_modeling_plan(updated)
+        updated = self._persist_progress(plan, settled, status=status)
         self.executor.store.add_audit_event(
             AuditEvent(
                 event_type="modeling.agent_loop_executed",
