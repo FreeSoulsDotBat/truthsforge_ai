@@ -43,6 +43,7 @@ panel; this is a no-op for the backend, which falls back to mock mode.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import secrets
@@ -551,7 +552,13 @@ def _make_handler_class() -> type[socketserver.StreamRequestHandler]:
 
                     if method == "auth":
                         token_in = (params or {}).get("token") if isinstance(params, dict) else None
-                        if token_in != _token or not _token:
+                        # Comparação timing-safe (mesmo invariante do servidor
+                        # MCP standalone — RNF-001/ADR-019).
+                        if (
+                            not _token
+                            or not isinstance(token_in, str)
+                            or not hmac.compare_digest(token_in, _token)
+                        ):
                             self._send(_build_error(request_id, -32001, "Token inválido."))
                             return
                         authenticated = True
