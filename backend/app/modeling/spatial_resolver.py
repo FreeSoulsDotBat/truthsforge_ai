@@ -855,6 +855,50 @@ def _expand_distribute_along(args: dict[str, Any], state: ModelState | None) -> 
                 f"Funde {len(nodes)} nó(s) em {parent}",
             )
         )
+
+    # Furo do pino (declarativo): canal COAXIAL atravessando os nós ao longo da
+    # MESMA aresta (eixo da dobradiça). Tira o furo das mãos do LLM — que senão
+    # usa fusion.hole (perfura ⟂ à face, não faz furo axial) e/ou chuta a
+    # coordenada no frame errado. Cilindro de furo coaxial à aresta, CORTADO de
+    # cada corpo-pai (1 por grupo: o cut consome a ferramenta) DEPOIS do join, p/
+    # o canal contínuo do pino. Sem 'alternate' não há corpo-pai → erro tipado.
+    bore_d = args.get("bore_diameter_mm")
+    if bore_d is not None:
+        if not groups:
+            raise SpatialRefError(
+                "distribute_along: 'bore_diameter_mm' exige 'alternate' (o furo é "
+                "cortado dos corpos-pai que recebem os nós)."
+            )
+        bore_d_val = resolve_scalar(bore_d, state)
+        # Margem = altura do nó, p/ o furo atravessar mesmo nós nas pontas.
+        proto_h = _coerce_float(proto.get("height_mm") or 0.0)
+        margin = proto_h if proto_h > 0 else 1.0
+        start = [float(c) for c in (edge.start_point_mm or [0.0, 0.0, 0.0])]
+        ax = [float(c) for c in axis_vec]
+        origin = [round(start[i] - margin * ax[i], 4) for i in range(3)]
+        height = round((edge.length_mm or 0.0) + 2 * margin, 4)
+        for idx, parent in enumerate(groups):
+            bore_name = f"{base_name}_Bore_{idx + 1}"
+            steps.append(
+                _prototype_step(
+                    {
+                        "primitive": "cylinder",
+                        "diameter_mm": bore_d_val,
+                        "height_mm": height,
+                        "name": bore_name,
+                    },
+                    origin,
+                    bore_name,
+                    ax,
+                )
+            )
+            steps.append(
+                ConcreteStep(
+                    "fusion.combine_bodies",
+                    {"target_ref": parent, "tool_refs": [bore_name], "operation": "cut"},
+                    f"Abre o canal do pino (Ø{bore_d_val}) em {parent}",
+                )
+            )
     return steps
 
 

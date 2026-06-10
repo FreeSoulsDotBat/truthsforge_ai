@@ -641,6 +641,60 @@ def test_resolve_edge_role_non_collinear_tie_still_ambiguous() -> None:
         _resolve_edge_by_role("top", "BoxOuter", st)
 
 
+def test_distribute_along_bore_cuts_coaxial_channel() -> None:
+    """Furo declarativo do pino: bore_diameter_mm gera, DEPOIS do join, 1 cilindro
+    de furo COAXIAL à aresta (eixo da dobradiça) por corpo-pai + um cut em cada —
+    tira o furo das mãos do LLM (que senão usa fusion.hole, ⟂ à face)."""
+    st = _box_with_top_edges()
+    steps, _ = expand_placement(
+        "fusion.distribute_along",
+        {
+            "edge": {"body": "Caixa", "role": "rear_top"},
+            "count": 3,
+            "alternate": ["Caixa", "Tampa"],
+            "bore_diameter_mm": 2.4,
+            "prototype": {
+                "primitive": "cylinder", "diameter_mm": 6, "height_mm": 12, "name": "Knuckle",
+            },
+        },
+        st,
+    )
+    cuts = [s for s in steps if s.tool_name == "fusion.combine_bodies"
+            and s.input_json["operation"] == "cut"]
+    joins = [s for s in steps if s.tool_name == "fusion.combine_bodies"
+             and s.input_json["operation"] == "join"]
+    bores = [s for s in steps if s.tool_name == "fusion.add_cylinder"
+             and "Bore" in str(s.input_json.get("name"))]
+    # 2 grupos (Caixa/Tampa) → 2 joins + 2 bores + 2 cuts (1 furo por corpo-pai).
+    assert len(joins) == 2 and len(bores) == 2 and len(cuts) == 2
+    bore = bores[0].input_json
+    # Coaxial à aresta TOP_REAR (start [0,40,20], dir +x): origin recuado pela
+    # margem (=altura 12) e Ø do furo, span = comprimento + 2·margem.
+    assert bore["diameter_mm"] == 2.4
+    assert bore["axis"] == [1.0, 0.0, 0.0]
+    assert bore["origin_mm"] == [-12.0, 40.0, 20.0]
+    assert bore["height_mm"] == 84.0
+    # Cada cut tira o furo de um corpo-pai distinto.
+    assert {c.input_json["target_ref"] for c in cuts} == {"Caixa", "Tampa"}
+
+
+def test_distribute_along_bore_without_alternate_is_typed() -> None:
+    """bore_diameter_mm sem 'alternate' não tem corpo-pai p/ cortar → erro tipado
+    (não no-op silencioso)."""
+    st = _box_with_top_edges()
+    with pytest.raises(SpatialRefError):
+        expand_placement(
+            "fusion.distribute_along",
+            {
+                "edge": {"body": "Caixa", "role": "rear_top"},
+                "count": 3,
+                "bore_diameter_mm": 2.4,
+                "prototype": {"primitive": "cylinder", "diameter_mm": 6, "height_mm": 12},
+            },
+            st,
+        )
+
+
 # --------------------------------------------------------------------------- #
 # 3) F9 Pilar 3 — enforcement de coordenada relativa (Gate B)                  #
 # --------------------------------------------------------------------------- #

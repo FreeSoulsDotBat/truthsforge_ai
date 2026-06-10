@@ -736,6 +736,15 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
                 required=False,
                 example=["Caixa", "Tampa"],
             ),
+            "bore_diameter_mm": ArgSpec(
+                "Furo do pino: diâmetro (mm) do canal COAXIAL que atravessa os nós "
+                "ao longo da MESMA aresta (eixo da dobradiça). O backend cria o "
+                "cilindro de furo coaxial e o CORTA de cada corpo-pai — não use "
+                "fusion.hole (perfura perpendicular à face, não faz furo axial). "
+                "Use a folga: ~Ø do pino + 0.2–0.4 mm.",
+                required=False,
+                example=2.4,
+            ),
         },
     ),
     "fusion.relate_bodies": ToolSchema(
