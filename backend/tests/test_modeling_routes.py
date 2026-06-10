@@ -277,9 +277,7 @@ def test_modeling_execute_refuses_waiting_approval_and_completed(monkeypatch) ->
     store.upsert_modeling_plan(done)
     replay = client.post(f"/api/3d/plans/{plan_id}/execute")
     assert replay.status_code == 409
-    reapprove = client.post(
-        f"/api/3d/plans/{plan_id}/approve", json={"decision": "approve"}
-    )
+    reapprove = client.post(f"/api/3d/plans/{plan_id}/approve", json={"decision": "approve"})
     assert reapprove.status_code == 409
 
     # Rejeitado → não ressuscita como aprovado nem executa.
@@ -298,7 +296,6 @@ def _modeling_chat_with_plan(store, *, stage, plan_status=None):
     """Chat 3D + plano vinculado, para os testes do caminho vivo (DT-006)."""
 
     from app.core.contracts import (
-        ChatModelingStage,
         ChatSession,
         ModelingPlan,
         ModelingPlanStep,

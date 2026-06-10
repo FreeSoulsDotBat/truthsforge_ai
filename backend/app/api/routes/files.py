@@ -289,9 +289,7 @@ def get_file_content(file_id: str):
         return StreamingResponse(
             _iter_zip_entry(platform_file.storage_path),
             media_type=media_type,
-            headers={
-                "Content-Disposition": _content_disposition_inline(platform_file.filename)
-            },
+            headers={"Content-Disposition": _content_disposition_inline(platform_file.filename)},
         )
 
     path = _safe_local_path(platform_file.storage_path)

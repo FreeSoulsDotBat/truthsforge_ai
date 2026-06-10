@@ -125,9 +125,7 @@ def _derive_labels(state: ModelState) -> None:
 
     container_names = {c.name for c in containers if c.name}
     non_containers = [
-        b
-        for b in state.bodies
-        if b not in containers and b.bbox_min_mm and b.bbox_max_mm
+        b for b in state.bodies if b not in containers and b.bbox_min_mm and b.bbox_max_mm
     ]
     touching = [
         b

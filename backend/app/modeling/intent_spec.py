@@ -213,9 +213,7 @@ def intent_from_plan(plan: ModelingPlan) -> IntentSpec:
 
     expected_count = count if (count_known and count >= 0) else None
     expected_bodies = [{"name": n} for n in sorted(live)] if names_known else []
-    disjoint = (
-        [sorted(live)] if (names_known and not joints_present and len(live) >= 2) else []
-    )
+    disjoint = [sorted(live)] if (names_known and not joints_present and len(live) >= 2) else []
 
     return IntentSpec(
         expected_body_count=expected_count,

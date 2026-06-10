@@ -350,7 +350,8 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "fusion.shell_body",
         _FUSION,
         _MUT,
-        "Oca um corpo deixando paredes de espessura definida (open_faces top/bottom/none) (Onda C).",
+        "Oca um corpo deixando paredes de espessura definida "
+        "(open_faces top/bottom/none) (Onda C).",
     ),
     _t(
         "fusion.hole",

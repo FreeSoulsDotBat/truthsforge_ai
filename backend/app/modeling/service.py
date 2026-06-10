@@ -151,10 +151,7 @@ def ensure_plan_approvable(plan: ModelingPlan, decision: ModelingApprovalDecisio
 
     if plan.status not in APPROVABLE_PLAN_STATUSES:
         raise ModelingPlanNotApprovable(plan.id, plan.status)
-    if (
-        plan.status == ModelingPlanStatus.rejected
-        and decision != ModelingApprovalDecision.reject
-    ):
+    if plan.status == ModelingPlanStatus.rejected and decision != ModelingApprovalDecision.reject:
         raise ModelingPlanNotApprovable(plan.id, plan.status)
 
 

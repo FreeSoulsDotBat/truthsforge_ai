@@ -238,8 +238,14 @@ def test_assess_visual_findings_returns_semantic_on_issues(
 ) -> None:
     monkeypatch.setattr(vc.settings, "modeling_visual_verification_enabled", True, raising=False)
     gw = _FakeVisionGateway(
-        [{"matches_intent": False, "issues": ["a tampa flutua", "peça de cabeça para baixo"],
-          "suggestion": "", "confidence": 0.8}]
+        [
+            {
+                "matches_intent": False,
+                "issues": ["a tampa flutua", "peça de cabeça para baixo"],
+                "suggestion": "",
+                "confidence": 0.8,
+            }
+        ]
     )
     planner = _FakePlanner(gw, _vision_model())
     findings = vc.assess_visual_findings(_FakeExecutor(), planner, _fusion_plan())
@@ -295,7 +301,7 @@ def test_visual_correction_reverts_when_it_duplicates(monkeypatch: pytest.Monkey
     monkeypatch.setattr(vc, "_timeline_count", lambda _e, _p: 7)
     monkeypatch.setattr(vc, "_apply_visual_correction", lambda *a, **k: True)
     reverted: list[int | None] = []
-    monkeypatch.setattr(vc, "_rollback_to", lambda _e, _p, tc: (reverted.append(tc) or True))
+    monkeypatch.setattr(vc, "_rollback_to", lambda _e, _p, tc: reverted.append(tc) or True)
 
     vc.run_visual_correction(_FakeExecutor(), planner, _fusion_plan())
     assert reverted == [7]  # desfez ao marcador pré-correção
@@ -314,7 +320,7 @@ def test_visual_correction_keeps_non_duplicating_fix(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(vc, "_timeline_count", lambda _e, _p: 7)
     monkeypatch.setattr(vc, "_apply_visual_correction", lambda *a, **k: True)
     reverted: list[int | None] = []
-    monkeypatch.setattr(vc, "_rollback_to", lambda _e, _p, tc: (reverted.append(tc) or True))
+    monkeypatch.setattr(vc, "_rollback_to", lambda _e, _p, tc: reverted.append(tc) or True)
 
     vc.run_visual_correction(_FakeExecutor(), planner, _fusion_plan())
     assert reverted == []  # correção limpa preservada

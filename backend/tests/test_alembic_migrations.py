@@ -51,9 +51,7 @@ def test_initial_baseline_includes_modeling_plans_table() -> None:
 
 def test_chats_title_backfill_targets_blank_or_missing_titles() -> None:
     backend_root = Path(__file__).resolve().parent.parent
-    script_path = (
-        backend_root / "migrations" / "versions" / "002_chats_title_not_null.py"
-    )
+    script_path = backend_root / "migrations" / "versions" / "002_chats_title_not_null.py"
     body = script_path.read_text(encoding="utf-8")
     # The backfill must hit BOTH the rows that are missing the title key
     # entirely and the rows where the title is blank/whitespace.
@@ -64,9 +62,7 @@ def test_chats_title_backfill_targets_blank_or_missing_titles() -> None:
 
 def test_chats_modeling_fields_creates_three_indexes() -> None:
     backend_root = Path(__file__).resolve().parent.parent
-    script_path = (
-        backend_root / "migrations" / "versions" / "003_chats_modeling_fields.py"
-    )
+    script_path = backend_root / "migrations" / "versions" / "003_chats_modeling_fields.py"
     body = script_path.read_text(encoding="utf-8")
     assert "idx_chat_sessions_modeling_3d" in body
     assert "idx_chat_sessions_modeling_stage" in body
@@ -75,9 +71,7 @@ def test_chats_modeling_fields_creates_three_indexes() -> None:
 
 def test_modeling_plans_kind_creates_two_indexes() -> None:
     backend_root = Path(__file__).resolve().parent.parent
-    script_path = (
-        backend_root / "migrations" / "versions" / "004_modeling_plans_kind.py"
-    )
+    script_path = backend_root / "migrations" / "versions" / "004_modeling_plans_kind.py"
     body = script_path.read_text(encoding="utf-8")
     assert "idx_modeling_plans_kind" in body
     assert "idx_modeling_plans_parent" in body

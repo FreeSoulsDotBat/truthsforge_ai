@@ -368,9 +368,7 @@ def build_modeling_3d_stream_response(
                 if attachments_block:
                     plan_prompt = payload.message + "\n\n" + attachments_block
             if settings.modeling_discovery_enabled:
-                history = _modeling_chat_history(
-                    store, session.id, exclude_message=payload.message
-                )
+                history = _modeling_chat_history(store, session.id, exclude_message=payload.message)
                 assessment = await modeling_service.assess_request_async(
                     plan_prompt,
                     history=history,
@@ -454,9 +452,7 @@ def build_modeling_3d_stream_response(
             except Exception:  # noqa: BLE001 - best-effort persist on failure path
                 pass
             yield _sse("error", {"message": error_message, "reason": str(exc)})
-            yield _sse(
-                "done", {"session_id": session.id, "message_id": assistant_message.id}
-            )
+            yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
             return
 
         # DT-006: a proposta de plano (primário/edição) é delegada ao

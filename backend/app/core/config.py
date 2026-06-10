@@ -110,9 +110,7 @@ class Settings(BaseModel):
         default_factory=lambda: _env_float("TRUTHS_FORGE_MONTHLY_BUDGET_BRL", 200)
     )
     max_import_bytes: int = Field(
-        default_factory=lambda: _env_int(
-            "TRUTHS_FORGE_MAX_IMPORT_BYTES", 5 * 1024 * 1024 * 1024
-        )
+        default_factory=lambda: _env_int("TRUTHS_FORGE_MAX_IMPORT_BYTES", 5 * 1024 * 1024 * 1024)
     )
     blender_executable: str | None = Field(
         default_factory=lambda: os.getenv("TRUTHS_FORGE_BLENDER_EXECUTABLE") or None

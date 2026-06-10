@@ -569,13 +569,10 @@ class ChatStreamRequest(BaseModel):
         self.attached_file_ids = list(dict.fromkeys(self.attached_file_ids))
         # Limites aplicados após o dedup (ver nota nos Fields).
         if len(self.context_document_ids) > MAX_CONTEXT_DOCUMENT_IDS:
-            raise ValueError(
-                f"context_document_ids excede o máximo de {MAX_CONTEXT_DOCUMENT_IDS}."
-            )
+            raise ValueError(f"context_document_ids excede o máximo de {MAX_CONTEXT_DOCUMENT_IDS}.")
         if len(self.context_knowledge_base_ids) > MAX_CONTEXT_KNOWLEDGE_BASE_IDS:
             raise ValueError(
-                "context_knowledge_base_ids excede o máximo de "
-                f"{MAX_CONTEXT_KNOWLEDGE_BASE_IDS}."
+                f"context_knowledge_base_ids excede o máximo de {MAX_CONTEXT_KNOWLEDGE_BASE_IDS}."
             )
         if len(self.attached_document_ids) > MAX_CHAT_ATTACHMENT_DOCUMENT_IDS:
             raise ValueError(

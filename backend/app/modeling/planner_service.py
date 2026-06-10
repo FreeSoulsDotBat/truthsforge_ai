@@ -139,9 +139,7 @@ def build_attachments_context(
         "<anexos-analisados>\n"
         "Análise dos anexos enviados pelo usuário (imagens/3D de referência). "
         "Use a forma, as features e as proporções descritas ao planejar a peça; "
-        "confirme dimensões absolutas se faltarem.\n"
-        + joined
-        + "\n</anexos-analisados>"
+        "confirme dimensões absolutas se faltarem.\n" + joined + "\n</anexos-analisados>"
     )
 
 
@@ -584,13 +582,9 @@ class ModelingPlannerService:
         current = model.max_output_tokens or 0
         if current >= self._PLANNING_OUTPUT_TOKEN_FLOOR:
             return model
-        return model.model_copy(
-            update={"max_output_tokens": self._PLANNING_OUTPUT_TOKEN_FLOOR}
-        )
+        return model.model_copy(update={"max_output_tokens": self._PLANNING_OUTPUT_TOKEN_FLOOR})
 
-    def _with_attachment_context(
-        self, payload: ModelingPlanCreate
-    ) -> ModelingPlanCreate:
+    def _with_attachment_context(self, payload: ModelingPlanCreate) -> ModelingPlanCreate:
         """F4 (image-to-model): analisa os anexos do pedido e injeta a descrição.
 
         O frontend envia ``attached_file_ids`` (imagens/3D); cada um é analisado

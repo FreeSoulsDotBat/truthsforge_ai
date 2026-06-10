@@ -88,9 +88,7 @@ class ModelingPrintabilityService:
         if is_real_run and result:
             raw_issues = result.get("issues") or []
             issues = [
-                ModelingPrintabilityIssue(
-                    **ModelingPrintabilityService._normalize_issue(item)
-                )
+                ModelingPrintabilityIssue(**ModelingPrintabilityService._normalize_issue(item))
                 for item in raw_issues
                 if isinstance(item, dict)
             ]
@@ -104,9 +102,7 @@ class ModelingPrintabilityService:
                 issues=issues,
                 metrics=dict(result.get("metrics") or {}),
                 recommendations=recommendations,
-                risk_score=ModelingPrintabilityService._clamp_risk_score(
-                    result.get("risk_score")
-                ),
+                risk_score=ModelingPrintabilityService._clamp_risk_score(result.get("risk_score")),
                 summary=str(result.get("message") or "Printability validada."),
                 report_json={**result, "recommendations": recommendations},
             )

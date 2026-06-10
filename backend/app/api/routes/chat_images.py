@@ -208,9 +208,7 @@ async def save_generated_images_from_markdown(
                 f"{settings.public_base_url.rstrip('/')}/api/files/{platform_file.id}/content"
             )
             downloaded_urls[source_url] = stored_url
-        updated_content = updated_content.replace(
-            match.group(0), f"![Imagem gerada]({stored_url})"
-        )
+        updated_content = updated_content.replace(match.group(0), f"![Imagem gerada]({stored_url})")
 
     return updated_content, generated_files
 

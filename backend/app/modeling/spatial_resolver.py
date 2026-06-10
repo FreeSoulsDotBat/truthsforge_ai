@@ -332,9 +332,7 @@ def enforce_relative_coord(
         # execute_plan inteiro (ADR-024: erro tipado, nunca exceção crua).
         return
     moved = _shifted_body(moving, deltas)
-    others = [
-        b for b in state.bodies if b is not moving and b.bbox_min_mm and b.bbox_max_mm
-    ]
+    others = [b for b in state.bodies if b is not moving and b.bbox_min_mm and b.bbox_max_mm]
     if not others:
         return
 
@@ -517,8 +515,7 @@ def _compute_place_delta(
         return delta
 
     raise SpatialRefError(
-        f"place_body: align='{align}' desconhecido. Use "
-        "center | coplanar | gap | edge | corner."
+        f"place_body: align='{align}' desconhecido. Use center | coplanar | gap | edge | corner."
     )
 
 

@@ -275,9 +275,7 @@ class OpenAIProvider(BaseRemoteProvider):
                             summary_delta = data.get("delta") or data.get("text") or ""
                             if isinstance(summary_delta, dict):
                                 summary_delta = (
-                                    summary_delta.get("text")
-                                    or summary_delta.get("content")
-                                    or ""
+                                    summary_delta.get("text") or summary_delta.get("content") or ""
                                 )
                             if summary_delta:
                                 yield reasoning_summary_event(str(summary_delta))

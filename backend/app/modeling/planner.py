@@ -597,8 +597,7 @@ def _corrected_step_from_payload(
     # não seja estritamente honrado pelo provider).
     if tool_name not in PLANNER_TOOLSET:
         raise ValueError(
-            f"tool_name '{tool_name}' fora da allowlist do planner; "
-            "correção de passo rejeitada."
+            f"tool_name '{tool_name}' fora da allowlist do planner; correção de passo rejeitada."
         )
     input_json = _decode_input_json(parsed.get("input_json"))
     # Gate de aprovação do delta corretivo (RF-009 + P6/P8): a aprovação única

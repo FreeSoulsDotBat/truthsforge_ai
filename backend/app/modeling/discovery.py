@@ -150,9 +150,7 @@ def _assessment_from_payload(
         confidence = 0.7
     confidence = max(0.0, min(1.0, confidence))
     questions = [
-        q.strip()
-        for q in parsed.get("questions", []) or []
-        if isinstance(q, str) and q.strip()
+        q.strip() for q in parsed.get("questions", []) or [] if isinstance(q, str) and q.strip()
     ]
     refined_brief = (parsed.get("refined_brief") or "").strip()
     rationale = (parsed.get("rationale") or "").strip()

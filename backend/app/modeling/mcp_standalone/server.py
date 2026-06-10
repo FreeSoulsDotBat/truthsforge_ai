@@ -96,9 +96,7 @@ def build_server(adapter: FusionDesktopAdapter | None = None) -> Server:
     async def _call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
         # ``adapter.execute`` é síncrono e pode bloquear em I/O (HTTP/socket).
         # Roda em thread para não travar o event loop do servidor.
-        envelope = await anyio.to_thread.run_sync(
-            execute_fusion_tool, adapter, name, arguments
-        )
+        envelope = await anyio.to_thread.run_sync(execute_fusion_tool, adapter, name, arguments)
         # Deriva ``isError`` do envelope para que clientes MCP genéricos
         # interpretem falhas do Fusion como erro; mantém o envelope completo
         # em ``structuredContent`` (contrato consumido pelo executor interno).

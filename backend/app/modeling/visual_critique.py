@@ -312,8 +312,7 @@ def _apply_visual_correction(
             "genuinamente FALTANTE.\n"
             "- A revisão de imagem pode errar; se as divergências não fizerem "
             "sentido geométrico, devolva um plano vazio.\n"
-            "\nIntenção original: "
-            + (intent or "")[:1500]
+            "\nIntenção original: " + (intent or "")[:1500]
         ),
         kind=ModelingPlanKind.edit,
         parent_plan_id=plan.id,

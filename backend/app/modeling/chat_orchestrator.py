@@ -306,9 +306,7 @@ class ModelingChatOrchestrator:
                 "orchestrator.turn_verdict",
                 source=ModelingTraceSource.backend,
                 level=(
-                    ModelingTraceLevel.warn
-                    if verdict.overall != "ok"
-                    else ModelingTraceLevel.info
+                    ModelingTraceLevel.warn if verdict.overall != "ok" else ModelingTraceLevel.info
                 ),
                 message=f"Auto-crítica do turno: {verdict.summary}",
                 payload={

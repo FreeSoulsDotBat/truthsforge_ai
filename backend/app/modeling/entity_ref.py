@@ -121,9 +121,7 @@ def _resolve_face_by_role(
         # sinal do normal) é robusto ao read-back que classifica o normal do FUNDO
         # como '+z' (normal de superfície, não outward) — o bug que deixava
         # 'bottom_planar' sem candidato e quebrava o place_body da tampa.
-        horizontal = [
-            bf for bf in cands if (bf[1].normal_axis or "").lower() in ("+z", "-z", "z")
-        ]
+        horizontal = [bf for bf in cands if (bf[1].normal_axis or "").lower() in ("+z", "-z", "z")]
         if not horizontal:
             raise EntityRefError(f"role '{role}': nenhuma face planar horizontal (eixo z)")
         top = role in ("top_planar", "top")

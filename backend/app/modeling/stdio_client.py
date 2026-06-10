@@ -156,9 +156,7 @@ class StdioMCPClient:
             while True:
                 line = self._proc.stdout.readline()
                 if not line:
-                    raise self._build_dead_process_error(
-                        RuntimeError("EOF inesperado no stdout.")
-                    )
+                    raise self._build_dead_process_error(RuntimeError("EOF inesperado no stdout."))
                 if not line.strip():
                     continue
                 try:
