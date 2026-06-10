@@ -601,16 +601,20 @@ def _corrected_step_from_payload(
             "correção de passo rejeitada."
         )
     input_json = _decode_input_json(parsed.get("input_json"))
-    # Re-aplica o gate de aprovação: o passo corrigido é re-executado de imediato
-    # pelo agent_loop SEM passar por apply_modeling_policy. Se a "correção"
-    # trocar o tool por um destrutivo/high-risk (ex.: delete_body,
-    # combine_bodies), ela NÃO pode auto-executar — rejeitamos a correção para
-    # preservar o human-in-the-loop exigido pela constituição. O loop então cai
-    # em "sem correção" e reverte, em vez de contornar o gate de aprovação.
-    if requires_approval(tool_name, step.risk_level):
+    # Gate de aprovação do delta corretivo (RF-009 + P6/P8): a aprovação única
+    # do plano cobre correções DENTRO do envelope de risco já aprovado — um
+    # step high-risk/destructive aprovado pode ser corrigido (inclusive com a
+    # mesma tool) sem pausar o loop. O que segue proibido é a ESCALAÇÃO: uma
+    # correção que troque um step que não exigia aprovação por uma tool que
+    # exige (ex.: add_box -> delete_body) não pode auto-executar; rejeitamos e
+    # o loop cai em "sem correção" em vez de contornar o gate.
+    if requires_approval(tool_name, step.risk_level) and not requires_approval(
+        step.tool_name, step.risk_level
+    ):
         raise ValueError(
-            f"correção trocaria o passo para tool '{tool_name}' que exige "
-            "aprovação humana; correção rejeitada (sem auto-execução)."
+            f"correção escalaria o passo para tool '{tool_name}' que exige "
+            "aprovação humana não coberta pelo plano aprovado; correção "
+            "rejeitada (sem auto-execução)."
         )
     # Reseta o estado de execução; o passo corrigido será re-executado.
     return step.model_copy(

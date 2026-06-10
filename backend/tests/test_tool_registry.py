@@ -26,6 +26,7 @@ from app.modeling.tool_registry import (
     descriptor,
     descriptors,
     is_blocked,
+    is_destructive,
     is_high_risk,
     is_known,
     is_read_only,
@@ -322,10 +323,21 @@ def test_is_high_risk_only_true_for_high_risk_category() -> None:
     assert not is_high_risk("blender.no_such_tool")
 
 
+def test_is_destructive_only_true_for_destructive_category() -> None:
+    assert is_destructive("fusion.delete_body")
+    assert not is_destructive("blender.apply_bevel")
+    assert not is_destructive("blender.no_such_tool")
+
+
 def test_requires_approval_decision_table() -> None:
     # high_risk tool → always requires approval, no matter the declared risk
     assert requires_approval("blender.apply_boolean", ModelingRiskLevel.low)
     assert requires_approval("blender.apply_boolean", "high")
+    # destructive tool → always requires approval (P6/P8), no matter o rótulo
+    # de risco que o LLM atribuiu ao passo
+    assert requires_approval("fusion.delete_body", ModelingRiskLevel.low)
+    assert requires_approval("fusion.delete_body", ModelingRiskLevel.medium)
+    assert requires_approval("fusion.delete_body", None)
     # read_only tool → never requires approval, even if marked high
     assert not requires_approval("blender.measure_object", ModelingRiskLevel.high)
     # additive/mutative tool at low risk → no approval

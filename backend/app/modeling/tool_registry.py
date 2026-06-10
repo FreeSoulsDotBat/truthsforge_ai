@@ -705,6 +705,13 @@ def is_high_risk(tool_name: str) -> bool:
     return entry is not None and entry.category is ToolCategory.high_risk
 
 
+def is_destructive(tool_name: str) -> bool:
+    """``True`` when the tool is classified as destructive (removes geometry/files)."""
+
+    entry = TOOL_REGISTRY.get(tool_name)
+    return entry is not None and entry.category is ToolCategory.destructive
+
+
 def is_known(tool_name: str) -> bool:
     """``True`` when the tool is registered (regardless of category)."""
 
@@ -714,9 +721,9 @@ def is_known(tool_name: str) -> bool:
 def requires_approval(tool_name: str, risk_level: ModelingRiskLevel | str | None) -> bool:
     """Single decision point for approval gating.
 
-    A step requires approval iff it is high-risk **and** not read-only. The
-    ``risk_level`` parameter lets callers escalate medium/low tools when the
-    planner explicitly marked them ``high``.
+    A step requires approval when the tool is high-risk or destructive (and
+    not read-only). The ``risk_level`` parameter lets callers escalate
+    medium/low tools when the planner explicitly marked them ``high``.
     """
 
     if is_blocked(tool_name):
@@ -724,6 +731,8 @@ def requires_approval(tool_name: str, risk_level: ModelingRiskLevel | str | None
     if is_read_only(tool_name):
         return False
     if is_high_risk(tool_name):
+        return True
+    if is_destructive(tool_name):
         return True
     if risk_level is None:
         return False
@@ -755,6 +764,7 @@ __all__ = [
     "descriptor",
     "descriptors",
     "is_blocked",
+    "is_destructive",
     "is_high_risk",
     "is_known",
     "is_read_only",

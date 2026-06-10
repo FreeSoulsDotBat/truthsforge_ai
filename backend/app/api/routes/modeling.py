@@ -34,7 +34,9 @@ from app.core.contracts import (
 from app.modeling.observability import _truncate_payload, get_tracer
 from app.modeling.service import (
     ModelingInvalidEditTool,
+    ModelingPlanNotApprovable,
     ModelingPlanNotEditable,
+    ModelingPlanNotExecutable,
     ModelingRollbackUnavailable,
     get_modeling_service,
 )
@@ -107,6 +109,8 @@ def approve_plan(plan_id: str, payload: ModelingApprovalRequest) -> ModelingPlan
         return _service().approve_plan(plan_id, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
+    except ModelingPlanNotApprovable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.patch("/plans/{plan_id}", response_model=ModelingPlan)
@@ -129,6 +133,8 @@ def execute_plan(plan_id: str) -> ModelingExecutionResult:
         result = _service().execute_plan(plan_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Plano 3D não encontrado.") from exc
+    except ModelingPlanNotExecutable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     _advance_chat_to_editing_after_execute(result)
     return result
 

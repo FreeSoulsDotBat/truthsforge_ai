@@ -5,7 +5,13 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from app.core.contracts import ModelingExecutionMode, ModelingPlanCreate, ModelingSoftware
+from app.core.contracts import (
+    ModelingApprovalRequest,
+    ModelingExecutionMode,
+    ModelingPlanCreate,
+    ModelingPlanStatus,
+    ModelingSoftware,
+)
 from app.main import app
 from app.modeling.blender_adapter import BlenderAdapter
 from app.modeling.fusion_adapter import FusionDesktopAdapter
@@ -234,6 +240,58 @@ def test_blender_plan_uses_mcp_boundary_without_desktop_adapter(monkeypatch) -> 
     assert blender_steps
     assert all(step["output_json"]["mcp_server"] == "blender_mcp" for step in blender_steps)
     assert all(step["output_json"]["transport"] == "mock" for step in blender_steps)
+
+
+def test_modeling_execute_refuses_waiting_approval_and_completed(monkeypatch) -> None:
+    """Anti-replay (C5): /execute sem aprovação ou sobre plano concluído → 409."""
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+
+    client = TestClient(app)
+    plan = _create_plan_via_service(
+        prompt="Crie um cubo de teste no Blender.",
+        mode=ModelingExecutionMode.approval_required,
+        software_override=ModelingSoftware.blender,
+    )
+    plan_id = plan["id"]
+    store = get_store()
+    service = get_modeling_service(store)
+
+    # Força o gate da P1: plano aguardando aprovação não executa.
+    pending = store.get_modeling_plan(plan_id).model_copy(
+        update={"status": ModelingPlanStatus.waiting_approval}
+    )
+    store.upsert_modeling_plan(pending)
+    refused = client.post(f"/api/3d/plans/{plan_id}/execute")
+    assert refused.status_code == 409
+
+    # Aprovado → executa normalmente.
+    service.approve_plan(plan_id, ModelingApprovalRequest(decision="approve"))
+    executed = client.post(f"/api/3d/plans/{plan_id}/execute")
+    assert executed.status_code == 200
+
+    # Concluído → um card antigo não pode re-executar (nem re-aprovar).
+    done = store.get_modeling_plan(plan_id).model_copy(
+        update={"status": ModelingPlanStatus.completed}
+    )
+    store.upsert_modeling_plan(done)
+    replay = client.post(f"/api/3d/plans/{plan_id}/execute")
+    assert replay.status_code == 409
+    reapprove = client.post(
+        f"/api/3d/plans/{plan_id}/approve", json={"decision": "approve"}
+    )
+    assert reapprove.status_code == 409
+
+    # Rejeitado → não ressuscita como aprovado nem executa.
+    rejected = store.get_modeling_plan(plan_id).model_copy(
+        update={"status": ModelingPlanStatus.rejected}
+    )
+    store.upsert_modeling_plan(rejected)
+    assert client.post(f"/api/3d/plans/{plan_id}/execute").status_code == 409
+    assert (
+        client.post(f"/api/3d/plans/{plan_id}/approve", json={"decision": "approve"}).status_code
+        == 409
+    )
 
 
 def test_modeling_plan_only_draft_does_not_execute_directly(monkeypatch) -> None:
@@ -1181,6 +1239,43 @@ def test_modeling_policy_classifies_tier2_tools_correctly() -> None:
     assert by_tool["blender.repair_non_manifold"].approval_required is True
     # apply_subdivision: alteração normal allowlistada → autoexecução no fluxo fluido
     assert by_tool["blender.apply_subdivision"].approval_required is False
+
+
+def test_modeling_policy_requires_approval_for_destructive_tools() -> None:
+    """P6/P8: deleções NUNCA auto-executam, mesmo com risk_level low do LLM."""
+
+    from app.core.contracts import (
+        ModelingExecutionMode,
+        ModelingPlan,
+        ModelingPlanStatus,
+        ModelingPlanStep,
+        ModelingRiskLevel,
+        ModelingSoftware,
+        ModelingStepStatus,
+    )
+    from app.modeling.policy import apply_modeling_policy
+
+    plan = ModelingPlan(
+        prompt="remova o corpo",
+        software_choice=ModelingSoftware.fusion,
+        mode=ModelingExecutionMode.safe_auto,
+        steps=[
+            ModelingPlanStep(
+                seq=1,
+                title="Deletar corpo",
+                software=ModelingSoftware.fusion,
+                tool_name="fusion.delete_body",
+                risk_level=ModelingRiskLevel.low,
+                approval_required=False,
+            ),
+        ],
+    )
+    enforced = apply_modeling_policy(plan)
+    step = enforced.steps[0]
+    assert step.approval_required is True
+    assert step.status == ModelingStepStatus.waiting_approval
+    assert enforced.approval_required is True
+    assert enforced.status == ModelingPlanStatus.waiting_approval
 
 
 def test_modeling_policy_autoexecutes_normal_changes_but_blocks_high_risk() -> None:

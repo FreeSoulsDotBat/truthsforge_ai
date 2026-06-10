@@ -24,7 +24,6 @@ from app.core.contracts import (
     ModelingPlan,
     ModelingPlanStatus,
     ModelingPlanStep,
-    ModelingRiskLevel,
     ModelingStepStatus,
     now_utc,
 )
@@ -37,10 +36,7 @@ from app.modeling.tool_registry import (
     is_blocked as _is_blocked,
 )
 from app.modeling.tool_registry import (
-    is_high_risk as _is_high_risk,
-)
-from app.modeling.tool_registry import (
-    is_read_only as _is_read_only,
+    requires_approval as _requires_approval,
 )
 
 __all__ = [
@@ -114,13 +110,13 @@ def apply_modeling_policy(plan: ModelingPlan) -> ModelingPlan:
     steps = []
     for step in plan.steps:
         blocked = _is_blocked(step.tool_name)
-        is_read_only = _is_read_only(step.tool_name)
-        is_high_risk = (
-            step.risk_level == ModelingRiskLevel.high
-            or _is_high_risk(step.tool_name)
-            or _declarative_combines(step)
-        )
-        requires_approval = not is_read_only and is_high_risk
+        # Ponto único de decisão (ADR-013): cobre high_risk, destructive,
+        # blocked e a escalação por risk_level==high — read-only nunca exige.
+        # F7 P6: a expansão declarativa que funde corpos (combine-DENTRO)
+        # também exige aprovação no PLANO (card disclosa antes de executar).
+        requires_approval = _requires_approval(
+            step.tool_name, step.risk_level
+        ) or _declarative_combines(step)
         next_status = step.status
         if requires_approval and step.status == ModelingStepStatus.pending:
             next_status = ModelingStepStatus.waiting_approval

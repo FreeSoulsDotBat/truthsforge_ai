@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from app.core.contracts import (
     ModelingPlan,
     ModelingPlanStatus,
@@ -463,6 +465,39 @@ def test_correct_step_uses_llm_to_fix_step() -> None:
     assert fixed.input_json.get("_fixed") is True
     assert fixed.status is ModelingStepStatus.approved
     assert fixed.error is None
+
+
+def test_correct_step_allows_same_high_risk_tool_already_approved() -> None:
+    """RF-009: a aprovação única do plano cobre o delta corretivo — um step
+    high-risk aprovado pode ser corrigido com a própria tool sem pausar."""
+
+    gateway = _FakeGateway(
+        {
+            "tool_name": "fusion.combine_bodies",
+            "input_json": json.dumps({"operation": "join", "_fixed": True}),
+        }
+    )
+    step = _step(2, "fusion.combine_bodies", operation="cut")
+    output = {"ok": False, "error_code": "fusion.boom", "message": "falhou"}
+
+    fixed = correct_step(step, output, 1, gateway=gateway, model=object())
+
+    assert fixed.tool_name == "fusion.combine_bodies"
+    assert fixed.input_json.get("_fixed") is True
+
+
+def test_correct_step_rejects_escalation_to_approval_requiring_tool() -> None:
+    """P6/P8: correção não pode ESCALAR um step seguro para tool que exige
+    aprovação (ex.: delete_body) — o caller trata e cai em "sem correção"."""
+
+    gateway = _FakeGateway(
+        {"tool_name": "fusion.delete_body", "input_json": json.dumps({"name": "Body1"})}
+    )
+    step = _step(2, "fusion.add_box", size_mm=10)
+    output = {"ok": False, "error_code": "fusion.boom", "message": "falhou"}
+
+    with pytest.raises(ValueError, match="escalaria"):
+        correct_step(step, output, 1, gateway=gateway, model=object())
 
 
 def test_orchestrator_run_execution_uses_loop_when_flag_on(monkeypatch) -> None:

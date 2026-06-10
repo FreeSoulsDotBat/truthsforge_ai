@@ -70,7 +70,8 @@ from app.modeling.executor import ModelingExecutorService, inner_fusion_payload
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner_service import ModelingPlannerService
 from app.modeling.policy import apply_plan_approval
-from app.modeling.tool_registry import READ_ONLY_TOOL_NAMES, is_high_risk
+from app.modeling.tool_registry import READ_ONLY_TOOL_NAMES
+from app.modeling.tool_registry import requires_approval as tool_requires_approval
 
 logger = logging.getLogger(__name__)
 
@@ -1092,9 +1093,9 @@ class ModelingChatOrchestrator:
     @staticmethod
     def _plan_has_high_risk(plan: ModelingPlan) -> bool:
         for step in plan.steps:
-            if step.risk_level == ModelingRiskLevel.high:
-                return True
-            if is_high_risk(step.tool_name):
+            # Ponto único de decisão (ADR-013): cobre high_risk, destructive,
+            # blocked e a escalação por risk_level==high.
+            if tool_requires_approval(step.tool_name, step.risk_level):
                 return True
             if step.approval_required:
                 return True
