@@ -693,9 +693,7 @@ _EDGE_POS_TOL = 0.1  # mm — margem p/ separar a aresta extrema da 2ª (senão 
 _EDGE_COLLINEAR_TOL = 0.1  # mm — desvio perpendicular p/ tratar fragmentos como a MESMA reta
 
 
-def _merge_collinear_edges(
-    tied: list[ModelStateEdge], body: Any, role: str
-) -> str | None:
+def _merge_collinear_edges(tied: list[ModelStateEdge], body: Any, role: str) -> str | None:
     """F7: fragmentos COLINEARES (mesma reta) de uma aresta partida por features
     fundidas ao longo dela — ex.: knuckles soldados na aresta da dobradiça — NÃO
     são ambíguos: são a MESMA aresta conceitual fragmentada. Funde-os no span

@@ -258,9 +258,7 @@ def test_loop_persists_running_snapshot_each_step() -> None:
     store = _SpyStore()
     executor = _ScriptedExecutor(store, decide=lambda step: True)
     loop = ModelingAgentLoop(executor, corrector=lambda s, o, a: s)
-    result = loop.run(
-        _plan(_step(1, "fusion.add_box"), _step(2, "fusion.extrude_profile"))
-    )
+    result = loop.run(_plan(_step(1, "fusion.add_box"), _step(2, "fusion.extrude_profile")))
 
     # houve ao menos um snapshot `running` antes do `completed` final
     assert ModelingPlanStatus.running in seen_status

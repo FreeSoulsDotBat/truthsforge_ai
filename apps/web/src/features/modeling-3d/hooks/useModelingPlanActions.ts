@@ -89,11 +89,8 @@ async function executePlanWithRecovery(planId: string): Promise<ModelingExecutio
           };
         }
         if (plan.status === "failed" || plan.status === "rejected") {
-          // `Error(msg, { cause })` exige lib ES2022; o tsconfig do web não a
-          // inclui, então anexamos `cause` após a construção (runtime suporta).
-          const failure = new Error("A execução do plano falhou no backend.");
-          (failure as Error & { cause?: unknown }).cause = exc;
-          throw failure;
+          // tsconfig agora é ES2022: `Error(msg, { cause })` nativo.
+          throw new Error("A execução do plano falhou no backend.", { cause: exc });
         }
       } catch (probe) {
         if (!isNetworkError(probe)) throw probe; // erro real ao reconsultar

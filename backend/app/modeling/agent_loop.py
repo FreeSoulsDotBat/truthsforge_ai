@@ -132,8 +132,7 @@ class ModelingAgentLoop:
                         source=ModelingTraceSource.backend,
                         level=ModelingTraceLevel.warn,
                         message=(
-                            f"Step {current.seq}: auto-correção "
-                            f"{attempt}/{self.max_iterations}"
+                            f"Step {current.seq}: auto-correção {attempt}/{self.max_iterations}"
                         ),
                         payload={
                             "step_id": step.id,
@@ -168,9 +167,7 @@ class ModelingAgentLoop:
                 # tentativa, nenhum delta rodou e o evento não deve sugerir o
                 # oposto.
                 suffix = (
-                    f" (após {applied_corrections} correção(ões))"
-                    if applied_corrections
-                    else ""
+                    f" (após {applied_corrections} correção(ões))" if applied_corrections else ""
                 )
                 events.append(outcome.event + suffix)
                 if outcome.tool_call_id is not None:
@@ -308,9 +305,7 @@ class ModelingAgentLoop:
     # helpers
     # ------------------------------------------------------------------
 
-    def _compute_divergence(
-        self, step: ModelingPlanStep, outcome: Any
-    ) -> dict[str, Any] | None:
+    def _compute_divergence(self, step: ModelingPlanStep, outcome: Any) -> dict[str, Any] | None:
         """Divergência geométrica (read-back esperado × medido) ou ``None``.
 
         Só roda o verifier quando a tool teve sucesso (em falha de tool a
@@ -651,9 +646,7 @@ def _attach_verdict_notice(
     return result.model_copy(update={"events": events})
 
 
-def _reload_plan(
-    executor: ModelingExecutorService, plan: ModelingPlan
-) -> ModelingPlan | None:
+def _reload_plan(executor: ModelingExecutorService, plan: ModelingPlan) -> ModelingPlan | None:
     """Recarrega o plano da store (best-effort); ``None`` se indisponível."""
 
     store = getattr(executor, "store", None)
@@ -751,9 +744,7 @@ def _maybe_evaluate_verdict(
         intent = intent_from_plan(plan)
         history = history_from_plan(plan)
         semantic = _maybe_visual_findings(executor, planner, plan)
-        verdict = build_model_verdict(
-            intent, history, plan.model_state, semantic_findings=semantic
-        )
+        verdict = build_model_verdict(intent, history, plan.model_state, semantic_findings=semantic)
         plan.model_verdict = verdict
         store = getattr(executor, "store", None)
         if store is not None and hasattr(store, "upsert_modeling_plan"):

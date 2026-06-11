@@ -493,20 +493,32 @@ def _box_with_top_edges() -> ModelState:
                 bbox_max_mm=[60, 40, 20],
                 edges=[
                     ModelStateEdge(
-                        token="TOP_FRONT", length_mm=60, is_circular=False,
-                        start_point_mm=[0, 0, 20], end_point_mm=[60, 0, 20],
+                        token="TOP_FRONT",
+                        length_mm=60,
+                        is_circular=False,
+                        start_point_mm=[0, 0, 20],
+                        end_point_mm=[60, 0, 20],
                     ),
                     ModelStateEdge(
-                        token="TOP_REAR", length_mm=60, is_circular=False,
-                        start_point_mm=[0, 40, 20], end_point_mm=[60, 40, 20],
+                        token="TOP_REAR",
+                        length_mm=60,
+                        is_circular=False,
+                        start_point_mm=[0, 40, 20],
+                        end_point_mm=[60, 40, 20],
                     ),
                     ModelStateEdge(
-                        token="TOP_LEFT", length_mm=40, is_circular=False,
-                        start_point_mm=[0, 0, 20], end_point_mm=[0, 40, 20],
+                        token="TOP_LEFT",
+                        length_mm=40,
+                        is_circular=False,
+                        start_point_mm=[0, 0, 20],
+                        end_point_mm=[0, 40, 20],
                     ),
                     ModelStateEdge(
-                        token="TOP_RIGHT", length_mm=40, is_circular=False,
-                        start_point_mm=[60, 0, 20], end_point_mm=[60, 40, 20],
+                        token="TOP_RIGHT",
+                        length_mm=40,
+                        is_circular=False,
+                        start_point_mm=[60, 0, 20],
+                        end_point_mm=[60, 40, 20],
                     ),
                 ],
             )
@@ -551,7 +563,10 @@ def test_distribute_along_resolves_edge_by_role() -> None:
             "edge": {"body": "Caixa", "role": "rear_top"},
             "count": 3,
             "prototype": {
-                "primitive": "cylinder", "diameter_mm": 5, "height_mm": 8, "name": "Knuckle",
+                "primitive": "cylinder",
+                "diameter_mm": 5,
+                "height_mm": 8,
+                "name": "Knuckle",
             },
         },
         st,
@@ -574,20 +589,32 @@ def _box_fragmented_rear_top() -> ModelState:
                 bbox_max_mm=[60, 40, 20],
                 edges=[
                     ModelStateEdge(
-                        token="REAR_A", length_mm=18, is_circular=False,
-                        start_point_mm=[0, 40, 20], end_point_mm=[18, 40, 20],
+                        token="REAR_A",
+                        length_mm=18,
+                        is_circular=False,
+                        start_point_mm=[0, 40, 20],
+                        end_point_mm=[18, 40, 20],
                     ),
                     ModelStateEdge(
-                        token="REAR_B", length_mm=16, is_circular=False,
-                        start_point_mm=[22, 40, 20], end_point_mm=[38, 40, 20],
+                        token="REAR_B",
+                        length_mm=16,
+                        is_circular=False,
+                        start_point_mm=[22, 40, 20],
+                        end_point_mm=[38, 40, 20],
                     ),
                     ModelStateEdge(
-                        token="REAR_C", length_mm=18, is_circular=False,
-                        start_point_mm=[42, 40, 20], end_point_mm=[60, 40, 20],
+                        token="REAR_C",
+                        length_mm=18,
+                        is_circular=False,
+                        start_point_mm=[42, 40, 20],
+                        end_point_mm=[60, 40, 20],
                     ),
                     ModelStateEdge(
-                        token="TOP_FRONT", length_mm=60, is_circular=False,
-                        start_point_mm=[0, 0, 20], end_point_mm=[60, 0, 20],
+                        token="TOP_FRONT",
+                        length_mm=60,
+                        is_circular=False,
+                        start_point_mm=[0, 0, 20],
+                        end_point_mm=[60, 0, 20],
                     ),
                 ],
             )
@@ -619,7 +646,10 @@ def test_distribute_along_uses_merged_collinear_span() -> None:
             "count": 5,
             "spacing_mm": 12.5,
             "prototype": {
-                "name": "Hole", "primitive": "cylinder", "diameter_mm": 2.2, "height_mm": 6,
+                "name": "Hole",
+                "primitive": "cylinder",
+                "diameter_mm": 2.2,
+                "height_mm": 6,
             },
         },
         st,
@@ -654,17 +684,29 @@ def test_distribute_along_bore_cuts_coaxial_channel() -> None:
             "alternate": ["Caixa", "Tampa"],
             "bore_diameter_mm": 2.4,
             "prototype": {
-                "primitive": "cylinder", "diameter_mm": 6, "height_mm": 12, "name": "Knuckle",
+                "primitive": "cylinder",
+                "diameter_mm": 6,
+                "height_mm": 12,
+                "name": "Knuckle",
             },
         },
         st,
     )
-    cuts = [s for s in steps if s.tool_name == "fusion.combine_bodies"
-            and s.input_json["operation"] == "cut"]
-    joins = [s for s in steps if s.tool_name == "fusion.combine_bodies"
-             and s.input_json["operation"] == "join"]
-    bores = [s for s in steps if s.tool_name == "fusion.add_cylinder"
-             and "Bore" in str(s.input_json.get("name"))]
+    cuts = [
+        s
+        for s in steps
+        if s.tool_name == "fusion.combine_bodies" and s.input_json["operation"] == "cut"
+    ]
+    joins = [
+        s
+        for s in steps
+        if s.tool_name == "fusion.combine_bodies" and s.input_json["operation"] == "join"
+    ]
+    bores = [
+        s
+        for s in steps
+        if s.tool_name == "fusion.add_cylinder" and "Bore" in str(s.input_json.get("name"))
+    ]
     # 2 grupos (Caixa/Tampa) → 2 joins + 2 bores + 2 cuts (1 furo por corpo-pai).
     assert len(joins) == 2 and len(bores) == 2 and len(cuts) == 2
     bore = bores[0].input_json
