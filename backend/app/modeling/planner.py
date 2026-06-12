@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import re
@@ -24,7 +25,7 @@ from app.core.contracts import (
 from app.llm_gateway.gateway import LLMGateway
 from app.modeling import tool_schemas
 from app.modeling.plan_sanitizer import sanitize_tool_arguments
-from app.modeling.tool_registry import PLANNER_TOOLSET
+from app.modeling.tool_registry import PLANNER_TOOLSET, planner_toolset, requires_approval
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +327,23 @@ EXECUTION_PLAN_SCHEMA: dict[str, Any] = {
 }
 
 
+def _execution_plan_schema() -> dict[str, Any]:
+    """Versão RUNTIME de :data:`EXECUTION_PLAN_SCHEMA` (flags F7/F8).
+
+    O enum de ``tool_name`` é recalculado por :func:`planner_toolset` a cada
+    chamada: com a flag OFF, as tools declarativas (place_body/align_axis/
+    distribute_along/relate_bodies) saem do Structured Output — o LLM não pode
+    nem escolher uma tool que falharia garantido no adapter (auditoria
+    2026-06-10). A constante estática segue como superset p/ auditoria/testes.
+    """
+
+    schema = copy.deepcopy(EXECUTION_PLAN_SCHEMA)
+    schema["properties"]["steps"]["items"]["properties"]["tool_name"]["enum"] = list(
+        planner_toolset()
+    )
+    return schema
+
+
 def choose_software(
     prompt: str, override: ModelingSoftware | None
 ) -> tuple[ModelingSoftware, float, str]:
@@ -421,7 +439,7 @@ def create_llm_plan(
             model=model,
             messages=messages,
             schema_name="modeling_execution_plan",
-            schema=EXECUTION_PLAN_SCHEMA,
+            schema=_execution_plan_schema(),
         )
     )
     return _plan_from_llm_payload(payload, parsed)
@@ -440,7 +458,7 @@ async def create_llm_plan_async(
         model=model,
         messages=messages,
         schema_name="modeling_execution_plan",
-        schema=EXECUTION_PLAN_SCHEMA,
+        schema=_execution_plan_schema(),
     )
     return _plan_from_llm_payload(payload, parsed)
 
@@ -516,7 +534,8 @@ def _subgoals_from_payload(parsed: dict[str, Any]) -> list[ModelingSubGoal]:
     for index, item in enumerate(raw, start=1):
         if not isinstance(item, dict):
             raise ValueError(f"Sub-objetivo {index} não é um objeto JSON.")
-        seq = int(item.get("seq") or index)
+        raw_seq = item.get("seq")
+        seq = int(raw_seq) if raw_seq is not None else index
         title = str(item.get("title") or f"Sub-objetivo {seq}").strip() or f"Sub-objetivo {seq}"
         sub_goals.append(
             ModelingSubGoal(
@@ -564,6 +583,18 @@ CORRECTED_STEP_SCHEMA: dict[str, Any] = {
 }
 
 
+def _corrected_step_schema() -> dict[str, Any]:
+    """Versão RUNTIME de :data:`CORRECTED_STEP_SCHEMA` (flags F7/F8).
+
+    Mesma razão de :func:`_execution_plan_schema`: o corretor também não pode
+    "corrigir" um passo trocando-o por uma tool declarativa cuja flag está OFF.
+    """
+
+    schema = copy.deepcopy(CORRECTED_STEP_SCHEMA)
+    schema["properties"]["tool_name"]["enum"] = list(planner_toolset())
+    return schema
+
+
 def _correction_messages(
     step: ModelingPlanStep,
     output: dict[str, Any],
@@ -591,7 +622,31 @@ def _corrected_step_from_payload(
     step: ModelingPlanStep, parsed: dict[str, Any]
 ) -> ModelingPlanStep:
     tool_name = str(parsed.get("tool_name") or step.tool_name)
+    # Re-valida a allowlist RUNTIME (flags F7/F8): uma "correção" não pode
+    # introduzir tool fora de planner_toolset() (defesa-em-profundidade caso o
+    # enum do Structured Output não seja estritamente honrado pelo provider).
+    # Com a flag OFF a tool declarativa falharia garantido no adapter, então
+    # rejeitar aqui só antecipa o desfecho (o loop cai em "sem correção").
+    if tool_name not in planner_toolset():
+        raise ValueError(
+            f"tool_name '{tool_name}' fora da allowlist do planner; correção de passo rejeitada."
+        )
     input_json = _decode_input_json(parsed.get("input_json"))
+    # Gate de aprovação do delta corretivo (RF-009 + P6/P8): a aprovação única
+    # do plano cobre correções DENTRO do envelope de risco já aprovado — um
+    # step high-risk/destructive aprovado pode ser corrigido (inclusive com a
+    # mesma tool) sem pausar o loop. O que segue proibido é a ESCALAÇÃO: uma
+    # correção que troque um step que não exigia aprovação por uma tool que
+    # exige (ex.: add_box -> delete_body) não pode auto-executar; rejeitamos e
+    # o loop cai em "sem correção" em vez de contornar o gate.
+    if requires_approval(tool_name, step.risk_level) and not requires_approval(
+        step.tool_name, step.risk_level
+    ):
+        raise ValueError(
+            f"correção escalaria o passo para tool '{tool_name}' que exige "
+            "aprovação humana não coberta pelo plano aprovado; correção "
+            "rejeitada (sem auto-execução)."
+        )
     # Reseta o estado de execução; o passo corrigido será re-executado.
     return step.model_copy(
         update={
@@ -625,7 +680,7 @@ async def correct_step_async(
         model=model,
         messages=messages,
         schema_name="modeling_corrected_step",
-        schema=CORRECTED_STEP_SCHEMA,
+        schema=_corrected_step_schema(),
     )
     return _corrected_step_from_payload(step, parsed)
 
@@ -728,6 +783,26 @@ def build_edit_context_block(parent_plan: ModelingPlan | None) -> str | None:
         )
     elif metrics_lines:
         block.extend(["", "Métricas conhecidas dos corpos atuais:", *metrics_lines[:20]])
+
+    # F8 (Sub3.2): auto-crítica geométrica do bloco anterior (faltou/demais/
+    # errado/certo) + histórico de proveniência — feedback PRIMÁRIO p/ o corretor
+    # mirar o delta certo sem duplicar corpos. Lazy import (evita ciclo); silencioso
+    # quando a flag F8 esteve OFF (sem veredito/histórico capturado).
+    try:
+        from app.modeling.model_critique import render_verdict_block
+        from app.modeling.provenance import history_from_plan, render_history_block
+
+        verdict_block = render_verdict_block(getattr(parent_plan, "model_verdict", None))
+        if verdict_block:
+            block.extend(["", "Auto-crítica do bloco anterior (corrija isto):", verdict_block])
+        history = history_from_plan(parent_plan)
+        if history is not None:
+            history_block = render_history_block(history)
+            if history_block:
+                block.extend(["", "Proveniência (o que cada passo mudou):", history_block])
+    except Exception:  # noqa: BLE001 - contexto extra é best-effort
+        pass
+
     block.append("</modelo-atual>")
     return "\n".join(block)
 
@@ -777,6 +852,107 @@ def build_correction_context(
         ]
     )
     return "\n".join(lines)
+
+
+def _f7_placement_nudge() -> str:
+    """Bloco de posicionamento PARAMÉTRICO (Frente F7) — só quando a flag
+    ``modeling_spatial_resolution_enabled`` está ON.
+
+    Ensina as tools declarativas (``place_body``/``align_axis``/
+    ``distribute_along``), as referências ``@`` (que o resolver de backend troca
+    por números reais) e o modelo de montagem combine-DENTRO/junta-ENTRE. Vazio
+    com a flag OFF — aí o caminho de coordenada absoluta vigente segue valendo e
+    essas tools nem aparecem como escolha útil. A forma CRUA sem ``@`` continua
+    proibida (consistente com o sanitizer F6) nas duas pontas.
+    """
+
+    if not settings.modeling_spatial_resolution_enabled:
+        return ""
+    relate = (
+        "  • `relate_bodies` {kind, moving:'Tampa', reference:'Caixa'}: RELAÇÃO\n"
+        "    declarativa de alto nível — kind ∈ flush_mate|cover_opening|\n"
+        "    coaxial_insert|hinge_along_shared_edge|seat_in_pocket. O backend DERIVE\n"
+        "    medindo as faces/arestas e expande nas primitivas acima. Prefira isto\n"
+        "    quando a relação tem NOME (encaixar, cobrir, dobradiça, inserir).\n"
+        if settings.modeling_relation_placement_enabled
+        else ""
+    )
+    return (
+        "- POSICIONAMENTO DETERMINÍSTICO (F7 — OBRIGATÓRIO para encostar/cobrir/\n"
+        "  empilhar um corpo em outro): DECLARE a relação; o backend MEDE as faces\n"
+        "  reais e calcula a posição EXATA. NUNCA posicione um corpo RELATIVO a\n"
+        "  outro com coordenada calculada (`origin_mm`/`center_mm`/`fusion.move_body`\n"
+        "  com [x,y,z]) — você erra a folga (foi o que deixou a tampa flutuando\n"
+        "  1,5 mm). A conta de posição é do BACKEND, não sua. Tools:\n"
+        "  • `place_body` {body, anchor:{body:'Tampa', role:'bottom_planar'},\n"
+        "    target:{body:'Caixa', role:'top_planar'}}: ENCOSTA um corpo no outro.\n"
+        "    O backend mede as duas faces (por ROLE top_planar|bottom_planar|\n"
+        "    largest_planar|open_boundary, ou PREDICADO {type:'cylindrical',\n"
+        "    radius_mm:R}) e calcula a translação EXATA → contato com FOLGA 0, sem\n"
+        "    você copiar token nem calcular coordenada. Corpos ficam SEPARADOS (sem\n"
+        "    componente). (flush; coaxial/dobradiça → align_axis.)\n"
+        "  • `align_axis` {body, target:{body:'Caixa', face:{type:'cylindrical',\n"
+        "    radius_mm:R}}, body_axis}: eixo de dobradiça — junta revolute na face\n"
+        "    cilíndrica do furo/pino (referenciada por predicado, não por token).\n"
+        "  • `distribute_along` {edge:{body:'Caixa', role:'rear_top'}, count,\n"
+        "    prototype:{primitive:'cylinder', diameter_mm, height_mm, name},\n"
+        "    fit|spacing_mm, alternate:[CorpoA, CorpoB]}: distribui N nós ao longo\n"
+        "    da ARESTA referida por ROLE medido (NUNCA invente edge_token) e funde\n"
+        "    cada grupo no seu corpo — knuckles de dobradiça num passo só.\n"
+        + relate
+        + "  • MONTAGEM: COMBINE-DENTRO (os nós da caixa fundem COM a caixa = 1\n"
+        "    sólido imprimível) e JUNTA-ENTRE (o movimento vem de uma junta entre\n"
+        "    os componentes caixa↔tampa). NUNCA combine corpos que devem se mover\n"
+        "    um em relação ao outro.\n"
+        "  • REFERÊNCIAS @ (agora VÁLIDAS em `origin_mm`/`center_mm`/`position_mm`/\n"
+        "    `translation_mm`/`axis`): `@token('<face>').center.z`,\n"
+        "    `@edge('<e>').along(0.2)`, `@body('<corpo>').bbox.max_z - 20`. São\n"
+        "    resolvidas no backend para números reais — ancore à geometria em vez\n"
+        "    de chutar. (A forma CRUA sem `@` — `Placa.bbox.max_z` — segue PROIBIDA.)\n"
+    )
+
+
+def _f9_relative_nudge() -> str:
+    """Posicionamento RELATIVO + estado semântico (Frente F9) — cada bloco só
+    aparece com a sua flag ON. Ensina o vocabulário de ``align`` do place_body,
+    como LER a semântica do ``<model-state>`` (papéis/adjacência/rótulo) e avisa
+    que a coordenada absoluta chutada será RECUSADA. Vazio com todas OFF."""
+
+    parts: list[str] = []
+    if settings.modeling_align_modes_enabled:
+        parts.append(
+            "- POSICIONAR UM CORPO SOBRE/CONTRA/ALINHADO A OUTRO é SEMPRE um passo\n"
+            "  `place_body`, NUNCA por coordenada. Crie o corpo com PRIMITIVA na ORIGEM\n"
+            "  (sem `origin_mm`/`center_mm`, sem embutir a posição num sketch) e DEPOIS\n"
+            "  acrescente um passo `place_body` que MEDE as faces e calcula o lugar\n"
+            "  exato. NÃO tente acertar a posição no `add_box`/`extrude` — o corpo nasce\n"
+            "  na origem e o `place_body` o encaixa (faltou esse passo = peças soltas).\n"
+            "- ALINHAMENTO do `place_body` (campo `align` — escolha pelo que o pedido\n"
+            "  diz, NÃO centralize tudo por padrão):\n"
+            "  • 'X mm acima/abaixo/folga/respiro/separados por X' → `align:'gap'` +\n"
+            "    `gap_mm:X` (CENTRA como center e abre a folga só no eixo do contato;\n"
+            "    o backend escolhe o lado pela normal do destino).\n"
+            "  • 'ao canto/cantos coincidentes' → `align:'corner'`.\n"
+            "  • 'pela borda/rente a uma borda' → `align:'edge'`.\n"
+            "  • 'mantendo a posição lateral/só encostar' → `align:'coplanar'`.\n"
+            "  • encostar e centralizar (tampa concêntrica) → `align:'center'` (default).\n"
+            "  edge/corner exigem corpos alinhados aos eixos (rotacionado vira erro).\n"
+        )
+    if settings.modeling_semantic_state_enabled:
+        parts.append(
+            "- LEIA a semântica do `<model-state>` antes de posicionar: cada face traz\n"
+            "  `papéis=` (top_planar/bottom_planar/open_boundary/...) p/ você apontar\n"
+            "  por ROLE em vez de copiar token; cada corpo traz `papel=` (container/\n"
+            "  lid) e linhas `encosta em`/`interfere com` (a montagem ATUAL). Use isso\n"
+            "  p/ decidir o próximo passo — NÃO recrie um corpo que já está montado.\n"
+        )
+    if settings.modeling_relative_enforcement_enabled:
+        parts.append(
+            "- O backend RECUSA (erro tipado) um `fusion.move_body` cuja coordenada\n"
+            "  absoluta sobreponha outro corpo ou o deixe longe de tudo. Posicione\n"
+            "  relativo via `place_body` — não tente acertar o [x,y,z] na mão.\n"
+        )
+    return "".join(parts)
 
 
 def _build_messages(
@@ -953,9 +1129,13 @@ def _build_messages(
         '  `"Comprimento/2 - 15"`, `"-(Largura/2 - 15 mm)"`). Bug pego no\n'
         '  gate: 1 dos 4 furos veio com `face: "Placa.top_face"` +\n'
         "  `Placa.bounding_box.max_x - 20 mm`, e o Fusion rejeitou o sketch.\n"
-        "\n"
+        + _f7_placement_nudge()
+        + _f9_relative_nudge()
+        + "\n"
+        # Toolset RUNTIME (flags F7/F8): tools declarativas com a flag OFF não
+        # têm schema renderizado — o LLM não aprende uma tool fadada a falhar.
         "Ferramentas disponíveis (com argumentos/unidades/exemplos quando conhecidos):\n"
-        + tool_schemas.render_tool_schemas(list(PLANNER_TOOLSET))
+        + tool_schemas.render_tool_schemas(list(planner_toolset()))
         + "\n\nResponda apenas em JSON conforme o schema modeling_execution_plan."
     )
     user_prompt = payload.prompt.strip()
@@ -999,10 +1179,21 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
         raise ValueError(f"software_choice inválido vindo do LLM: {parsed.get('software_choice')}")
     software = ModelingSoftware(raw_software)
     if payload.software_override and payload.software_override != software:
-        # User explicitly chose; honor it and drop steps that target the wrong host.
-        software = payload.software_override
+        # Usuário forçou um host (software_override) e o LLM escolheu OUTRO como
+        # software_choice: o plano ignorou a escolha explícita. Rejeitamos para
+        # que o caller (planner_service._build_plan) caia no plano heurístico,
+        # que respeita o override via choose_software — em vez de aceitar um
+        # plano do host errado e violar silenciosamente o pedido do usuário.
+        # (Não filtramos por step: um plano legítimo pode misturar hosts, ex.:
+        # validar a mesh em blender.validate_mesh dentro de um plano fusion.)
+        raise ValueError(
+            f"LLM escolheu '{software.value}', mas o usuário forçou "
+            f"'{payload.software_override.value}'; plano rejeitado "
+            "(fallback heurístico respeita o override)."
+        )
 
-    confidence = float(parsed.get("confidence") or 0.7)
+    raw_confidence = parsed.get("confidence")
+    confidence = float(raw_confidence) if raw_confidence is not None else 0.7
     confidence = max(0.0, min(1.0, confidence))
     rationale = str(parsed.get("rationale") or "").strip()
     assumptions = [str(item) for item in (parsed.get("assumptions") or []) if str(item).strip()]
@@ -1011,16 +1202,20 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
     raw_steps = parsed.get("steps") or []
     if not isinstance(raw_steps, list) or not raw_steps:
         raise ValueError("Plano do LLM precisa conter ao menos uma etapa.")
+    # Allowlist RUNTIME (flags F7/F8): consistente com o enum/schemas que o
+    # LLM recebeu — tool flag-gated oculta é rejeitada também na volta.
+    allowed_tools = planner_toolset()
     steps: list[ModelingPlanStep] = []
     for index, item in enumerate(raw_steps, start=1):
         if not isinstance(item, dict):
             raise ValueError(f"Etapa {index} do plano não é um objeto JSON.")
-        seq = int(item.get("seq") or index)
+        raw_seq = item.get("seq")
+        seq = int(raw_seq) if raw_seq is not None else index
         title = str(item.get("title") or f"Etapa {seq}").strip() or f"Etapa {seq}"
         tool_name = str(item.get("tool_name") or "").strip()
         if not tool_name:
             raise ValueError(f"Etapa {index} sem tool_name.")
-        if tool_name not in PLANNER_TOOLSET:
+        if tool_name not in allowed_tools:
             raise ValueError(
                 f"tool_name '{tool_name}' fora da allowlist do planner; "
                 "etapa rejeitada antes da policy."
@@ -1034,6 +1229,10 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
         # referência geométrica que os nudges não eliminam, antes do executor.
         if settings.modeling_plan_sanitizer_enabled and isinstance(input_json, dict):
             input_json, _sanitize_actions = sanitize_tool_arguments(tool_name, input_json)
+        # Cada step mantém o host do seu próprio prefixo (o executor roteia por
+        # prefixo). Não rejeitamos cross-host aqui: é legítimo (ex.: validação de
+        # mesh em blender dentro de um plano fusion). O conflito de override já
+        # foi tratado acima rejeitando o plano inteiro.
         step_software = _step_software(tool_name, software)
         status = (
             ModelingStepStatus.pending

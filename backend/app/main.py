@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,6 +9,8 @@ from app.api.routes.modeling import wire_tracer_store
 from app.core.config import settings
 from app.workers.import_queue import start_import_worker
 from app.workers.index_queue import start_index_worker
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -32,9 +35,23 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # CORS: enviamos cookies/Authorization (allow_credentials=True), então o
+    # coringa "*" é proibido pela spec CORS e perigoso aqui (refletir qualquer
+    # Origin com credenciais vaza cross-origin). Se "*" for configurado em
+    # TRUTHS_FORGE_ALLOWED_ORIGINS, descartamos e avisamos em vez de aceitar a
+    # combinação insegura silenciosamente.
+    allowed_origins = settings.allowed_origins
+    if "*" in allowed_origins:
+        logger.warning(
+            "TRUTHS_FORGE_ALLOWED_ORIGINS contém '*' com allow_credentials=True; "
+            "o coringa será ignorado (combinação proibida pela spec CORS). "
+            "Liste origens explícitas."
+        )
+        allowed_origins = [origin for origin in allowed_origins if origin != "*"]
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.allowed_origins,
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

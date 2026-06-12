@@ -389,7 +389,7 @@ class ModelingTracer:
             ModelingTraceLevel.info: logger.info,
             ModelingTraceLevel.warn: logger.warning,
             ModelingTraceLevel.error: logger.error,
-        }[level]
+        }.get(level, logger.info)
         log_method(
             "modeling.trace event_type=%s message=%s",
             event_type,

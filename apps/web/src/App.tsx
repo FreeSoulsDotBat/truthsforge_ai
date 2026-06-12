@@ -32,6 +32,7 @@ import {
 } from "./features/agents/agent-domain";
 import {
   initialAssistantStatus,
+  modelingStageForPlanStatus,
   normalizeRequiredChatTitle,
   localAssistantMessage,
   messageMetadata,
@@ -76,7 +77,9 @@ import {
   KnowledgeDashboard,
   ProjectsDashboard
 } from "./features/dashboard/dashboard-sections";
+import { WarningBanner } from "./components/ui/WarningBanner";
 import { EnableModeling3DDialog, ModelingDiagnosticsModal } from "./features/modeling-3d/components";
+import { modeling3dApi } from "./features/modeling-3d/api";
 import { isModeling3DChat } from "./features/modeling-3d/chat-domain";
 import { useModeling3dChat, useModelingPlanActions } from "./features/modeling-3d/hooks";
 import type { ModelingPlanCardActions } from "./components/app-chat";
@@ -121,7 +124,6 @@ function App() {
     selectedKnowledgeProjectId,
     selectedKnowledgeFolderId,
     chatProjectId,
-    chatProjectScopeMode,
     reasoningOverride,
     deepResearch,
     deepResearchMaxToolCalls,
@@ -138,7 +140,6 @@ function App() {
     setSelectedKnowledgeProjectId,
     setSelectedKnowledgeFolderId,
     setChatProjectId,
-    setChatProjectScopeMode,
     setReasoningOverride,
     setDeepResearch,
     setDeepResearchMaxToolCalls,
@@ -160,7 +161,6 @@ function App() {
       selectedKnowledgeProjectId: state.selectedKnowledgeProjectId,
       selectedKnowledgeFolderId: state.selectedKnowledgeFolderId,
       chatProjectId: state.chatProjectId,
-      chatProjectScopeMode: state.chatProjectScopeMode,
       reasoningOverride: state.reasoningOverride,
       deepResearch: state.deepResearch,
       deepResearchMaxToolCalls: state.deepResearchMaxToolCalls,
@@ -177,7 +177,6 @@ function App() {
       setSelectedKnowledgeProjectId: state.setSelectedKnowledgeProjectId,
       setSelectedKnowledgeFolderId: state.setSelectedKnowledgeFolderId,
       setChatProjectId: state.setChatProjectId,
-      setChatProjectScopeMode: state.setChatProjectScopeMode,
       setReasoningOverride: state.setReasoningOverride,
       setDeepResearch: state.setDeepResearch,
       setDeepResearchMaxToolCalls: state.setDeepResearchMaxToolCalls,
@@ -439,8 +438,7 @@ function App() {
     setSupportAgentIds,
     setSelectedKnowledgeProjectId,
     setSelectedKnowledgeFolderId,
-    setChatProjectId,
-    setChatProjectScopeMode
+    setChatProjectId
   });
 
   useEffect(() => {
@@ -519,6 +517,17 @@ function App() {
   const activeSessionIsModeling3D = isModeling3DChat(activeSession);
   const modeling3dEnabled = nextChatIs3D || activeSessionIsModeling3D;
   const activeModelingPlanId = activeSession?.modeling_plan_id ?? null;
+  // RF-024: o trace_id chega no metadata SSE do plano; sem repassá-lo ao modal
+  // de diagnóstico os eventos de UI viram no-op e o trace perde os spans do
+  // planner (gravados com plan_id nulo — ver docs/3d-modeling-debug.md §4).
+  const activeModelingTraceId = useMemo(() => {
+    if (!activeSession || !activeModelingPlanId) return null;
+    for (let index = activeSession.messages.length - 1; index >= 0; index -= 1) {
+      const plan = messageMetadata(activeSession.messages[index]).modeling_plan;
+      if (plan?.id === activeModelingPlanId) return plan.trace_id ?? null;
+    }
+    return null;
+  }, [activeSession, activeModelingPlanId]);
 
   const applyChatTitleToSession = useCallback((sessionId: string, title: string) => {
     const normalizedTitle = normalizeRequiredChatTitle(title);
@@ -567,32 +576,62 @@ function App() {
     [setSessions]
   );
 
+  // Anti-replay (C5): quando uma ação do card falha (ex.: 409 — o card veio de
+  // uma mensagem persistida e o plano já rodou/foi rejeitado), reconcilia o
+  // card com o estado REAL do backend para ele parar de oferecer "Aprovar".
+  const reconcileModelingPlan = useCallback(
+    async (planId: string) => {
+      try {
+        const plan = await modeling3dApi.getPlan(planId);
+        // Mesmo mapeamento do handler SSE `modeling_plan`: um 409 com plano
+        // `running`/`approved` (segunda aba, card stale) NÃO pode regredir a
+        // UI para a etapa de aprovação durante a execução.
+        applyPlanToSession(plan, modelingStageForPlanStatus(plan.status));
+      } catch {
+        // Backend indisponível: mantém o card como está (o erro da ação já
+        // aparece na superfície do hook).
+      }
+    },
+    [applyPlanToSession]
+  );
+
   const handleApproveModelingPlan = useCallback(
     async (planId: string) => {
       const execution = await modelingPlanActionsRuntime.approve(planId);
-      if (!execution) return;
-      const next = execution.plan.status === "failed" ? "editing" : "editing";
+      if (!execution) {
+        void reconcileModelingPlan(planId);
+        return;
+      }
+      // DT-008: falha de execução leva ao estágio `failed` (distinto de
+      // sucesso) — espelha a state machine do backend.
+      const next = execution.plan.status === "failed" ? "failed" : "editing";
       applyPlanToSession(execution.plan, next);
     },
-    [applyPlanToSession, modelingPlanActionsRuntime]
+    [applyPlanToSession, modelingPlanActionsRuntime, reconcileModelingPlan]
   );
 
   const handleRejectModelingPlan = useCallback(
     async (planId: string, reason: string) => {
       const rejected = await modelingPlanActionsRuntime.reject(planId, reason);
-      if (!rejected) return;
+      if (!rejected) {
+        void reconcileModelingPlan(planId);
+        return;
+      }
       applyPlanToSession(rejected, "discovery");
     },
-    [applyPlanToSession, modelingPlanActionsRuntime]
+    [applyPlanToSession, modelingPlanActionsRuntime, reconcileModelingPlan]
   );
 
   const handleRetryModelingPlan = useCallback(
     async (planId: string) => {
       const execution = await modelingPlanActionsRuntime.retry(planId);
-      if (!execution) return;
-      applyPlanToSession(execution.plan, "editing");
+      if (!execution) {
+        void reconcileModelingPlan(planId);
+        return;
+      }
+      applyPlanToSession(execution.plan, execution.plan.status === "failed" ? "failed" : "editing");
     },
-    [applyPlanToSession, modelingPlanActionsRuntime]
+    [applyPlanToSession, modelingPlanActionsRuntime, reconcileModelingPlan]
   );
 
   const handleReviseModelingPlan = useCallback(
@@ -880,10 +919,7 @@ function App() {
 
   useChatScopeSync({
     activeSessionProjectId: activeSession?.project_id ?? null,
-    chatProjectId,
-    chatProjectScopeMode,
-    setChatProjectId,
-    setChatProjectScopeMode
+    setChatProjectId
   });
 
   useKnowledgeScopeSync({
@@ -1205,7 +1241,6 @@ function App() {
           agent_ids: runtimeSupportAgents.map((agent) => agent.id),
           project_id: chatProjectId,
           folder_id: activeSessionFolderId,
-          project_scope_mode: chatProjectScopeMode,
           context_project_ids: normalizedContextProjectIds,
           context_document_ids: normalizedContextDocumentIds,
           context_knowledge_base_ids: normalizedContextKnowledgeBaseIds,
@@ -1303,8 +1338,10 @@ function App() {
                   ...session,
                   is_modeling_3d: true,
                   modeling_software_preference: plan.software_choice,
-                  modeling_stage:
-                    plan.status === "completed" ? "editing" : plan.status === "failed" ? "failed" : "executing",
+                  // No fluxo P1 o plano chega em `waiting_approval` (gate de
+                  // aprovação): o chat está PLANEJANDO, não executando.
+                  // Mapeamento compartilhado com o reconcile pós-409.
+                  modeling_stage: modelingStageForPlanStatus(plan.status),
                   modeling_plan_id: plan.id,
                   messages
                 };
@@ -2000,7 +2037,6 @@ function App() {
       );
       setActiveSessionId(created.id);
       setChatProjectId(projectId);
-      setChatProjectScopeMode("project_only");
       setChatContextProjectIds([projectId]);
       setChatContextDocumentIds([]);
       const project = projects.find((item) => item.id === projectId);
@@ -2077,7 +2113,6 @@ function App() {
     setAttachedDocumentIds([]);
     setSupportAgentIds([]);
     setChatProjectId(generalProjectId);
-    setChatProjectScopeMode("project_only");
     setChatContextProjectIds([generalProjectId]);
     setChatContextDocumentIds([]);
     setChatContextKnowledgeBaseIds(generalProject?.context?.knowledge_base_ids ?? []);
@@ -2229,6 +2264,7 @@ function App() {
           open={modelingDiagnosticsOpen}
           planId={activeModelingPlanId}
           projectId={activeSessionProjectId}
+          traceId={activeModelingTraceId}
           onClose={() => setModelingDiagnosticsOpen(false)}
         />
       )}
@@ -2299,6 +2335,18 @@ function App() {
                   documentsCount={documents.length}
                   monthlySpendBrl={costUsage?.estimated_spend_brl ?? null}
                 />
+
+                {activeSessionIsModeling3D && modelingPlanActionsRuntime.error && (
+                  <div className="border-t border-forge-line-soft bg-forge-ink px-3 pt-3">
+                    <div className="mx-auto max-w-3xl">
+                      <WarningBanner
+                        tone="err"
+                        title="A ação do plano 3D falhou."
+                        body={modelingPlanActionsRuntime.error}
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <form onSubmit={handleSubmit} className="border-t border-forge-line-soft bg-forge-ink p-3">
                   <div className="mx-auto max-w-3xl rounded-lg border border-forge-line bg-forge-panel p-3 shadow-soft">

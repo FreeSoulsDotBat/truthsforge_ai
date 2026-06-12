@@ -24,11 +24,26 @@ class SecretStore:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.fernet = Fernet(self._load_or_create_key())
 
+    def _restrict_permissions(self, path: Path) -> None:
+        # POSIX-only: a chave Fernet e o ciphertext ficam lado a lado; sem 0600
+        # o umask padrao costuma deixa-los legiveis por outros usuarios locais
+        # (0644), anulando a criptografia num diretorio compartilhado. chmod e
+        # no-op/ignorado no Windows, entao engolimos falhas silenciosamente.
+        if os.name != "posix":
+            return
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
     def _load_or_create_key(self) -> bytes:
         if self.key_path.exists():
+            # Endurece chaves criadas antes desta protecao existir.
+            self._restrict_permissions(self.key_path)
             return self.key_path.read_bytes()
         key = Fernet.generate_key()
         self.key_path.write_bytes(key)
+        self._restrict_permissions(self.key_path)
         return key
 
     def _read_local(self) -> dict[str, str]:
@@ -38,6 +53,7 @@ class SecretStore:
 
     def _write_local(self, payload: dict[str, str]) -> None:
         self.secrets_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        self._restrict_permissions(self.secrets_path)
 
     def get_api_key(self, provider: ProviderName) -> str | None:
         env_value = os.getenv(ENV_KEY_BY_PROVIDER[provider])

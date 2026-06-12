@@ -10,6 +10,19 @@ export interface ImagePreviewProps {
   className?: string;
 }
 
+// Refcount local de scroll-lock: vários ImagePreview podem abrir/fechar de forma
+// independente; só removemos a classe global quando o último deles fecha, evitando
+// que um preview destrave o body enquanto outro ainda está aberto.
+let scrollLockCount = 0;
+function lockBodyScroll() {
+  scrollLockCount += 1;
+  document.body.classList.add("overflow-hidden");
+}
+function unlockBodyScroll() {
+  scrollLockCount = Math.max(0, scrollLockCount - 1);
+  if (scrollLockCount === 0) document.body.classList.remove("overflow-hidden");
+}
+
 /**
  * Família ImagePreview v4 (frame image-preview.jsx): grade de imagens da
  * mensagem + lightbox em tela cheia. Clique abre; ← → navega; Esc fecha.
@@ -30,7 +43,7 @@ export function ImagePreview({ urls, className }: ImagePreviewProps) {
 
   useEffect(() => {
     if (!open) return undefined;
-    document.body.classList.add("overflow-hidden");
+    lockBodyScroll();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();
       else if (event.key === "ArrowRight") go(1);
@@ -38,7 +51,7 @@ export function ImagePreview({ urls, className }: ImagePreviewProps) {
     };
     window.addEventListener("keydown", onKey);
     return () => {
-      document.body.classList.remove("overflow-hidden");
+      unlockBodyScroll();
       window.removeEventListener("keydown", onKey);
     };
   }, [open, close, go]);

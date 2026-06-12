@@ -34,7 +34,11 @@ from app.modeling.mcp_servers.protocol import (
     decode_message,
     encode_message,
 )
-from app.modeling.stdio_client import StdioMCPClient, StdioServerError
+from app.modeling.stdio_client import (
+    MAX_SKIPPED_LINES_PER_CALL,
+    StdioMCPClient,
+    StdioServerError,
+)
 
 # ----------------------------------------------------------------------- protocol
 
@@ -217,6 +221,56 @@ def test_stdio_client_surfaces_method_not_found_as_error() -> None:
         assert exc_info.value.code == METHOD_NOT_FOUND
     finally:
         client.close()
+
+
+class _FakeProc:
+    """Substituto de ``subprocess.Popen`` com stdout pré-gravado (sem subprocess)."""
+
+    def __init__(self, stdout_text: str) -> None:
+        self.stdin = io.StringIO()
+        self.stdout = io.StringIO(stdout_text)
+        self.stderr = None
+
+    def poll(self) -> int | None:
+        return None  # processo "vivo": _ensure_started_locked não tenta spawnar
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0  # close() via atexit não deve travar nem logar exceção
+
+    def kill(self) -> None:
+        pass
+
+
+def _client_with_fake_stdout(stdout_text: str) -> StdioMCPClient:
+    client = StdioMCPClient(["unused"], name="fake_mcp")
+    client._proc = _FakeProc(stdout_text)  # type: ignore[assignment]
+    return client
+
+
+def test_stdio_client_resyncs_past_noise_and_divergent_ids() -> None:
+    """Preserva o fix mdl-adapters-008: linhas espúrias (não-JSON, em branco,
+    id divergente) são ignoradas até achar a resposta do id correto."""
+    # O primeiro call do cliente "fake_mcp" usa o id "fake_mcp-1".
+    noise = (
+        "log espúrio de lib importada\n"
+        "\n"
+        + encode_message(build_result("outro-id", {"ok": "ignorar"}))
+        + encode_message(build_result("fake_mcp-1", {"server": "fake"}))
+    )
+    client = _client_with_fake_stdout(noise)
+    assert client.call("status") == {"server": "fake"}
+
+
+def test_stdio_client_aborts_after_max_skipped_lines() -> None:
+    """Flood de stdout (ruído sem a resposta esperada) gera StdioServerError ao
+    atingir MAX_SKIPPED_LINES_PER_CALL, em vez de prender o lock para sempre."""
+    flood = "linha de ruído\n" * MAX_SKIPPED_LINES_PER_CALL + encode_message(
+        build_result("fake_mcp-1", {"server": "tarde-demais"})
+    )
+    client = _client_with_fake_stdout(flood)
+    with pytest.raises(StdioServerError) as exc_info:
+        client.call("status")
+    assert "MAX_SKIPPED_LINES_PER_CALL" in str(exc_info.value)
 
 
 # ----------------------------------------------------------- LocalMCPClient mode

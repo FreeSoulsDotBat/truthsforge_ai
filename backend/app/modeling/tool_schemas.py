@@ -608,6 +608,178 @@ TOOL_SCHEMAS: dict[str, ToolSchema] = {
             ),
         },
     ),
+    "fusion.place_body": ToolSchema(
+        summary=(
+            "F7 — posiciona um corpo por REFERÊNCIA declarativa (sem coordenada "
+            "crua): ancora uma face do corpo numa face de destino, FLUSH (faces "
+            "coplanares encostadas). O resolver expande em make_component + junta "
+            "rígida que sobrevive a recompute. Para eixo coaxial use align_axis."
+        ),
+        args={
+            "body": ArgSpec(
+                "Corpo a posicionar (nome ou stable_id).",
+                type="string",
+                unit=None,
+                example="Tampa",
+            ),
+            "anchor": ArgSpec(
+                "Face DO corpo que encosta — por ROLE {body,role:'bottom_planar'} "
+                "ou predicado {body,face:{type,radius_mm}}. Não copie token.",
+                type="object",
+                unit=None,
+                example={"body": "Tampa", "role": "bottom_planar"},
+            ),
+            "target": ArgSpec(
+                "Face de DESTINO — por ROLE/predicado (o backend acha a face real).",
+                type="object",
+                unit=None,
+                example={"body": "Caixa", "role": "top_planar"},
+            ),
+            "align": ArgSpec(
+                "F9 — MODO de alinhamento: 'center' (default, centra+encosta nos 3 "
+                "eixos) | 'coplanar' (só encosta, mantém o offset lateral) | 'gap' "
+                "(encosta deixando folga 'gap_mm') | 'edge'/'corner' (alinha por "
+                "borda/canto). Mapeie a intenção: 'X mm acima/folga/respiro'→'gap'; "
+                "'ao canto'→'corner'; 'pela borda'→'edge'; senão 'center'.",
+                type="string",
+                unit=None,
+                example="gap",
+            ),
+            "gap_mm": ArgSpec(
+                "Folga entre as faces quando align='gap' (a distância pedida).",
+                type="number",
+                unit="mm",
+                example=2,
+            ),
+        },
+    ),
+    "fusion.align_axis": ToolSchema(
+        summary=(
+            "F7 — alinha o eixo de um corpo a uma FACE cilíndrica de destino "
+            "(furo/pino); o resolver expande numa junta revolute/cilíndrica. "
+            "Use para o eixo de uma dobradiça."
+        ),
+        args={
+            "body": ArgSpec(
+                "Corpo cujo eixo será alinhado.",
+                type="string",
+                unit=None,
+                example="Tampa",
+            ),
+            "target": ArgSpec(
+                "Face cilíndrica de destino por PREDICADO {body,face:{type:"
+                "'cylindrical',radius_mm:R}} — o backend acha o furo/pino real.",
+                type="object",
+                unit=None,
+                example={"body": "Caixa", "face": {"type": "cylindrical", "radius_mm": 2.5}},
+            ),
+            "body_axis": ArgSpec(
+                "Eixo do corpo a alinhar (x|y|z). Default z.",
+                type="string",
+                unit=None,
+                required=False,
+                example="x",
+            ),
+        },
+    ),
+    "fusion.distribute_along": ToolSchema(
+        summary=(
+            "F7 — distribui N primitivas (ex.: knuckles de dobradiça) ao longo de "
+            "uma ARESTA, com espaçamento/encaixe e alternância opcional entre dois "
+            "corpos-pai (combine-DENTRO de cada parte imprimível)."
+        ),
+        args={
+            "edge": ArgSpec(
+                "Aresta-guia: descritor {body, role} (o backend MEDE a aresta real — "
+                "PREFIRA isto, NUNCA invente token) ou um edge_token REAL do "
+                "read-back. Roles: 'longest' | combinação rear/front + top/bottom + "
+                "left/right (ex.: 'rear_top' = aresta de trás do topo, a dobradiça).",
+                type="object",
+                unit=None,
+                example={"body": "Caixa", "role": "rear_top"},
+            ),
+            "count": ArgSpec(
+                "Quantidade de nós a distribuir.",
+                type="number",
+                unit=None,
+                example=5,
+            ),
+            "prototype": ArgSpec(
+                "Primitiva a replicar: {primitive:'cylinder', diameter_mm, height_mm, name}.",
+                type="object",
+                unit=None,
+                example={
+                    "primitive": "cylinder",
+                    "diameter_mm": 5,
+                    "height_mm": 8,
+                    "name": "Knuckle",
+                },
+            ),
+            "spacing_mm": ArgSpec(
+                "Passo entre nós (mm); a fileira é centrada na aresta. Sem isto, "
+                "use fit p/ preencher uniformemente.",
+                required=False,
+                example=10.0,
+            ),
+            "fit": ArgSpec(
+                "true = distribui uniformemente incluindo as pontas da aresta.",
+                type="boolean",
+                unit=None,
+                required=False,
+                example=True,
+            ),
+            "alternate": ArgSpec(
+                "[CorpoA, CorpoB] — alterna os nós entre dois pais; cada grupo "
+                "funde (combine-DENTRO) com seu corpo.",
+                type="array",
+                unit=None,
+                required=False,
+                example=["Caixa", "Tampa"],
+            ),
+            "bore_diameter_mm": ArgSpec(
+                "Furo do pino: diâmetro (mm) do canal COAXIAL que atravessa os nós "
+                "ao longo da MESMA aresta (eixo da dobradiça). O backend cria o "
+                "cilindro de furo coaxial e o CORTA de cada corpo-pai — não use "
+                "fusion.hole (perfura perpendicular à face, não faz furo axial). "
+                "Use a folga: ~Ø do pino + 0.2–0.4 mm.",
+                required=False,
+                example=2.4,
+            ),
+        },
+    ),
+    "fusion.relate_bodies": ToolSchema(
+        summary=(
+            "F8 — RELAÇÃO declarativa entre 2 corpos (vocabulário FECHADO): o "
+            "backend DERIVE a geometria MEDINDO as faces/arestas e expande nas "
+            "primitivas F7 (place_body/align_axis → junta). Prefira isto a "
+            "calcular posição quando a relação tem nome (encaixar, cobrir, "
+            "inserir coaxial, dobradiça)."
+        ),
+        args={
+            "kind": ArgSpec(
+                "Tipo da relação: 'flush_mate' (encosta face-a-face) | "
+                "'cover_opening' (tampa cobre a abertura de uma caixa ocada) | "
+                "'coaxial_insert' (pino no furo, eixos coincidem) | "
+                "'hinge_along_shared_edge' (dobradiça: junta revolute na aresta "
+                "comum) | 'seat_in_pocket' (peça assenta num rebaixo).",
+                type="string",
+                unit=None,
+                example="flush_mate",
+            ),
+            "moving": ArgSpec(
+                "Corpo que se MOVE para satisfazer a relação (nome).",
+                type="string",
+                unit=None,
+                example="Tampa",
+            ),
+            "reference": ArgSpec(
+                "Corpo de REFERÊNCIA (fica parado; nome).",
+                type="string",
+                unit=None,
+                example="Caixa",
+            ),
+        },
+    ),
     "fusion.knuckle_hinge": ToolSchema(
         summary=(
             "MACRO: dobradiça de nós (knuckles) que abre em torno de um pino "
@@ -889,6 +1061,11 @@ def tool_schema(tool_name: str) -> ToolSchema | None:
 
 def render_tool_schema(tool_name: str) -> str:
     """Renderiza uma linha-bloco legível pela LLM para uma tool."""
+    # Tools depreciadas (fora de PLANNER_TOOLSET) não podem ser renderizadas:
+    # senão um corretor/editor de passo poderia reintroduzi-las via schema órfão.
+    # Alinha render_tool_schema com tool_registry.DEPRECATED_PLANNER_TOOLS.
+    if tool_name in tool_registry.DEPRECATED_PLANNER_TOOLS:
+        return f"- {tool_name}: (tool depreciada — indisponível)"
     schema = TOOL_SCHEMAS.get(tool_name)
     if schema is None:
         descriptor = tool_registry.descriptor(tool_name)

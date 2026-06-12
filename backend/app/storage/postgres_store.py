@@ -6,6 +6,7 @@ from time import sleep
 from typing import Any, TypeVar
 
 import psycopg
+import psycopg_pool
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
@@ -71,6 +72,20 @@ logger = logging.getLogger(__name__)
 
 _POSTGRES_CONNECT_ATTEMPTS = 8
 _POSTGRES_CONNECT_RETRY_DELAY_SECONDS = 1.0
+# Pool reutilizavel: evita abrir/fechar conexao por operacao (storage-002).
+# max_size vem de settings.postgres_pool_max_size (env TRUTHS_FORGE_POSTGRES_POOL_MAX_SIZE,
+# default 10) e precisa acomodar checkouts ANINHADOS na mesma thread (um metodo
+# segura uma conexao e chama outro metodo que faz novo checkout); por isso o
+# piso 2 em _open_pool — com max_size=1 o checkout aninhado deadlocka.
+_POSTGRES_POOL_MIN_SIZE = 1
+_POSTGRES_POOL_MAX_SIZE_FLOOR = 2
+# Health-check de checkout: apos restart do Postgres o pool pode reter conexoes
+# mortas; sem o check elas sao ENTREGUES e cada operacao estoura OperationalError
+# em serie ate o pool reciclar. Referencia capturada no import (constante) para
+# os testes poderem monkeypatchar a factory ConnectionPool sem perder o metodo real.
+_POSTGRES_POOL_CHECK = psycopg_pool.ConnectionPool.check_connection
+# Timeout do wait() de boot por tentativa; o retry externo cobre a janela total.
+_POSTGRES_POOL_WAIT_TIMEOUT_SECONDS = 5.0
 _POSTGRES_RETRYABLE_CONNECT_ERROR_SNIPPETS = (
     "connection refused",
     "connection timed out",
@@ -96,27 +111,76 @@ class PostgresStore:
 
     def __init__(self, database_url: str = settings.database_url) -> None:
         self.database_url = database_url
+        # Pool criado de forma lazy na 1a necessidade (ver _pool / _connect).
+        self._pool: psycopg_pool.ConnectionPool | None = None
         self.init_schema()
         self.seed_if_empty()
         self.migrate_projects_and_folders()
         self.reconcile_chatgpt_session_timestamps()
 
-    def _connect(self) -> psycopg.Connection:
+    @property
+    def _pool_instance(self) -> psycopg_pool.ConnectionPool:
+        # Cria e abre o pool uma unica vez, reaproveitando a logica de retry para
+        # esperar o Postgres subir durante o boot (storage-002).
+        if self._pool is None:
+            self._pool = self._open_pool()
+        return self._pool
+
+    def _open_pool(self) -> psycopg_pool.ConnectionPool:
+        # O pool conecta em background; usamos wait() para FALHAR de forma sincrona
+        # caso o Postgres ainda nao esteja pronto, mantendo o retry de boot existente.
+        # PoolTimeout durante a janela de inicializacao e tratado como retryavel.
+        last_error: Exception | None = None
+        # Piso 2: ver comentario das constantes (checkouts aninhados na mesma
+        # thread deadlockam com max_size=1).
+        max_size = max(_POSTGRES_POOL_MAX_SIZE_FLOOR, settings.postgres_pool_max_size)
         for attempt in range(1, _POSTGRES_CONNECT_ATTEMPTS + 1):
+            pool = psycopg_pool.ConnectionPool(
+                conninfo=self.database_url,
+                min_size=_POSTGRES_POOL_MIN_SIZE,
+                max_size=max_size,
+                open=True,
+                # check no checkout: descarta conexoes mortas (Postgres
+                # reiniciado) em vez de entrega-las ao caller.
+                check=_POSTGRES_POOL_CHECK,
+                kwargs={"row_factory": dict_row},
+            )
             try:
-                return psycopg.connect(self.database_url, row_factory=dict_row)
-            except psycopg.OperationalError as error:
-                if attempt == _POSTGRES_CONNECT_ATTEMPTS or not _is_retryable_connect_error(error):
+                pool.wait(timeout=_POSTGRES_POOL_WAIT_TIMEOUT_SECONDS)
+                return pool
+            except (psycopg.OperationalError, psycopg_pool.PoolTimeout) as error:
+                pool.close()
+                last_error = error
+                # PoolTimeout (subclasse de OperationalError) na janela de boot e
+                # SEMPRE retryavel; os demais OperationalError so se o motivo for
+                # transitorio (DNS/recusa/db starting). Checar PoolTimeout antes,
+                # senao o snippet-check o trataria como nao-retryavel.
+                if isinstance(error, psycopg_pool.PoolTimeout):
+                    non_retryable = False
+                else:
+                    non_retryable = not _is_retryable_connect_error(error)
+                if attempt == _POSTGRES_CONNECT_ATTEMPTS or non_retryable:
                     raise
                 logger.warning(
-                    "Postgres connection attempt %s/%s failed: %s",
+                    "Postgres pool open attempt %s/%s failed: %s",
                     attempt,
                     _POSTGRES_CONNECT_ATTEMPTS,
                     error,
                 )
                 sleep(_POSTGRES_CONNECT_RETRY_DELAY_SECONDS)
 
-        raise RuntimeError("Postgres connection retry loop exited unexpectedly")
+        raise RuntimeError("Postgres pool open retry loop exited unexpectedly") from last_error
+
+    def _connect(self) -> Any:
+        # Checkout do pool: o context manager faz commit/rollback no exit e DEVOLVE a
+        # conexao ao pool (nao fecha). Preserva a semantica `with self._connect() as conn:`.
+        return self._pool_instance.connection()
+
+    def close(self) -> None:
+        # Fecha o pool e todas as conexoes ociosas. Idempotente.
+        if self._pool is not None:
+            self._pool.close()
+            self._pool = None
 
     def init_schema(self) -> None:
         statements = [
@@ -909,24 +973,42 @@ class PostgresStore:
         return descendants, folders
 
     def delete_project_folder(self, folder_id: str) -> tuple[list[str], list[str]]:
+        # Leitura (folder alvo + descendentes + sessoes) e DELETEs na MESMA transacao
+        # para que a cascata seja atomica e nao haja janela de corrida entre o calculo
+        # dos descendentes e o delete (storage-003).
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT payload FROM project_folders WHERE id = %s", (folder_id,))
                 row = cur.fetchone()
-        if not row:
-            raise KeyError(folder_id)
-        existing = ProjectFolder(**row["payload"])
-        deleted_folder_ids, _ = self._folder_descendants(existing.project_id, folder_id)
+                if not row:
+                    raise KeyError(folder_id)
+                existing = ProjectFolder(**row["payload"])
 
-        sessions = self.list_chat_sessions()
-        deleted_chat_session_ids = [
-            session.id
-            for session in sessions
-            if session.project_id == existing.project_id and session.folder_id in deleted_folder_ids
-        ]
+                cur.execute("SELECT payload FROM project_folders")
+                folders = [ProjectFolder(**item["payload"]) for item in cur.fetchall()]
+                by_parent: dict[str | None, list[ProjectFolder]] = {}
+                for folder in folders:
+                    if folder.project_id == existing.project_id:
+                        by_parent.setdefault(folder.parent_id, []).append(folder)
 
-        with self._connect() as conn:
-            with conn.cursor() as cur:
+                deleted_folder_ids: set[str] = set()
+                stack = [folder_id]
+                while stack:
+                    current = stack.pop()
+                    if current in deleted_folder_ids:
+                        continue
+                    deleted_folder_ids.add(current)
+                    for child in by_parent.get(current, []):
+                        stack.append(child.id)
+
+                cur.execute("SELECT payload FROM chat_sessions")
+                deleted_chat_session_ids = [
+                    str(item["payload"].get("id"))
+                    for item in cur.fetchall()
+                    if item["payload"].get("project_id") == existing.project_id
+                    and item["payload"].get("folder_id") in deleted_folder_ids
+                ]
+
                 cur.execute(
                     "DELETE FROM project_folders WHERE id = ANY(%s)",
                     (list(deleted_folder_ids),),
@@ -1081,6 +1163,8 @@ class PostgresStore:
         return knowledge_base
 
     def delete_knowledge_base(self, knowledge_base_id: str) -> KnowledgeBase | None:
+        # Delecao da base + vinculos E o desvinculo em projetos/agentes na MESMA
+        # transacao, para que a cascata seja atomica (storage-003).
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1095,34 +1179,54 @@ class PostgresStore:
                     (knowledge_base_id,),
                 )
                 cur.execute("DELETE FROM knowledge_bases WHERE id = %s", (knowledge_base_id,))
-        projects = self.list_projects()
-        for project in projects:
-            context = dict(project.context.model_dump())
-            next_ids = [
-                item for item in context.get("knowledge_base_ids", []) if item != knowledge_base_id
-            ]
-            if next_ids == context.get("knowledge_base_ids", []):
-                continue
-            context["knowledge_base_ids"] = next_ids
-            self._upsert_payload(
-                "projects",
-                _dump_model(
-                    project.model_copy(update={"context": context, "updated_at": now_utc()})
-                ),
-            )
-        agents = self.list_agents()
-        for agent in agents:
-            next_ids = [item for item in agent.knowledge_base_ids if item != knowledge_base_id]
-            if next_ids == agent.knowledge_base_ids:
-                continue
-            self._upsert_payload(
-                "agents",
-                _dump_model(
-                    agent.model_copy(
-                        update={"knowledge_base_ids": next_ids, "updated_at": now_utc()}
+
+                cur.execute("SELECT payload FROM projects")
+                projects = [Project(**item["payload"]) for item in cur.fetchall()]
+                for project in projects:
+                    context = dict(project.context.model_dump())
+                    next_ids = [
+                        item
+                        for item in context.get("knowledge_base_ids", [])
+                        if item != knowledge_base_id
+                    ]
+                    if next_ids == context.get("knowledge_base_ids", []):
+                        continue
+                    context["knowledge_base_ids"] = next_ids
+                    project_payload = _dump_model(
+                        project.model_copy(update={"context": context, "updated_at": now_utc()})
                     )
-                ),
-            )
+                    cur.execute(
+                        """
+                        INSERT INTO projects (id, payload)
+                        VALUES (%s, %s)
+                        ON CONFLICT (id)
+                        DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()
+                        """,
+                        (project_payload["id"], Jsonb(project_payload)),
+                    )
+
+                cur.execute("SELECT payload FROM agents")
+                agents = [Agent(**item["payload"]) for item in cur.fetchall()]
+                for agent in agents:
+                    next_ids = [
+                        item for item in agent.knowledge_base_ids if item != knowledge_base_id
+                    ]
+                    if next_ids == agent.knowledge_base_ids:
+                        continue
+                    agent_payload = _dump_model(
+                        agent.model_copy(
+                            update={"knowledge_base_ids": next_ids, "updated_at": now_utc()}
+                        )
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO agents (id, payload)
+                        VALUES (%s, %s)
+                        ON CONFLICT (id)
+                        DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()
+                        """,
+                        (agent_payload["id"], Jsonb(agent_payload)),
+                    )
         return existing
 
     def list_knowledge_base_documents(

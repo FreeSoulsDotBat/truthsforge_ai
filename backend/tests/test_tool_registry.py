@@ -26,6 +26,7 @@ from app.modeling.tool_registry import (
     descriptor,
     descriptors,
     is_blocked,
+    is_destructive,
     is_high_risk,
     is_known,
     is_read_only,
@@ -170,6 +171,13 @@ def test_planner_toolset_matches_allowlist() -> None:
         "fusion.thread",
         "fusion.make_component",
         "fusion.joint",
+        # F7 (posicionamento paramétrico — placement declarativo; o resolver de
+        # backend as expande em componente/combine/junta antes do dispatch).
+        "fusion.place_body",
+        "fusion.align_axis",
+        "fusion.distribute_along",
+        # F8 Sub4: relate_bodies LIBERADO pós-gate F8.R1 (2026-06-09).
+        "fusion.relate_bodies",
         # knuckle_hinge / metric_screw: DEPRECADOS do planner (macros de produto,
         # não escalam). Seguem no adapter, mas o LLM não os escolhe — ver
         # DEPRECATED_PLANNER_TOOLS e test_deprecated_macros_excluded_from_planner.
@@ -231,6 +239,101 @@ def test_deprecated_macros_excluded_from_planner_but_kept_in_adapter() -> None:
     assert "fusion.thread" in PLANNER_TOOLSET
     assert "fusion.joint" in PLANNER_TOOLSET
     assert "fusion.make_component" in PLANNER_TOOLSET
+
+
+def test_relate_bodies_released_after_gate() -> None:
+    """F8 Sub4: relate_bodies foi LIBERADO ao planner (2026-06-09) após o gate
+    F8.R1 aprovar a derivação flush_mate no Fusion real."""
+    from app.modeling.tool_registry import (
+        UNRELEASED_PLANNER_TOOLS,
+        is_known,
+    )
+
+    assert is_known("fusion.relate_bodies")
+    assert "fusion.relate_bodies" in FUSION_TOOLS
+    assert "fusion.relate_bodies" not in UNRELEASED_PLANNER_TOOLS
+    assert "fusion.relate_bodies" in PLANNER_TOOLSET  # liberado pós-gate
+
+
+# ---------------------------------------------------------------------------
+# Visibilidade RUNTIME ao planner (auditoria 2026-06-10, linha 768): com a flag
+# OFF as tools declarativas F7/F8 não podem aparecer no toolset do planner —
+# o LLM era ensinado (schema no prompt + enum) a escolher tools que falhariam
+# garantido no adapter. A executabilidade (executor/policy) NÃO muda.
+# ---------------------------------------------------------------------------
+
+
+def _set_planner_flags(monkeypatch: pytest.MonkeyPatch, *, spatial: bool, relation: bool) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "modeling_spatial_resolution_enabled", spatial, raising=False)
+    monkeypatch.setattr(settings, "modeling_relation_placement_enabled", relation, raising=False)
+
+
+def test_planner_toolset_runtime_hides_spatial_trio_when_flag_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modeling.tool_registry import SPATIAL_PLANNER_TOOLS, planner_toolset
+
+    assert SPATIAL_PLANNER_TOOLS == {
+        "fusion.place_body",
+        "fusion.align_axis",
+        "fusion.distribute_along",
+    }
+    _set_planner_flags(monkeypatch, spatial=False, relation=True)
+    visible = set(planner_toolset())
+    assert not visible & SPATIAL_PLANNER_TOOLS
+    assert "fusion.relate_bodies" in visible  # flag de relação segue ON
+
+    _set_planner_flags(monkeypatch, spatial=True, relation=True)
+    assert SPATIAL_PLANNER_TOOLS <= set(planner_toolset())
+
+
+def test_planner_toolset_runtime_hides_relate_bodies_when_flag_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modeling.tool_registry import RELATION_PLANNER_TOOLS, planner_toolset
+
+    assert RELATION_PLANNER_TOOLS == {"fusion.relate_bodies"}
+    _set_planner_flags(monkeypatch, spatial=True, relation=False)
+    visible = set(planner_toolset())
+    assert "fusion.relate_bodies" not in visible
+    assert "fusion.place_body" in visible  # flag espacial segue ON
+
+    _set_planner_flags(monkeypatch, spatial=True, relation=True)
+    assert "fusion.relate_bodies" in planner_toolset()
+
+
+def test_planner_toolset_runtime_equals_superset_with_flags_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flags ON ⇒ idêntico (inclusive ordem) ao superset estático PLANNER_TOOLSET."""
+
+    from app.modeling.tool_registry import planner_toolset
+
+    _set_planner_flags(monkeypatch, spatial=True, relation=True)
+    assert planner_toolset() == PLANNER_TOOLSET
+
+
+def test_planner_toolset_runtime_preserves_order_and_executability_with_flags_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flags OFF ⇒ some só o quarteto flag-gated (ordem preservada); a
+    EXECUTABILIDADE não muda — as tools seguem no registry e em FUSION_TOOLS."""
+
+    from app.modeling.tool_registry import (
+        RELATION_PLANNER_TOOLS,
+        SPATIAL_PLANNER_TOOLS,
+        planner_toolset,
+    )
+
+    _set_planner_flags(monkeypatch, spatial=False, relation=False)
+    gated = SPATIAL_PLANNER_TOOLS | RELATION_PLANNER_TOOLS
+    expected = tuple(name for name in PLANNER_TOOLSET if name not in gated)
+    assert planner_toolset() == expected
+    for name in gated:
+        assert is_known(name)  # registry/policy intactos
+        assert name in FUSION_TOOLS  # adapter/executor seguem conhecendo
 
 
 def test_read_only_set_matches_allowlist() -> None:
@@ -301,10 +404,40 @@ def test_is_high_risk_only_true_for_high_risk_category() -> None:
     assert not is_high_risk("blender.no_such_tool")
 
 
+def test_fusion_registry_tools_have_script_handlers() -> None:
+    """Contrato cross-layer (fusion-operations.md §5): toda tool fusion do
+    registry tem handler executável em ``fusion_mcp_scripts``, exceto as
+    expandidas pelo resolver ANTES do dispatch (lista explícita). Foi a falta
+    deste teste que deixou ``fusion.relate_bodies`` ser exposta inexecutável
+    pelo MCP standalone."""
+
+    from app.modeling.fusion_mcp_scripts import FUSION_SCRIPT_TOOLS
+
+    sem_handler_por_design = {
+        "fusion.relate_bodies",  # F7: o resolver expande ANTES do dispatch
+        "fusion.run_script",  # RF-023: nunca executável (nem exposto)
+    }
+    missing = set(FUSION_TOOLS) - set(FUSION_SCRIPT_TOOLS) - sem_handler_por_design
+    assert not missing, f"tools fusion sem handler executável: {sorted(missing)}"
+    orphan_handlers = set(FUSION_SCRIPT_TOOLS) - set(FUSION_TOOLS)
+    assert not orphan_handlers, f"handlers sem registro na allowlist: {sorted(orphan_handlers)}"
+
+
+def test_is_destructive_only_true_for_destructive_category() -> None:
+    assert is_destructive("fusion.delete_body")
+    assert not is_destructive("blender.apply_bevel")
+    assert not is_destructive("blender.no_such_tool")
+
+
 def test_requires_approval_decision_table() -> None:
     # high_risk tool → always requires approval, no matter the declared risk
     assert requires_approval("blender.apply_boolean", ModelingRiskLevel.low)
     assert requires_approval("blender.apply_boolean", "high")
+    # destructive tool → always requires approval (P6/P8), no matter o rótulo
+    # de risco que o LLM atribuiu ao passo
+    assert requires_approval("fusion.delete_body", ModelingRiskLevel.low)
+    assert requires_approval("fusion.delete_body", ModelingRiskLevel.medium)
+    assert requires_approval("fusion.delete_body", None)
     # read_only tool → never requires approval, even if marked high
     assert not requires_approval("blender.measure_object", ModelingRiskLevel.high)
     # additive/mutative tool at low risk → no approval

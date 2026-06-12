@@ -24,9 +24,7 @@ def _create_chat(*, is_modeling_3d: bool, title: str = "Suporte para fone") -> C
     chat = ChatSession(
         title=title,
         is_modeling_3d=is_modeling_3d,
-        modeling_software_preference=(
-            ModelingSoftware.blender if is_modeling_3d else None
-        ),
+        modeling_software_preference=(ModelingSoftware.blender if is_modeling_3d else None),
     )
     store.upsert_chat_session(chat)
     return chat

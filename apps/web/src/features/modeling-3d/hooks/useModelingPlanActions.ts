@@ -49,6 +49,58 @@ export interface UseModelingPlanActionsResult {
 
 const DEFAULT_REVISE_REASON = "Usuário pediu para revisar o plano; voltando para descoberta.";
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * `fetch` rejeita com `TypeError` ("Failed to fetch") em falha de REDE — conexão
+ * caiu/resetou (ex.: backend lento ou `uvicorn --reload` reiniciando no meio da
+ * request). É diferente de um erro HTTP (4xx/5xx), que chega como `Error` com a
+ * mensagem do `detail`. Só no caso de rede vale reconciliar o status do plano.
+ */
+function isNetworkError(exc: unknown): boolean {
+  if (exc instanceof TypeError) return true;
+  const msg = exc instanceof Error ? exc.message.toLowerCase() : "";
+  return msg.includes("failed to fetch") || msg.includes("networkerror") || msg.includes("load failed");
+}
+
+/**
+ * Executa o plano e, se a CONEXÃO cair (mas o backend puder ter concluído),
+ * reconcilia: faz poll do status do plano por alguns segundos. Se o backend
+ * terminou (`completed`), devolve um resultado sintético de sucesso em vez de
+ * propagar "Failed to fetch" — corrige o "a UI diz que falhou mas a peça saiu
+ * certa". Se o plano de fato falhou, propaga o erro real; se não dá pra
+ * confirmar, propaga o erro de rede original.
+ */
+async function executePlanWithRecovery(planId: string): Promise<ModelingExecutionResult> {
+  try {
+    return await modeling3dApi.executePlan(planId);
+  } catch (exc) {
+    if (!isNetworkError(exc)) throw exc;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const plan = await modeling3dApi.getPlan(planId);
+        if (plan.status === "completed") {
+          return {
+            plan,
+            executed_step_ids: plan.steps.filter((s) => s.status === "completed").map((s) => s.id),
+            blocked_step_ids: plan.steps.filter((s) => s.status !== "completed").map((s) => s.id),
+            events: ["A conexão caiu durante a execução, mas o backend concluiu — recuperado."],
+            tool_call_ids: []
+          };
+        }
+        if (plan.status === "failed" || plan.status === "rejected") {
+          // tsconfig agora é ES2022: `Error(msg, { cause })` nativo.
+          throw new Error("A execução do plano falhou no backend.", { cause: exc });
+        }
+      } catch (probe) {
+        if (!isNetworkError(probe)) throw probe; // erro real ao reconsultar
+      }
+      await sleep(1500); // ainda em execução: espera o backend terminar
+    }
+    throw exc; // não deu pra confirmar conclusão — mantém o erro de rede
+  }
+}
+
 export function useModelingPlanActions(): UseModelingPlanActionsResult {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,9 +124,12 @@ export function useModelingPlanActions(): UseModelingPlanActionsResult {
   const approve = useCallback(
     async (planId: string) =>
       wrap(async () => {
-        const approved = await modeling3dApi.approvePlan(planId);
-        setLastPlan(approved);
-        const execution = await modeling3dApi.executePlan(planId);
+        // fe-modeling-3: não persistir estado parcial (approved/running) antes
+        // da execução concluir. Se executePlan falhar, `wrap` retorna null e o
+        // card permanece em waiting_approval em vez de divergir para um estado
+        // pós-aprovação que sugeriria sucesso e induziria re-execução.
+        await modeling3dApi.approvePlan(planId);
+        const execution = await executePlanWithRecovery(planId);
         setLastPlan(execution.plan);
         setLastExecution(execution);
         return execution;
@@ -96,7 +151,7 @@ export function useModelingPlanActions(): UseModelingPlanActionsResult {
   const retry = useCallback(
     async (planId: string) =>
       wrap(async () => {
-        const execution = await modeling3dApi.executePlan(planId);
+        const execution = await executePlanWithRecovery(planId);
         setLastPlan(execution.plan);
         setLastExecution(execution);
         return execution;

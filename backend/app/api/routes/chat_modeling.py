@@ -13,6 +13,7 @@ edição (P2/P3), modo fluido (P3) e o plano sempre PARA em ``waiting_approval``
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 
 from fastapi.responses import StreamingResponse
@@ -34,10 +35,63 @@ from app.core.contracts import (
     now_utc,
 )
 from app.cost_governor.service import estimate_tokens
-from app.modeling.chat_orchestrator import get_modeling_orchestrator
+from app.modeling.chat_orchestrator import (
+    InvalidEditStage,
+    NotAModelingChat,
+    get_modeling_orchestrator,
+)
+from app.modeling.chat_state import InvalidModelingStageTransition
+from app.modeling.fusion_adapter import FusionBridgeError
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner_service import build_attachments_context
-from app.modeling.service import get_modeling_service
+from app.modeling.service import (
+    ModelingInvalidEditTool,
+    ModelingPlanNotApprovable,
+    ModelingPlanNotEditable,
+    ModelingPlanNotExecutable,
+    ModelingRollbackUnavailable,
+    get_modeling_service,
+)
+from app.modeling.spatial_ref import SpatialRefError
+
+logger = logging.getLogger(__name__)
+
+# Classes de domínio cujas mensagens são INTENCIONAIS (PT-BR, escritas para o
+# usuário) e sabidamente livres de detalhe de infraestrutura. Qualquer outra
+# exceção (psycopg com DSN, SQL, stack de SDK...) NÃO pode virar mensagem de
+# chat nem ser persistida em metadata — vira texto genérico + nome do tipo,
+# com o traceback completo indo só para o log (ver ``_safe_error_detail``).
+_SAFE_MODELING_ERROR_TYPES: tuple[type[Exception], ...] = (
+    FusionBridgeError,
+    InvalidModelingStageTransition,
+    # ValueError tipados do orchestrator: a mensagem só interpola chat_id (UUID)
+    # e o estágio (enum) — sem eco de saída do LLM nem detalhe de infra. Hoje
+    # só alcançáveis por mutação concorrente do estágio (TOCTOU); allowlistados
+    # por higiene defensiva para não virarem "erro interno" se a janela abrir.
+    InvalidEditStage,
+    ModelingInvalidEditTool,
+    ModelingPlanNotApprovable,
+    ModelingPlanNotEditable,
+    ModelingPlanNotExecutable,
+    ModelingRollbackUnavailable,
+    NotAModelingChat,
+    # Cobre EntityRefError, AmbiguousRefError e RelationUnderivableError.
+    SpatialRefError,
+)
+
+
+def _safe_error_detail(exc: Exception) -> str:
+    """Detalhe de erro seguro para SSE/mensagem/metadata persistida.
+
+    Mensagem real apenas para as classes de domínio allowlistadas acima; o
+    resto é resumido como ``erro interno (<Tipo>)`` para não vazar DSN/SQL/
+    paths internos para o chat. O caller é responsável por logar o traceback
+    completo via ``logger.exception``.
+    """
+
+    if isinstance(exc, _SAFE_MODELING_ERROR_TYPES):
+        return str(exc)
+    return f"erro interno ({type(exc).__name__})"
 
 
 def _promote_modeling_session(
@@ -89,9 +143,11 @@ def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
         # ``trace_id`` permite que o frontend chame
         # ``GET /api/3d/plans/{id}/trace`` ou
         # ``GET /api/3d/traces/{trace_id}`` ao abrir o modal de
-        # diagnóstico. Lido do contextvar — None se observability
-        # estiver desligada ou se o handler não passou pelo orchestrator.
-        "trace_id": current_trace_id(),
+        # diagnóstico. Preferimos o valor persistido no plano (RF-024 —
+        # mesma fonte que o contrato REST devolve) com fallback no
+        # contextvar — None se observability estiver desligada ou se o
+        # handler não passou pelo orchestrator.
+        "trace_id": plan.trace_id or current_trace_id(),
         "created_at": plan.created_at.isoformat(),
         "updated_at": plan.updated_at.isoformat(),
         "steps": [
@@ -126,13 +182,21 @@ def _modeling_chat_history(
     """
 
     history: list[dict[str, str]] = []
-    for chat_session in store.list_chat_sessions():
-        if chat_session.id != session_id:
-            continue
-        for message in getattr(chat_session, "messages", []) or []:
+    if hasattr(store, "get_chat_session"):
+        target_session = store.get_chat_session(session_id)
+    else:
+        target_session = next(
+            (
+                chat_session
+                for chat_session in store.list_chat_sessions()
+                if chat_session.id == session_id
+            ),
+            None,
+        )
+    if target_session is not None:
+        for message in getattr(target_session, "messages", []) or []:
             if message.role in {"user", "assistant"} and (message.content or "").strip():
                 history.append({"role": message.role, "content": message.content})
-        break
     if exclude_message is not None:
         for index in range(len(history) - 1, -1, -1):
             if history[index]["role"] == "user" and history[index]["content"] == exclude_message:
@@ -318,113 +382,140 @@ def build_modeling_3d_stream_response(
             project_id=effective_project_id,
         )
 
-        # P3: aplica o "modo fluido" enviado pelo cliente (opt-in por chat).
-        if payload.modeling_3d.fluid_mode is not None and (
-            session.modeling_fluid_mode != payload.modeling_3d.fluid_mode
-        ):
-            session = session.model_copy(
-                update={
-                    "modeling_fluid_mode": payload.modeling_3d.fluid_mode,
-                    "updated_at": now_utc(),
-                }
-            )
-            if hasattr(store, "upsert_chat_session"):
-                store.upsert_chat_session(session)
-
-        # P2/P3 (descoberta + edição-vs-novo): antes de planejar, avalia se
-        # o pedido está claro e — quando já há um modelo (estágio
-        # ``editing``) — classifica intent (edit/new_model/ambiguous). Se
-        # faltar contexto, faz perguntas e PARA. Se ambíguo entre editar e
-        # refazer, pergunta. Falha de descoberta nunca bloqueia (heurístico
-        # ready=true, intent=edit). Ver chat-flow-redesign.md (P2/P3).
-        plan_prompt = payload.message
-        plan_kind = ModelingPlanKind.primary
-        has_existing_model = session.modeling_stage in (
-            ChatModelingStage.editing,
-            ChatModelingStage.failed,
-        )
-        # F4 (image-to-model): analisa os anexos UMA vez e injeta no prompt —
-        # usado tanto pela DESCOBERTA quanto pelo PLANEJAMENTO. Antes a imagem
-        # "se perdia": a descoberta perguntava às cegas e o plano a ignorava.
-        # Roda em thread p/ não travar o event loop do streaming.
-        if payload.attached_file_ids:
-            attachments_block = await asyncio.to_thread(
-                build_attachments_context, store, list(payload.attached_file_ids)
-            )
-            if attachments_block:
-                plan_prompt = payload.message + "\n\n" + attachments_block
-        if settings.modeling_discovery_enabled:
-            history = _modeling_chat_history(store, session.id, exclude_message=payload.message)
-            assessment = await modeling_service.assess_request_async(
-                plan_prompt,
-                history=history,
-                software_override=payload.modeling_3d.software_override,
-                has_existing_model=has_existing_model,
-            )
-            _modeling_tracer.flush(current_trace_id())
-
-            ambiguous_intent = has_existing_model and assessment.intent == "ambiguous"
-            if not assessment.ready_to_plan or ambiguous_intent:
-                keep_stage = (
-                    ChatModelingStage.editing if has_existing_model else ChatModelingStage.discovery
-                )
+        # O bloco de descoberta/clarificação ANTERIOR ao try do orchestrator
+        # também faz writes de store (upsert_chat_session/add_message/
+        # record_audit_event) que podem falhar (Postgres fora/constraint). Sem
+        # esta guarda, a exceção escaparia de ``modeling_events`` sem flush/
+        # close do tracer (vazamento de buffer) e sem evento SSE ``error``.
+        try:
+            # P3: aplica o "modo fluido" enviado pelo cliente (opt-in por chat).
+            if payload.modeling_3d.fluid_mode is not None and (
+                session.modeling_fluid_mode != payload.modeling_3d.fluid_mode
+            ):
                 session = session.model_copy(
                     update={
-                        "modeling_stage": keep_stage,
+                        "modeling_fluid_mode": payload.modeling_3d.fluid_mode,
                         "updated_at": now_utc(),
                     }
                 )
                 if hasattr(store, "upsert_chat_session"):
                     store.upsert_chat_session(session)
-                if ambiguous_intent and assessment.ready_to_plan:
-                    assistant_message.content = _format_intent_question()
-                    audit_meta = {"reason": "edit_vs_new_ambiguous"}
-                else:
-                    assistant_message.content = _format_clarification(assessment)
-                    audit_meta = {"question_count": len(assessment.questions)}
-                assistant_message.metadata["modeling_clarification"] = {
-                    "questions": assessment.questions,
-                    "confidence": assessment.confidence,
-                    "intent": assessment.intent,
-                }
-                store.add_message(assistant_message)
-                record_audit_event(
-                    AuditEvent(
-                        event_type="modeling.chat.clarification_asked",
-                        model_id=None,
-                        tokens_in=estimate_tokens(payload.message),
-                        tokens_out=estimate_tokens(assistant_message.content),
-                        estimated_cost_brl=0,
-                        metadata={
-                            "session_id": session.id,
-                            "project_id": effective_project_id,
-                            "confidence": assessment.confidence,
-                            **audit_meta,
-                        },
-                    )
-                )
-                yield _runtime_status(
-                    "modeling_3d_discovery",
-                    "Preciso de mais detalhes",
-                    "Respondi com uma pergunta antes de planejar.",
-                )
-                yield _sse("token", {"content": assistant_message.content})
-                yield _runtime_status("done", "Concluído")
-                yield _sse(
-                    "done",
-                    {"session_id": session.id, "message_id": assistant_message.id},
-                )
-                _modeling_tracer.close_trace()
-                return
 
-            if assessment.refined_brief:
-                plan_prompt = assessment.refined_brief
-            # Decide kind do plano: edição do modelo atual vs modelo novo.
-            if has_existing_model and assessment.intent == "edit":
+            # P2/P3 (descoberta + edição-vs-novo): antes de planejar, avalia se
+            # o pedido está claro e — quando já há um modelo (estágio
+            # ``editing``) — classifica intent (edit/new_model/ambiguous). Se
+            # faltar contexto, faz perguntas e PARA. Se ambíguo entre editar e
+            # refazer, pergunta. Falha de descoberta nunca bloqueia (heurístico
+            # ready=true, intent=edit). Ver chat-flow-redesign.md (P2/P3).
+            plan_prompt = payload.message
+            plan_kind = ModelingPlanKind.primary
+            has_existing_model = session.modeling_stage in (
+                ChatModelingStage.editing,
+                ChatModelingStage.failed,
+            )
+            # F4 (image-to-model): analisa os anexos UMA vez e injeta no prompt —
+            # usado tanto pela DESCOBERTA quanto pelo PLANEJAMENTO. Antes a imagem
+            # "se perdia": a descoberta perguntava às cegas e o plano a ignorava.
+            # Roda em thread p/ não travar o event loop do streaming.
+            if payload.attached_file_ids:
+                attachments_block = await asyncio.to_thread(
+                    build_attachments_context, store, list(payload.attached_file_ids)
+                )
+                if attachments_block:
+                    plan_prompt = payload.message + "\n\n" + attachments_block
+            if settings.modeling_discovery_enabled:
+                history = _modeling_chat_history(store, session.id, exclude_message=payload.message)
+                assessment = await modeling_service.assess_request_async(
+                    plan_prompt,
+                    history=history,
+                    software_override=payload.modeling_3d.software_override,
+                    has_existing_model=has_existing_model,
+                )
+                _modeling_tracer.flush(current_trace_id())
+
+                ambiguous_intent = has_existing_model and assessment.intent == "ambiguous"
+                if not assessment.ready_to_plan or ambiguous_intent:
+                    keep_stage = (
+                        ChatModelingStage.editing
+                        if has_existing_model
+                        else ChatModelingStage.discovery
+                    )
+                    session = session.model_copy(
+                        update={
+                            "modeling_stage": keep_stage,
+                            "updated_at": now_utc(),
+                        }
+                    )
+                    if hasattr(store, "upsert_chat_session"):
+                        store.upsert_chat_session(session)
+                    if ambiguous_intent and assessment.ready_to_plan:
+                        assistant_message.content = _format_intent_question()
+                        audit_meta = {"reason": "edit_vs_new_ambiguous"}
+                    else:
+                        assistant_message.content = _format_clarification(assessment)
+                        audit_meta = {"question_count": len(assessment.questions)}
+                    assistant_message.metadata["modeling_clarification"] = {
+                        "questions": assessment.questions,
+                        "confidence": assessment.confidence,
+                        "intent": assessment.intent,
+                    }
+                    store.add_message(assistant_message)
+                    record_audit_event(
+                        AuditEvent(
+                            event_type="modeling.chat.clarification_asked",
+                            model_id=None,
+                            tokens_in=estimate_tokens(payload.message),
+                            tokens_out=estimate_tokens(assistant_message.content),
+                            estimated_cost_brl=0,
+                            metadata={
+                                "session_id": session.id,
+                                "project_id": effective_project_id,
+                                "confidence": assessment.confidence,
+                                **audit_meta,
+                            },
+                        )
+                    )
+                    yield _runtime_status(
+                        "modeling_3d_discovery",
+                        "Preciso de mais detalhes",
+                        "Respondi com uma pergunta antes de planejar.",
+                    )
+                    yield _sse("token", {"content": assistant_message.content})
+                    yield _runtime_status("done", "Concluído")
+                    yield _sse(
+                        "done",
+                        {"session_id": session.id, "message_id": assistant_message.id},
+                    )
+                    _modeling_tracer.close_trace()
+                    return
+
+                if assessment.refined_brief:
+                    plan_prompt = assessment.refined_brief
+                # Decide kind do plano: edição do modelo atual vs modelo novo.
+                if has_existing_model and assessment.intent == "edit":
+                    plan_kind = ModelingPlanKind.edit
+            elif has_existing_model:
+                # Discovery off: ainda assim trata follow-up como edição segura.
                 plan_kind = ModelingPlanKind.edit
-        elif has_existing_model:
-            # Discovery off: ainda assim trata follow-up como edição segura.
-            plan_kind = ModelingPlanKind.edit
+        except Exception as exc:  # noqa: BLE001 - stream must surface domain failures
+            _modeling_tracer.flush(current_trace_id())
+            _modeling_tracer.close_trace()
+            # Traceback completo só no log; o chat/SSE/metadata recebem o
+            # detalhe SANITIZADO (mensagem real apenas para erros de domínio).
+            logger.exception(
+                "Falha na fase de descoberta do turno 3D (sessão %s).", session.id
+            )
+            detail = _safe_error_detail(exc)
+            error_message = f"Não consegui processar o pedido 3D: {detail}"
+            assistant_message.content = error_message
+            assistant_message.metadata["provider_error"] = detail
+            try:
+                store.add_message(assistant_message)
+            except Exception:  # noqa: BLE001 - best-effort persist on failure path
+                pass
+            yield _sse("error", {"message": error_message, "reason": detail})
+            yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
+            return
 
         # DT-006: a proposta de plano (primário/edição) é delegada ao
         # ModelingChatOrchestrator — fonte única da state machine (chat_state)
@@ -498,13 +589,29 @@ def build_modeling_3d_stream_response(
         except Exception as exc:  # noqa: BLE001 - stream must surface domain failures
             _modeling_tracer.flush(current_trace_id())
             _modeling_tracer.close_trace()
-            error_message = f"Não consegui criar o plano 3D via MCP: {exc}"
+            # Mesmo tratamento do bloco de descoberta acima: traceback no log,
+            # detalhe sanitizado para o chat/SSE/metadata persistida.
+            logger.exception(
+                "Falha ao propor o plano 3D via orchestrator (sessão %s).", session.id
+            )
+            detail = _safe_error_detail(exc)
+            error_message = f"Não consegui criar o plano 3D via MCP: {detail}"
             assistant_message.content = error_message
-            assistant_message.metadata["provider_error"] = str(exc)
+            assistant_message.metadata["provider_error"] = detail
             store.add_message(assistant_message)
-            yield _sse("error", {"message": error_message, "reason": str(exc)})
+            yield _sse("error", {"message": error_message, "reason": detail})
             yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
             return
+
+        # RF-024: persiste o trace_id da PROPOSTA no plano (mesma fonte que o
+        # dump SSE abaixo usa — o contextvar bindado em start_trace). Sem isto
+        # o contrato REST (GET/POST /api/3d/plans...) voltava sem trace e o
+        # modal de diagnóstico perdia o trace na primeira re-busca do card.
+        proposal_trace_id = current_trace_id()
+        if proposal_trace_id and plan.trace_id != proposal_trace_id:
+            plan = plan.model_copy(update={"trace_id": proposal_trace_id})
+            if hasattr(store, "upsert_modeling_plan"):
+                store.upsert_modeling_plan(plan)
 
         plan_metadata = _modeling_plan_metadata(plan)
         assistant_message.content = _modeling_plan_chat_summary(plan)
@@ -530,7 +637,16 @@ def build_modeling_3d_stream_response(
             if hasattr(store, "upsert_chat_session"):
                 store.upsert_chat_session(titled_session)
             yield _sse("session_title", {"session_id": session.id, "title": title})
-        if executed:
+        if executed and plan.status == ModelingPlanStatus.failed:
+            # DT-008 no caminho de edição: falha não pode ser anunciada como
+            # "Edição aplicada" — o usuário precisa saber que nada mudou.
+            yield _runtime_status(
+                "modeling_3d_plan",
+                "Edição falhou",
+                "A execução da edição falhou; o modelo anterior permanece. "
+                "Veja o diagnóstico do plano para detalhes.",
+            )
+        elif executed:
             yield _runtime_status(
                 "modeling_3d_plan",
                 "Edição aplicada (modo fluido)",

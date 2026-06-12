@@ -42,11 +42,11 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0
 
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {})
-    },
-    ...init
+    }
   });
   if (!response.ok) {
     const detail = await response
@@ -310,7 +310,6 @@ export interface StreamChatPayload {
   agent_ids?: string[];
   project_id?: string | null;
   folder_id?: string | null;
-  project_scope_mode?: "project_only" | "project_plus_global" | "global_only";
   context_project_ids?: string[];
   context_document_ids?: string[];
   context_knowledge_base_ids?: string[];
@@ -401,49 +400,54 @@ export async function streamChat(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let sawErrorEvent = false;
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split("\n\n");
-    buffer = events.pop() ?? "";
-    for (const event of events) {
-      const lines = event.split("\n");
-      const eventName = lines
-        .find((line) => line.startsWith("event:"))
-        ?.replace("event:", "")
-        .trim();
-      const dataLine = lines.find((line) => line.startsWith("data:"));
-      if (!eventName || !dataLine) continue;
-      const data = JSON.parse(dataLine.replace("data:", "").trim()) as Record<string, unknown>;
-      handlers.onEvent?.(eventName, data);
-      const stringData = Object.fromEntries(
-        Object.entries(data).map(([key, value]) => [
-          key,
-          typeof value === "string" ? value : value == null ? "" : JSON.stringify(value)
-        ])
-      );
-      if (eventName === "meta") handlers.onMeta?.(stringData);
-      if (eventName === "status") handlers.onStatus?.(data as unknown as StreamStatusEvent);
-      if (eventName === "session_title") {
-        handlers.onSessionTitle?.({
-          session_id: String(data.session_id ?? ""),
-          title: String(data.title ?? "")
-        });
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() ?? "";
+      for (const event of events) {
+        const lines = event.split("\n");
+        const eventName = lines
+          .find((line) => line.startsWith("event:"))
+          ?.replace("event:", "")
+          .trim();
+        const dataLine = lines.find((line) => line.startsWith("data:"));
+        if (!eventName || !dataLine) continue;
+        let data: Record<string, unknown>;
+        try {
+          data = JSON.parse(dataLine.replace("data:", "").trim()) as Record<string, unknown>;
+        } catch {
+          // Frame SSE malformado/não-JSON (keep-alive, comentário, chunk parcial):
+          // ignora este evento sem abortar o stream já parcialmente recebido.
+          continue;
+        }
+        handlers.onEvent?.(eventName, data);
+        const stringData = Object.fromEntries(
+          Object.entries(data).map(([key, value]) => [
+            key,
+            typeof value === "string" ? value : value == null ? "" : JSON.stringify(value)
+          ])
+        );
+        if (eventName === "meta") handlers.onMeta?.(stringData);
+        if (eventName === "status") handlers.onStatus?.(data as unknown as StreamStatusEvent);
+        if (eventName === "session_title") {
+          handlers.onSessionTitle?.({
+            session_id: String(data.session_id ?? ""),
+            title: String(data.title ?? "")
+          });
+        }
+        if (eventName === "reasoning_summary") handlers.onReasoningSummary?.(String(data.content ?? ""));
+        if (eventName === "token") handlers.onToken(String(data.content ?? ""));
+        if (eventName === "error") handlers.onError?.(stringData);
+        if (eventName === "done") handlers.onDone?.();
       }
-      if (eventName === "reasoning_summary") handlers.onReasoningSummary?.(String(data.content ?? ""));
-      if (eventName === "token") handlers.onToken(String(data.content ?? ""));
-      if (eventName === "error") {
-        sawErrorEvent = true;
-        handlers.onError?.(stringData);
-      }
-      if (eventName === "done") handlers.onDone?.();
     }
-  }
-
-  if (!response.ok && !sawErrorEvent) {
-    throw new Error(`Chat stream returned ${response.status}`);
+  } finally {
+    // Garante cleanup determinístico: se um handler lançar no meio do stream,
+    // cancela a conexão e libera o lock do reader em vez de vazar o corpo HTTP.
+    await reader.cancel().catch(() => {});
   }
 }

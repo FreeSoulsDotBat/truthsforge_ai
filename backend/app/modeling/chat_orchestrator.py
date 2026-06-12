@@ -40,6 +40,7 @@ from typing import Any
 from app.core.config import settings
 from app.core.contracts import (
     AuditEvent,
+    ChatMessage,
     ChatModelingStage,
     ChatSession,
     ModelingApprovalDecision,
@@ -53,12 +54,18 @@ from app.core.contracts import (
     ModelingRiskLevel,
     ModelingSoftware,
     ModelingStepStatus,
+    ModelingSubGoal,
     ModelingSubGoalStatus,
     ModelingTraceLevel,
     ModelingTraceSource,
+    ModelState,
+    ModelVerdict,
     now_utc,
 )
-from app.modeling.agent_loop import run_plan_with_optional_loop
+from app.modeling.agent_loop import (
+    run_plan_with_optional_loop,
+    warn_self_critique_without_provenance,
+)
 from app.modeling.chat_state import (
     ChatModelingEvent,
     transition,
@@ -67,7 +74,8 @@ from app.modeling.executor import ModelingExecutorService, inner_fusion_payload
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner_service import ModelingPlannerService
 from app.modeling.policy import apply_plan_approval
-from app.modeling.tool_registry import READ_ONLY_TOOL_NAMES, is_high_risk
+from app.modeling.tool_registry import READ_ONLY_TOOL_NAMES
+from app.modeling.tool_registry import requires_approval as tool_requires_approval
 
 logger = logging.getLogger(__name__)
 
@@ -227,14 +235,29 @@ class ModelingChatOrchestrator:
                 )
                 break
 
-        updated = primary.model_copy(
-            update={
-                "sub_goals": sub_goals,
-                "status": final_status,
-                "model_state": current_state,
-                "updated_at": now_utc(),
-            }
+        # No modo hierárquico a verdade da execução vive nos block_plan_ids dos
+        # sub-objetivos; os steps one-shot do primary eram só fallback e NUNCA
+        # rodaram. Limpa-os para o primary não persistir 'completed' com todos
+        # os steps presos em 'pending' (estado inconsistente p/ quem renderiza
+        # progresso a partir de plan.steps).
+        # F8: veredito GEOMÉTRICO no nível do TURNO (agrega TODOS os blocos), p/ a
+        # auto-crítica valer COM o planejamento hierárquico ligado — não só em
+        # build one-shot. Só reporta; surfaça o aviso nos events.
+        turn_verdict, verdict_msg = self._hierarchical_turn_verdict(
+            primary, sub_goals, current_state
         )
+        if verdict_msg:
+            events.append(verdict_msg)
+        update_fields: dict[str, Any] = {
+            "steps": [],
+            "sub_goals": sub_goals,
+            "status": final_status,
+            "model_state": current_state,
+            "updated_at": now_utc(),
+        }
+        if turn_verdict is not None:
+            update_fields["model_verdict"] = turn_verdict
+        updated = primary.model_copy(update=update_fields)
         self.store.upsert_modeling_plan(updated)
         return ModelingExecutionResult(
             plan=updated,
@@ -243,6 +266,81 @@ class ModelingChatOrchestrator:
             events=events,
             tool_call_ids=tool_calls,
         )
+
+    def _hierarchical_turn_verdict(
+        self,
+        primary: ModelingPlan,
+        sub_goals: list[ModelingSubGoal],
+        final_state: ModelState | None,
+    ) -> tuple[ModelVerdict | None, str | None]:
+        """F8: deriva o ``IntentSpec`` do TURNO agregando os steps + a proveniência
+        de TODOS os blocos num plano sintético one-shot e avalia contra o estado
+        final. Assim a contagem/órfão/interferência valem com o planejamento
+        HIERÁRQUICO ON (antes só valiam em build one-shot). Só reporta — devolve
+        ``(verdict, aviso)``; ``(None, None)`` quando a flag está OFF ou falha."""
+
+        if not settings.modeling_self_critique_enabled:
+            return None, None
+        warn_self_critique_without_provenance(primary.id)
+        try:
+            from app.modeling.intent_spec import intent_from_plan
+            from app.modeling.model_critique import build_model_verdict, verdict_notice
+            from app.modeling.provenance import aggregate_history, history_from_plan
+
+            block_plans: list[ModelingPlan] = []
+            if hasattr(self.store, "get_modeling_plan"):
+                for sg in sub_goals:
+                    if sg.block_plan_id:
+                        bp = self.store.get_modeling_plan(sg.block_plan_id)
+                        if bp is not None:
+                            block_plans.append(bp)
+            all_steps = [s for bp in block_plans for s in bp.steps]
+            # Plano sintético one-shot (parent=None) → a derivação do IntentSpec
+            # enxerga o TURNO inteiro, não um bloco isolado.
+            agg = primary.model_copy(update={"steps": all_steps, "parent_plan_id": None})
+            intent = intent_from_plan(agg)
+            records = []
+            for bp in block_plans:
+                hist = history_from_plan(bp)
+                if hist is not None:
+                    records.extend(hist.records)
+            history = aggregate_history(records) if records else None
+            verdict = build_model_verdict(intent, history, final_state)
+            if verdict is None:
+                # Sem read-back (final_state None) não há veredito — medir contra
+                # estado ausente acusava "0 corpos" falso. Mudo, com trace.
+                self._tracer.record(
+                    "orchestrator.turn_verdict_skipped",
+                    source=ModelingTraceSource.backend,
+                    level=ModelingTraceLevel.warn,
+                    message=(
+                        "Auto-crítica do turno pulada: read-back indisponível "
+                        "(model_state ausente) — sem medição não há veredito."
+                    ),
+                    payload={"plan_id": primary.id, "reason": "model_state_missing"},
+                    plan_id=primary.id,
+                )
+                return None, None
+            self._tracer.record(
+                "orchestrator.turn_verdict",
+                source=ModelingTraceSource.backend,
+                level=(
+                    ModelingTraceLevel.warn if verdict.overall != "ok" else ModelingTraceLevel.info
+                ),
+                message=f"Auto-crítica do turno: {verdict.summary}",
+                payload={
+                    "plan_id": primary.id,
+                    "overall": verdict.overall,
+                    "findings": len(verdict.findings),
+                    "blocks": len(block_plans),
+                    "expected_body_count": intent.expected_body_count,
+                },
+                plan_id=primary.id,
+            )
+            return verdict, verdict_notice(verdict)
+        except Exception as exc:  # noqa: BLE001 - auto-crítica é observabilidade
+            logger.debug("veredito de turno (hierárquico) falhou: %s", exc)
+            return None, None
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -539,14 +637,38 @@ class ModelingChatOrchestrator:
         plan = self._get_plan_or_raise(plan_id)
         # ADR-013 gate: never execute a plan the user hasn't approved. Guards
         # the split two-call flow against a direct ``execute`` that skips
-        # ``approve_plan_only``. ``completed`` is allowed so a retry in
-        # ``editing`` can re-run. See AGENTS.md "Preserve human-in-the-loop".
-        if plan.status not in (ModelingPlanStatus.approved, ModelingPlanStatus.completed):
+        # ``approve_plan_only``. Fonte ÚNICA do conjunto de estados executáveis:
+        # ``ensure_plan_executable`` (service). ``allow_completed=True`` é a
+        # exceção DESTE fluxo de chat — um retry já em ``editing`` pode re-rodar
+        # um plano ``completed``, o que é um no-op idempotente (executor/loop
+        # pulam passos já ``completed``; nada re-cria geometria). O caminho do
+        # card (rota ``/plans/{id}/execute``) continua estrito: ``completed`` →
+        # 409 (anti-replay). See AGENTS.md "Preserve human-in-the-loop".
+        from app.modeling.service import ModelingPlanNotExecutable, ensure_plan_executable
+
+        try:
+            ensure_plan_executable(plan, allow_completed=True)
+        except ModelingPlanNotExecutable as exc:
+            # Preserva o contrato de erro deste fluxo (ValueError → 409 na rota).
             raise ValueError(
                 f"Plano {plan_id!r} não está aprovado (status={plan.status.value!r}); "
                 "aprove antes de executar."
+            ) from exc
+        if (
+            chat.modeling_stage is ChatModelingStage.planning
+            and plan.status is ModelingPlanStatus.approved
+        ):
+            # Catch-up de estágio: plano aprovado implicitamente pela policy
+            # (modo safe_auto sem high-risk) executado direto pelo card — o
+            # chat ainda está em ``planning``; registra a aprovação antes de
+            # iniciar a execução para a state machine não ficar para trás.
+            chat = self._set_stage(
+                chat,
+                ChatModelingEvent.PLAN_APPROVED,
+                audit="modeling.chat.plan_approved",
+                extra={"plan_id": plan_id, "implicit": True},
             )
-        if chat.modeling_stage is ChatModelingStage.approved:
+        if chat.modeling_stage in (ChatModelingStage.approved, ChatModelingStage.failed):
             chat = self._set_stage(
                 chat,
                 ChatModelingEvent.EXECUTION_STARTED,
@@ -572,6 +694,12 @@ class ModelingChatOrchestrator:
                     "blocked_step_ids": execution.blocked_step_ids,
                 },
             )
+        if plan.kind is ModelingPlanKind.primary and chat.modeling_plan_id != plan_id:
+            # Vincula o plano primário ao chat (contexto das próximas edições).
+            # Planos de edição NUNCA sobrescrevem o vínculo — o histórico
+            # completo vive no plano primário (contrato do rollback, T3.6).
+            chat = chat.model_copy(update={"modeling_plan_id": plan_id, "updated_at": now_utc()})
+            self.store.upsert_chat_session(chat)
 
         self._tracer.record(
             "executor.plan_finished",
@@ -642,7 +770,37 @@ class ModelingChatOrchestrator:
             plan_id=plan_id,
             reason=reason,
         )
+        self._record_rejection_message(updated, plan_id, reason)
         return updated, rejected
+
+    def _record_rejection_message(self, chat: ChatSession, plan_id: str, reason: str) -> None:
+        """RF-007: a justificativa da rejeição precisa entrar no HISTÓRICO do
+        chat — é dali que a descoberta do próximo turno lê o contexto. Sem
+        isso a UI coleta a justificativa e o motor replaneja às cegas.
+        Best-effort: nunca quebra a rejeição."""
+
+        if not reason or not hasattr(self.store, "add_message"):
+            return
+        try:
+            self.store.add_message(
+                ChatMessage(
+                    session_id=chat.id,
+                    role="assistant",
+                    content=(
+                        "Plano rejeitado pelo usuário. Justificativa: "
+                        f"{reason}\nVou retomar as perguntas de descoberta "
+                        "considerando essa justificativa."
+                    ),
+                    metadata={
+                        "provider": "modeling_3d",
+                        "persona": "JUDITE",
+                        "response_mode": "modeling_3d",
+                        "modeling_plan_rejection": {"plan_id": plan_id, "reason": reason},
+                    },
+                )
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Falha ao registrar justificativa de rejeição no chat.", exc_info=True)
 
     # ------------------------------------------------------------------
     # editing (mini-plans)
@@ -932,6 +1090,24 @@ class ModelingChatOrchestrator:
         )
         execution = self._run_execution(approved)
 
+        if execution.plan.status is ModelingPlanStatus.failed:
+            # DT-008 no caminho de edição: falha NÃO é reportada como edição
+            # aplicada. O chat permanece no estágio atual (o modelo anterior
+            # segue válido) e a auditoria registra a falha explicitamente.
+            self._audit(
+                "modeling.chat.edit_failed",
+                chat_id=chat.id,
+                plan_id=plan.id,
+                executed_step_ids=execution.executed_step_ids,
+                blocked_step_ids=execution.blocked_step_ids,
+            )
+            return EditPlanOutcome(
+                chat=chat,
+                plan=execution.plan,
+                execution=execution,
+                requires_approval=False,
+            )
+
         updated = self._set_stage(
             chat,
             ChatModelingEvent.EDIT_AUTO_EXECUTED,
@@ -964,6 +1140,17 @@ class ModelingChatOrchestrator:
             ),
         )
         execution = self._run_execution(approved)
+        if execution.plan.status is ModelingPlanStatus.failed:
+            # Falha da edição high-risk aprovada: não registra como "aplicada";
+            # o chat permanece no estágio atual e a falha fica auditável.
+            self._audit(
+                "modeling.chat.edit_failed",
+                chat_id=chat.id,
+                plan_id=plan_id,
+                executed_step_ids=execution.executed_step_ids,
+                blocked_step_ids=execution.blocked_step_ids,
+            )
+            return chat, execution.plan, execution
         updated = self._set_stage(
             chat,
             ChatModelingEvent.EDIT_HIGH_RISK_APPROVED,
@@ -989,6 +1176,7 @@ class ModelingChatOrchestrator:
             audit="modeling.chat.edit_high_risk_rejected",
             extra={"plan_id": plan_id, "reason": reason},
         )
+        self._record_rejection_message(updated, plan_id, reason)
         return updated, rejected
 
     # ------------------------------------------------------------------
@@ -1013,9 +1201,9 @@ class ModelingChatOrchestrator:
     @staticmethod
     def _plan_has_high_risk(plan: ModelingPlan) -> bool:
         for step in plan.steps:
-            if step.risk_level == ModelingRiskLevel.high:
-                return True
-            if is_high_risk(step.tool_name):
+            # Ponto único de decisão (ADR-013): cobre high_risk, destructive,
+            # blocked e a escalação por risk_level==high.
+            if tool_requires_approval(step.tool_name, step.risk_level):
                 return True
             if step.approval_required:
                 return True

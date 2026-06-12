@@ -87,6 +87,94 @@ class ModelingInvalidEditTool(Exception):
         self.tool_name = tool_name
 
 
+class ModelingPlanNotApprovable(Exception):
+    """Decisão de aprovação sobre um plano em estado terminal/em execução.
+
+    Gate anti-replay (C5 da varredura 2026-06-10): um card antigo no histórico
+    do chat não pode re-aprovar um plano que já rodou (``completed``/``failed``/
+    ``running``) nem ressuscitar um plano ``rejected``. A rota mapeia para 409.
+    """
+
+    def __init__(self, plan_id: str, status: ModelingPlanStatus) -> None:
+        super().__init__(
+            f"Plano {plan_id!r} não aceita decisão de aprovação no estado {status.value!r}."
+        )
+        self.plan_id = plan_id
+        self.status = status
+
+
+class ModelingPlanNotExecutable(Exception):
+    """Execução solicitada para um plano fora dos estados executáveis.
+
+    Gate de aprovação no endpoint do card (ADR-013 / RF-008): só executa
+    plano ``approved`` (primeira execução), ``failed`` (retry explícito),
+    ``running`` (retomada após queda de conexão — o frontend reconcilia) ou
+    ``draft`` (no-op "modo planejamento" do executor).
+    ``waiting_approval``/``rejected``/``completed`` → 409.
+    """
+
+    def __init__(self, plan_id: str, status: ModelingPlanStatus) -> None:
+        super().__init__(f"Plano {plan_id!r} não é executável no estado {status.value!r}.")
+        self.plan_id = plan_id
+        self.status = status
+
+
+APPROVABLE_PLAN_STATUSES: frozenset[ModelingPlanStatus] = frozenset(
+    {
+        ModelingPlanStatus.draft,
+        ModelingPlanStatus.waiting_approval,
+        ModelingPlanStatus.approved,  # idempotente
+        ModelingPlanStatus.rejected,  # re-rejeição idempotente (só p/ reject)
+    }
+)
+
+EXECUTABLE_PLAN_STATUSES: frozenset[ModelingPlanStatus] = frozenset(
+    {
+        ModelingPlanStatus.approved,
+        ModelingPlanStatus.failed,  # retry explícito do card
+        ModelingPlanStatus.running,  # retomada após queda de conexão
+        # draft (plan_only) segue permitido: o executor bloqueia todos os
+        # steps e devolve o no-op "modo planejamento" (contrato existente).
+        ModelingPlanStatus.draft,
+    }
+)
+
+
+def ensure_plan_approvable(plan: ModelingPlan, decision: ModelingApprovalDecision) -> None:
+    """Gate anti-replay compartilhado por service e rotas (fonte única).
+
+    Plano ``waiting_approval``/``draft`` aceita aprovar/rejeitar; plano
+    ``rejected`` só aceita re-rejeição idempotente (RF-007: rejeição volta
+    para a descoberta, não ressuscita como aprovado); estados terminais ou em
+    execução não aceitam decisão nenhuma.
+    """
+
+    if plan.status not in APPROVABLE_PLAN_STATUSES:
+        raise ModelingPlanNotApprovable(plan.id, plan.status)
+    if plan.status == ModelingPlanStatus.rejected and decision != ModelingApprovalDecision.reject:
+        raise ModelingPlanNotApprovable(plan.id, plan.status)
+
+
+def ensure_plan_executable(plan: ModelingPlan, *, allow_completed: bool = False) -> None:
+    """Gate de execução compartilhado por service, rotas e orchestrator (fonte única).
+
+    Plano ``waiting_approval``/``rejected`` não executa sem aprovação e plano
+    ``completed`` não re-executa (anti-replay, C5 da varredura 2026-06-10).
+
+    ``allow_completed=True`` é a exceção do fluxo de CHAT
+    (``ModelingChatOrchestrator.execute_plan``): um retry já em ``editing`` pode
+    re-rodar um plano ``completed`` — no-op idempotente, pois executor e loop
+    agêntico pulam passos já ``completed`` (nada re-cria geometria). O caminho
+    do card mantém o default estrito (``completed`` → 409).
+    """
+
+    if plan.status in EXECUTABLE_PLAN_STATUSES:
+        return
+    if allow_completed and plan.status is ModelingPlanStatus.completed:
+        return
+    raise ModelingPlanNotExecutable(plan.id, plan.status)
+
+
 class ModelingRollbackUnavailable(Exception):
     """Plano de edição sem ponto de rollback (timeline pré-edição não capturada).
 
@@ -222,6 +310,7 @@ class ModelingService:
         # DT-006: mutação de aprovação centralizada em ``policy.apply_plan_approval``
         # (fonte única compartilhada com o ModelingChatOrchestrator).
         plan = self._get_plan_or_raise(plan_id)
+        ensure_plan_approvable(plan, payload.decision)
         result = apply_plan_approval(plan, payload)
         self.store.upsert_modeling_plan(result)
         if payload.decision != ModelingApprovalDecision.reject:
@@ -348,6 +437,7 @@ class ModelingService:
 
     def execute_plan(self, plan_id: str) -> ModelingExecutionResult:
         plan = self._get_plan_or_raise(plan_id)
+        ensure_plan_executable(plan)
         # O card (routes/modeling.py → /plans/{id}/execute) executa FORA de um
         # trace aberto. Sem isto, todo ``self._tracer.record(...)`` do executor
         # e do loop vira no-op (observability.record: ``tid is None`` → None) e o

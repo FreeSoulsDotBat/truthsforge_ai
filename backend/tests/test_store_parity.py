@@ -18,6 +18,7 @@ from app.storage.postgres_store import PostgresStore
 # Métodos só do Postgres: bootstrap/manutenção sem equivalente no fallback JSON.
 POSTGRES_ONLY = {
     "audit_events_for_month",
+    "close",  # storage-002: fecha o connection pool; DevStore não tem recurso a fechar.
     "init_schema",
     "migrate_projects_and_folders",
     "reconcile_chatgpt_session_timestamps",

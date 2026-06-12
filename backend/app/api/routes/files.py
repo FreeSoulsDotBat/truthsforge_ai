@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import re
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -73,6 +76,15 @@ def _matches_file_filters(
             if normalized_query not in haystack:
                 return False
     return True
+
+
+def _content_disposition_inline(filename: str) -> str:
+    """Monta um Content-Disposition seguro (sem CR/LF/aspas) com fallback RFC 5987."""
+    name = safe_filename(filename) or "arquivo"
+    # Remove caracteres de controle e aspas que permitiriam header-splitting/spoofing.
+    ascii_name = re.sub(r'[\r\n"\x00-\x1f\x7f]', "", name) or "arquivo"
+    encoded = quote(name, safe="")
+    return f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
 
 
 def _safe_local_path(storage_path: str) -> Path:
@@ -201,6 +213,11 @@ async def upload_file(
                     )
                 checksum.update(chunk)
                 output.write(chunk)
+    except BaseException:
+        # Limpa o diretório por-arquivo recém-criado quando o upload falha
+        # antes de o PlatformFile ser persistido (evita inodes órfãos).
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise
     finally:
         await file.close()
 
@@ -272,9 +289,7 @@ def get_file_content(file_id: str):
         return StreamingResponse(
             _iter_zip_entry(platform_file.storage_path),
             media_type=media_type,
-            headers={
-                "Content-Disposition": f'inline; filename="{safe_filename(platform_file.filename)}"'
-            },
+            headers={"Content-Disposition": _content_disposition_inline(platform_file.filename)},
         )
 
     path = _safe_local_path(platform_file.storage_path)

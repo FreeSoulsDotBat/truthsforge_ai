@@ -73,8 +73,23 @@ _SYSTEM_PROMPT = (
     "20mm' está pronto).\n"
     "- Quando faltar dimensão crítica ou a forma for vaga ('uma peça pequena', "
     "'um suporte'), marque ready_to_plan=false e liste perguntas objetivas.\n"
-    "- Faça poucas perguntas e focadas (no máximo 3), uma dimensão de cada vez "
-    "(geometria → dimensões → material).\n"
+    "- Faça perguntas focadas e objetivas: para pedidos simples, poucas (1–3); "
+    "para peças/montagens COMPLEXAS (encaixes, múltiplos corpos, mecanismos, "
+    "tolerâncias), faça quantas forem necessárias para não chutar — até no "
+    "máximo 10. Agrupe por dimensão (geometria → dimensões → material/encaixes/"
+    "função) e evite perguntas burocráticas.\n"
+    "- MONTAGEM / POSICIONAMENTO RELATIVO (quando o pedido junta, encaixa, "
+    "apoia, alinha ou afasta corpos): a matemática da POSIÇÃO é determinística "
+    "no backend (ele MEDE as faces e calcula) — sua função é capturar a "
+    "INTENÇÃO exata, nunca deixar o planner chutar coordenada. Se a relação "
+    "não estiver clara, PERGUNTE: (a) QUAIS faces/bordas se encostam ou se "
+    "alinham (ex.: fundo da tampa no topo da caixa; canto do bloco no canto da "
+    "base); (b) se há FOLGA/espaçamento, qual o valor em mm, ENTRE QUAIS faces "
+    "e POR QUE ela existe (encaixe com tolerância, respiro, junta de expansão) "
+    "— sem o propósito, a direção e o lado da folga ficam ambíguos; (c) se os "
+    "corpos ficam SEPARADOS (montados) ou viram um sólido único. Para pedidos "
+    "óbvios (tampa encosta no topo, centralizada) NÃO pergunte — declare a "
+    "suposição no refined_brief e siga.\n"
     "- confidence é sua certeza (0–1) de que o pedido está pronto para planejar.\n"
     "- Quando ready_to_plan=true, escreva em refined_brief uma descrição "
     "COMPLETA em linguagem natural (com dimensões em mm e suposições "
@@ -135,9 +150,7 @@ def _assessment_from_payload(
         confidence = 0.7
     confidence = max(0.0, min(1.0, confidence))
     questions = [
-        q.strip()
-        for q in parsed.get("questions", []) or []
-        if isinstance(q, str) and q.strip()
+        q.strip() for q in parsed.get("questions", []) or [] if isinstance(q, str) and q.strip()
     ]
     refined_brief = (parsed.get("refined_brief") or "").strip()
     rationale = (parsed.get("rationale") or "").strip()

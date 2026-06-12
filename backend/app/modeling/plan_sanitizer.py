@@ -24,6 +24,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from app.modeling.spatial_ref import strip_at_refs
+
 logger = logging.getLogger(__name__)
 
 # Campos que NENHUM handler do adapter aceita e que os nudges proíbem. Carregam
@@ -39,6 +41,15 @@ GHOST_KEYS: frozenset[str] = frozenset(
         "surface_ref",
     }
 )
+
+# Exceções por tool: chaves que SÃO canônicas para certas tools e portanto NÃO
+# devem ser tratadas como fantasma. ``surface``/``surface_ref`` são o seletor de
+# corpo primário das tools de superfície da Fase 5 (ver tool_schemas.py); apagá-
+# las cegamente quebra fusion.trim_surface / fusion.unstitch_surface no adapter.
+GHOST_KEY_EXCEPTIONS: dict[str, frozenset[str]] = {
+    "fusion.trim_surface": frozenset({"surface", "surface_ref"}),
+    "fusion.unstitch_surface": frozenset({"surface", "surface_ref"}),
+}
 
 # Aliases de NOME que carregam um valor válido — remapear (não descartar) para a
 # chave canônica quando esta ainda não veio.
@@ -66,6 +77,18 @@ class SanitizeAction:
 
 def _value_has_geom_ref(value: Any) -> bool:
     if isinstance(value, str):
+        from app.core.config import settings
+
+        if settings.modeling_spatial_resolution_enabled:
+            # Flag ON: o resolver resolve @-refs → POUPA-as; só a forma CRUA
+            # (Placa.bbox.max_z) cai.
+            return bool(_GEOM_REF_RE.search(strip_at_refs(value)))
+        # Flag OFF: ninguém resolve @-refs → derruba QUALQUER @-ref pela PRESENÇA
+        # (o regex só pega a forma crua <palavra>.<geom>; @token('F').center tem
+        # ')' antes do '.center' e escaparia), senão chegaria cru ao adapter →
+        # mis-place em (0,0). A forma crua (sem @) também cai.
+        if strip_at_refs(value) != value:
+            return True
         return bool(_GEOM_REF_RE.search(value))
     if isinstance(value, (list, tuple)):
         return any(_value_has_geom_ref(item) for item in value)
@@ -105,9 +128,11 @@ def sanitize_tool_arguments(tool_name: str, args: Any) -> tuple[Any, list[Saniti
                     )
                 )
 
-    # 2) campos-fantasma (sem valor aproveitável em nenhum handler).
+    # 2) campos-fantasma (sem valor aproveitável em nenhum handler), exceto os
+    #    que são canônicos para a tool em questão (ver GHOST_KEY_EXCEPTIONS).
+    allowed = GHOST_KEY_EXCEPTIONS.get(tool_name, frozenset())
     for key in list(cleaned.keys()):
-        if key in GHOST_KEYS:
+        if key in GHOST_KEYS and key not in allowed:
             cleaned.pop(key, None)
             actions.append(
                 SanitizeAction(

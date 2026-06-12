@@ -63,6 +63,13 @@ AUTODESK_MCP_EXECUTE_TOOL = "fusion_mcp_execute"
 AUTODESK_MCP_READ_TOOL = "fusion_mcp_read"
 AUTODESK_MCP_REQUIRED_TOOLS = {AUTODESK_MCP_EXECUTE_TOOL, AUTODESK_MCP_READ_TOOL}
 
+# Parâmetros do handshake ``initialize`` do MCP streamable HTTP (server stateful).
+_AUTODESK_INIT_PARAMS = {
+    "protocolVersion": "2025-06-18",
+    "capabilities": {},
+    "clientInfo": {"name": "truths-forge-ai", "version": "0.1.0"},
+}
+
 
 @dataclass(frozen=True)
 class FusionBridgeDiscovery:
@@ -194,11 +201,21 @@ class FusionDesktopAdapter:
         if not isinstance(raw, dict):
             return None
         host = self._host_override() or str(raw.get("host") or "127.0.0.1")
-        port = int(raw.get("port") or 0)
+        try:
+            port = int(raw.get("port") or 0)
+        except (TypeError, ValueError):
+            # Arquivo de discovery corrompido (ex.: add-in que caiu no meio da
+            # escrita) — trata como ausência de discovery em vez de explodir.
+            return None
         token = str(raw.get("token") or "")
         if not port or not token:
             return None
-        return FusionBridgeDiscovery(host=host, port=port, token=token, pid=raw.get("pid"))
+        raw_pid = raw.get("pid")
+        try:
+            pid = int(raw_pid) if raw_pid is not None else None
+        except (TypeError, ValueError):
+            pid = None
+        return FusionBridgeDiscovery(host=host, port=port, token=token, pid=pid)
 
     # ----------------------------------------------- health-check accounting
 
@@ -543,17 +560,50 @@ class FusionDesktopAdapter:
         method: str,
         params: dict[str, Any] | None,
     ) -> Any:
-        with self._lock:
-            self._next_request_id += 1
-            request_id = f"fusion-http-{method.replace('/', '-')}-{self._next_request_id}"
-
-        request_payload = build_request(request_id, method, params)
+        # O servidor MCP do Fusion é STATEFUL (MCP streamable HTTP): o
+        # ``initialize`` devolve um ``Mcp-Session-Id`` no HEADER da resposta que
+        # TODAS as chamadas seguintes precisam repetir — sem ele o servidor
+        # responde 400 "Missing MCP-Session-Id header" — e exige a notificação
+        # ``notifications/initialized`` antes de operar. Cada chamada abre seu
+        # próprio handshake/sessão no MESMO client (sem estado a expirar entre
+        # chamadas).
+        base_headers = {"Accept": "application/json, text/event-stream"}
+        init_params = params if method == "initialize" else _AUTODESK_INIT_PARAMS
         try:
             with httpx.Client(timeout=self.timeout_seconds) as client:
+                # 1) Handshake: initialize → captura o session id do header.
+                with self._lock:
+                    self._next_request_id += 1
+                    init_id = f"fusion-http-initialize-{self._next_request_id}"
+                init_resp = client.post(
+                    url,
+                    json=build_request(init_id, "initialize", init_params),
+                    headers=base_headers,
+                )
+                init_resp.raise_for_status()
+                session_id = init_resp.headers.get("mcp-session-id")
+                headers = dict(base_headers)
+                if session_id:
+                    headers["Mcp-Session-Id"] = session_id
+                    # 2) notifications/initialized (notificação, sem id) — exigida
+                    #    pelo protocolo antes de tools/list|tools/call. Tolerante.
+                    client.post(
+                        url,
+                        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                        headers=headers,
+                    )
+                if method == "initialize":
+                    return self._mcp_result(
+                        self._decode_autodesk_http_response(init_resp), init_id, url
+                    )
+                # 3) Método real, já dentro da sessão.
+                with self._lock:
+                    self._next_request_id += 1
+                    request_id = f"fusion-http-{method.replace('/', '-')}-{self._next_request_id}"
                 response = client.post(
                     url,
-                    json=request_payload,
-                    headers={"Accept": "application/json, text/event-stream"},
+                    json=build_request(request_id, method, params),
+                    headers=headers,
                 )
                 response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -562,7 +612,10 @@ class FusionDesktopAdapter:
                 data={"url": url},
             ) from exc
 
-        response_payload = self._decode_autodesk_http_response(response)
+        return self._mcp_result(self._decode_autodesk_http_response(response), request_id, url)
+
+    @staticmethod
+    def _mcp_result(response_payload: dict[str, Any], request_id: str, url: str) -> Any:
         if response_payload.get("id") != request_id:
             raise FusionBridgeError(
                 f"Fusion MCP devolveu id divergente: esperado {request_id}, "
@@ -583,20 +636,41 @@ class FusionDesktopAdapter:
     def _decode_autodesk_http_response(response: httpx.Response) -> dict[str, Any]:
         content_type = response.headers.get("content-type", "")
         if "text/event-stream" not in content_type:
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                # Corpo não-JSON (ex.: página de erro HTML de um proxy) num
+                # HTTP 200 — re-mapeia para o tipo que os callers já tratam.
+                raise FusionBridgeError("Fusion MCP devolveu corpo não-JSON.") from exc
             if not isinstance(payload, dict):
                 raise FusionBridgeError("Fusion MCP devolveu JSON sem objeto raiz.")
             return payload
 
+        # MCP streamable HTTP pode emitir notificações (progresso/log) antes do
+        # frame final; pegar o primeiro data: válido confundiria a checagem de
+        # id no caller, então selecionamos o frame de resposta (com id/result/
+        # error) e ignoramos notificações (objetos com 'method').
+        fallback: dict[str, Any] | None = None
         for line in response.text.splitlines():
             if not line.startswith("data:"):
                 continue
             raw = line.removeprefix("data:").strip()
             if not raw or raw == "[DONE]":
                 continue
-            payload = json.loads(raw)
-            if isinstance(payload, dict):
+            try:
+                payload = json.loads(raw)
+            except ValueError as exc:
+                raise FusionBridgeError("Fusion MCP devolveu SSE com data não-JSON.") from exc
+            if not isinstance(payload, dict):
+                continue
+            if "method" in payload and "id" not in payload:
+                # Notificação JSON-RPC (sem id) — não é a resposta final.
+                continue
+            if "result" in payload or "error" in payload or "id" in payload:
                 return payload
+            fallback = fallback or payload
+        if fallback is not None:
+            return fallback
         raise FusionBridgeError("Fusion MCP SSE não trouxe payload data JSON.")
 
     @staticmethod

@@ -36,6 +36,14 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 60
 STDERR_TAIL_BYTES = 4000
+# Janela curta para o filho encerrar antes de drenarmos seu stderr; impede que
+# ``stderr.read()`` (que bloqueia até EOF) trave o lock num processo pendurado.
+STDERR_DRAIN_TIMEOUT_SECONDS = 5
+# Teto de linhas ignoradas (não-JSON-RPC, em branco ou com id divergente) por
+# chamada durante a ressincronização de framing. Sem teto, um servidor que
+# inunde o stdout com ruído manteria ``call`` preso para sempre segurando o
+# lock — congelando TODAS as chamadas subsequentes do cliente.
+MAX_SKIPPED_LINES_PER_CALL = 1000
 
 
 class StdioServerError(RuntimeError):
@@ -131,7 +139,17 @@ class StdioMCPClient:
     # --------------------------------------------------------------------- calls
 
     def call(self, method: str, params: dict[str, Any] | None = None) -> Any:
-        """Send a request, wait for the matching response, and return ``result``."""
+        """Send a request, wait for the matching response, and return ``result``.
+
+        Limitação conhecida: ``readline()`` em pipe de texto não aceita timeout
+        de forma portável (em Windows não há ``select``/``poll`` em pipes, e um
+        deadline limpo exigiria thread extra ou I/O overlapped). Se o servidor
+        ficar mudo após half-close do stdout, esta chamada bloqueia até o
+        processo morrer (aí o EOF dispara o erro). O que É garantido:
+        :data:`MAX_SKIPPED_LINES_PER_CALL` limita a ressincronização de framing
+        — um servidor que inunda o stdout com ruído/ids divergentes gera
+        :class:`StdioServerError` em vez de prender o lock para sempre.
+        """
         with self._lock:
             self._ensure_started_locked()
             assert self._proc is not None and self._proc.stdin and self._proc.stdout
@@ -144,22 +162,52 @@ class StdioMCPClient:
             except (BrokenPipeError, OSError) as exc:
                 raise self._build_dead_process_error(exc) from exc
 
-            line = self._proc.stdout.readline()
-            if not line:
-                raise self._build_dead_process_error(RuntimeError("EOF inesperado no stdout."))
-
-            try:
-                response = decode_message(line)
-            except ProtocolError as exc:
-                raise StdioServerError(
-                    f"Servidor '{self.name}' devolveu mensagem inválida: {exc}"
-                ) from exc
-
-        if response.get("id") != request_id:
-            raise StdioServerError(
-                f"Servidor '{self.name}' devolveu id divergente: "
-                f"esperado {request_id}, recebido {response.get('id')!r}."
-            )
+            # O framing JSON-RPC é uma linha por mensagem, sem comprimento. Linhas
+            # de log/print espúrias emitidas ao stdout do servidor (ou por libs que
+            # ele importa) desincronizariam o protocolo se tratássemos a primeira
+            # linha como resposta. Por isso lemos em loop, ignorando linhas que não
+            # decodificam ou cujo id não bate, até achar a resposta correta ou EOF
+            # — com teto (MAX_SKIPPED_LINES_PER_CALL) para não prender o lock num
+            # servidor que inunda o stdout.
+            response: dict[str, Any] | None = None
+            skipped = 0
+            while True:
+                if skipped >= MAX_SKIPPED_LINES_PER_CALL:
+                    raise StdioServerError(
+                        f"Servidor '{self.name}' emitiu {skipped} linhas sem a "
+                        f"resposta do id {request_id} (teto "
+                        f"MAX_SKIPPED_LINES_PER_CALL={MAX_SKIPPED_LINES_PER_CALL}); "
+                        "abortando a chamada para não travar o cliente — possível "
+                        "flood de stdout ou framing permanentemente dessincronizado."
+                    )
+                line = self._proc.stdout.readline()
+                if not line:
+                    raise self._build_dead_process_error(RuntimeError("EOF inesperado no stdout."))
+                if not line.strip():
+                    skipped += 1
+                    continue
+                try:
+                    candidate = decode_message(line)
+                except ProtocolError as exc:
+                    logger.debug(
+                        "Servidor '%s' emitiu linha não-JSON-RPC no stdout (ignorada): %s",
+                        self.name,
+                        exc,
+                    )
+                    skipped += 1
+                    continue
+                if candidate.get("id") != request_id:
+                    logger.debug(
+                        "Servidor '%s' emitiu mensagem com id divergente (ignorada): "
+                        "esperado %s, recebido %r.",
+                        self.name,
+                        request_id,
+                        candidate.get("id"),
+                    )
+                    skipped += 1
+                    continue
+                response = candidate
+                break
         if "error" in response:
             error = response["error"] or {}
             raise StdioServerError(
@@ -191,7 +239,21 @@ class StdioMCPClient:
     def _build_dead_process_error(self, original: Exception) -> StdioServerError:
         stderr_tail = ""
         if self._proc and self._proc.stderr:
+            # ``stderr.read()`` (sem tamanho) bloqueia até EOF, e um stdout vazio NÃO
+            # garante que o filho saiu (ele pode ter fechado/half-closed o stdout e
+            # continuar vivo ou travado). Confirmamos que o processo realmente morreu
+            # — concedendo uma janela curta para encerrar — antes de drenar o stderr,
+            # evitando travar o lock indefinidamente num filho pendurado.
             try:
+                if self._proc.poll() is None:
+                    try:
+                        self._proc.wait(timeout=STDERR_DRAIN_TIMEOUT_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        self._proc.kill()
+                        try:
+                            self._proc.wait(timeout=STDERR_DRAIN_TIMEOUT_SECONDS)
+                        except subprocess.TimeoutExpired:
+                            pass
                 stderr_tail = self._proc.stderr.read()[-STDERR_TAIL_BYTES:]
             except OSError:
                 stderr_tail = ""

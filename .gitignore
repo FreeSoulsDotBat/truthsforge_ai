@@ -22,6 +22,9 @@ apps/docs/.docusaurus/
 !.env.example
 *.local
 
+# Claude Code: secrets/overrides locais (ex.: token do MCP do GitHub) — NUNCA versionar
+.claude/settings.local.json
+
 apps/mobile/android/
 apps/mobile/ios/
 apps/desktop/src-tauri/target/
@@ -32,3 +35,29 @@ apps/desktop/src-tauri/target/
 
 # Relatório gerável do mapa de arquitetura (não versionar)
 architecture-map.html
+
+# Lixo de dados/teste que NUNCA deve ir pro repo. Em 2026-06-03 um runner
+# escreveu num path absoluto tratado como relativo → criou
+# "C：/Users/.../AppData/Local/Temp/tf_clean/..." DENTRO da árvore e um git add
+# pegou 62 arquivos (incl. secret.key/dev-store.json). Rede de segurança:
+**/AppData/
+**/Local/Temp/
+tf_clean*/
+tf_diag*/
+tf_official*/
+**/dev-store.json
+**/secret.key
+# Diretórios-fantasma de path absoluto vazado (C： com colon fullwidth e cia.).
+C:/
+[A-Z]:/
+# Arquivos com path absoluto vazado COLADO (sem barra) — em 2026-06-08 subagents
+# de review escreveram "D：projects...backend_gate.diff" (colon fullwidth, sem
+# separador) na raiz do backend. Pega a forma <Letra><colon-fullwidth>...
+[A-Z]：*
+**/[A-Z]：*
+# Scratch de agentes/probes (untracked; nunca versionar): dumps de diff e os
+# probes de gate Fusion (_gate_*.py rodam via docker exec, não fazem parte do app).
+*_gate.diff
+*_gate_full.md
+_gate_*.py
+_be1acd0.diff

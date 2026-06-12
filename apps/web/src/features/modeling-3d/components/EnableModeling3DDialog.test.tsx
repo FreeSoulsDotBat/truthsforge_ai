@@ -34,7 +34,9 @@ describe("EnableModeling3DDialog", () => {
     fireEvent.click(screen.getByText("Ativar no próximo chat"));
 
     expect(onSoftwareChange).toHaveBeenCalledWith("fusion");
-    expect(screen.getByText(/Modo: fluido allowlistado/i)).toBeTruthy();
+    // P1: o diálogo descreve o gate de aprovação real (todo plano primário
+    // para no card), não o modelo fluido pré-P1.
+    expect(screen.getByText(/Modo: plano com aprovação/i)).toBeTruthy();
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 });

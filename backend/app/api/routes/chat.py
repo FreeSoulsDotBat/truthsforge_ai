@@ -651,6 +651,11 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
             model = selected_image_model
         else:
             model = registry.get_image_model(model.provider)
+            if ModelCapability.image_generation not in model.capabilities:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Nenhum modelo com capacidade de geração de imagem está disponível.",
+                )
     elif payload.deep_research:
         model = registry.get_deep_research_model()
     if payload.reasoning_override == "long":
@@ -1026,16 +1031,25 @@ async def stream_chat(payload: ChatStreamRequest) -> StreamingResponse:
     if system_parts:
         chat_history.append({"role": "system", "content": "\n\n".join(system_parts)})
 
-    for chat_session in store.list_chat_sessions():
-        if chat_session.id == session.id:
-            chat_history.extend(
-                [
-                    {"role": message.role, "content": message.content}
-                    for message in chat_session.messages
-                    if message.role in {"system", "user", "assistant"}
-                ]
-            )
-            break
+    if hasattr(store, "get_chat_session"):
+        target_session = store.get_chat_session(session.id)
+    else:
+        target_session = next(
+            (
+                chat_session
+                for chat_session in store.list_chat_sessions()
+                if chat_session.id == session.id
+            ),
+            None,
+        )
+    if target_session is not None:
+        chat_history.extend(
+            [
+                {"role": message.role, "content": message.content}
+                for message in target_session.messages
+                if message.role in {"system", "user", "assistant"}
+            ]
+        )
     if not chat_history or chat_history[-1]["content"] != payload.message:
         chat_history.append({"role": "user", "content": payload.message})
 

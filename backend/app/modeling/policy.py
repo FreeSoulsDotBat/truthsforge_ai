@@ -23,7 +23,7 @@ from app.core.contracts import (
     ModelingExecutionMode,
     ModelingPlan,
     ModelingPlanStatus,
-    ModelingRiskLevel,
+    ModelingPlanStep,
     ModelingStepStatus,
     now_utc,
 )
@@ -36,10 +36,7 @@ from app.modeling.tool_registry import (
     is_blocked as _is_blocked,
 )
 from app.modeling.tool_registry import (
-    is_high_risk as _is_high_risk,
-)
-from app.modeling.tool_registry import (
-    is_read_only as _is_read_only,
+    requires_approval as _requires_approval,
 )
 
 __all__ = [
@@ -68,13 +65,15 @@ def apply_plan_approval(plan: ModelingPlan, payload: ModelingApprovalRequest) ->
 
     steps = []
     for step in plan.steps:
-        if step.approval_required:
-            next_status = (
-                ModelingStepStatus.approved
-                if step.status == ModelingStepStatus.waiting_approval
-                else step.status
+        if step.approval_required and step.status == ModelingStepStatus.waiting_approval:
+            # Só carimba approved_at quando a transição real waiting_approval ->
+            # approved acontece; assim a função volta a ser idempotente e steps
+            # pending/failed não recebem um approved_at contraditório.
+            steps.append(
+                step.model_copy(
+                    update={"status": ModelingStepStatus.approved, "approved_at": now_utc()}
+                )
             )
-            steps.append(step.model_copy(update={"status": next_status, "approved_at": now_utc()}))
         else:
             steps.append(step)
     return plan.model_copy(
@@ -84,6 +83,19 @@ def apply_plan_approval(plan: ModelingPlan, payload: ModelingApprovalRequest) ->
             "updated_at": now_utc(),
         }
     )
+
+
+def _declarative_combines(step: ModelingPlanStep) -> bool:
+    """F7 — a expansão deste passo declarativo funde corpos (combine-DENTRO)?
+    ``distribute_along`` com ``alternate`` funde os nós no corpo-pai
+    (``combine_bodies``, high_risk). Marcar como aprovação-requerida no PLANO faz o
+    card de aprovação disclosar o combine ANTES de qualquer execução (escolha do
+    dono: human-in-the-loop p/ a fusão), em vez de bloquear a expansão no meio."""
+
+    if step.tool_name == "fusion.distribute_along":
+        alt = (step.input_json or {}).get("alternate")
+        return isinstance(alt, (list, tuple)) and len(alt) >= 2
+    return False
 
 
 def apply_modeling_policy(plan: ModelingPlan) -> ModelingPlan:
@@ -98,9 +110,13 @@ def apply_modeling_policy(plan: ModelingPlan) -> ModelingPlan:
     steps = []
     for step in plan.steps:
         blocked = _is_blocked(step.tool_name)
-        is_read_only = _is_read_only(step.tool_name)
-        is_high_risk = step.risk_level == ModelingRiskLevel.high or _is_high_risk(step.tool_name)
-        requires_approval = not is_read_only and is_high_risk
+        # Ponto único de decisão (ADR-013): cobre high_risk, destructive,
+        # blocked e a escalação por risk_level==high — read-only nunca exige.
+        # F7 P6: a expansão declarativa que funde corpos (combine-DENTRO)
+        # também exige aprovação no PLANO (card disclosa antes de executar).
+        requires_approval = _requires_approval(
+            step.tool_name, step.risk_level
+        ) or _declarative_combines(step)
         next_status = step.status
         if requires_approval and step.status == ModelingStepStatus.pending:
             next_status = ModelingStepStatus.waiting_approval

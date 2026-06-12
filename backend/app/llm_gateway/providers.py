@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 import httpx
 
+from app.core.config import settings
 from app.core.contracts import ModelConfig, ProviderModel, ProviderName
 from app.llm_gateway.pricing import with_pricing
 from app.security.secrets import SecretStore, get_secret_store
@@ -241,41 +242,54 @@ class OpenAIProvider(BaseRemoteProvider):
         if model.seed is not None:
             payload["seed"] = model.seed
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream(
-                "POST", "https://api.openai.com/v1/responses", headers=headers, json=payload
-            ) as response:
-                response.raise_for_status()
-                summary_delta_seen = False
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    raw = line.removeprefix("data: ").strip()
-                    if raw == "[DONE]":
-                        break
-                    data = json.loads(raw)
-                    event_type = data.get("type")
-                    if event_type == "response.output_text.delta":
-                        yield token_event(data.get("delta", ""))
-                    elif event_type in {
-                        "response.reasoning_summary_text.delta",
-                        "response.reasoning_summary.delta",
-                    }:
-                        summary_delta_seen = True
-                        summary_delta = data.get("delta") or data.get("text") or ""
-                        if isinstance(summary_delta, dict):
-                            summary_delta = (
-                                summary_delta.get("text") or summary_delta.get("content") or ""
-                            )
-                        if summary_delta:
-                            yield reasoning_summary_event(str(summary_delta))
-                    elif event_type in {
-                        "response.reasoning_summary_text.done",
-                        "response.reasoning_summary.done",
-                    }:
-                        summary_text = data.get("text") or data.get("summary") or ""
-                        if summary_text and not summary_delta_seen:
-                            yield reasoning_summary_event(str(summary_text))
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST", "https://api.openai.com/v1/responses", headers=headers, json=payload
+                ) as response:
+                    if response.status_code >= 400:
+                        await response.aread()
+                        response.raise_for_status()
+                    summary_delta_seen = False
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        raw = line.removeprefix("data: ").strip()
+                        if raw == "[DONE]" or not raw or raw.startswith(":"):
+                            if raw == "[DONE]":
+                                break
+                            continue
+                        try:
+                            data = json.loads(raw)
+                        except json.JSONDecodeError:
+                            # SSE keep-alive/comment ou frame parcial: ignore a linha
+                            continue
+                        event_type = data.get("type")
+                        if event_type == "response.output_text.delta":
+                            yield token_event(data.get("delta", ""))
+                        elif event_type in {
+                            "response.reasoning_summary_text.delta",
+                            "response.reasoning_summary.delta",
+                        }:
+                            summary_delta_seen = True
+                            summary_delta = data.get("delta") or data.get("text") or ""
+                            if isinstance(summary_delta, dict):
+                                summary_delta = (
+                                    summary_delta.get("text") or summary_delta.get("content") or ""
+                                )
+                            if summary_delta:
+                                yield reasoning_summary_event(str(summary_delta))
+                        elif event_type in {
+                            "response.reasoning_summary_text.done",
+                            "response.reasoning_summary.done",
+                        }:
+                            summary_text = data.get("text") or data.get("summary") or ""
+                            if summary_text and not summary_delta_seen:
+                                yield reasoning_summary_event(str(summary_text))
+        except httpx.HTTPStatusError as exc:
+            raise self._provider_error(exc) from exc
+        except httpx.RequestError as exc:
+            raise ProviderExecutionError(f"Falha de rede ao chamar OpenAI: {exc}") from exc
 
     async def generate_image(self, model: ModelConfig, prompt: str) -> str:
         api_key = self.api_key()
@@ -348,7 +362,11 @@ class OpenAIProvider(BaseRemoteProvider):
                     "Vou consultar fontes externas e sintetizar a resposta "
                     f"(limite: {max_tool_calls} chamadas de ferramenta).\n\n"
                 )
-                for attempt in range(360):
+                # Teto configurável de polls (Settings.deep_research_max_polls,
+                # env TRUTHS_FORGE_DEEP_RESEARCH_MAX_POLLS, default 360 × 5s ≈
+                # 30 min). Piso 1 preservado para valores não-positivos.
+                max_polls = max(1, settings.deep_research_max_polls)
+                for attempt in range(max_polls):
                     await asyncio.sleep(5)
                     poll_response = await client.get(
                         f"https://api.openai.com/v1/responses/{response_id}",
@@ -471,6 +489,16 @@ class OpenAIProvider(BaseRemoteProvider):
 class AnthropicProvider(BaseRemoteProvider):
     provider = ProviderName.anthropic
 
+    def _provider_error(self, exc: httpx.HTTPStatusError) -> ProviderExecutionError:
+        try:
+            detail = exc.response.json().get("error", {})
+        except ValueError:
+            detail = {}
+        message = detail.get("message") or exc.response.reason_phrase or "erro sem mensagem"
+        return ProviderExecutionError(
+            f"Anthropic retornou erro {exc.response.status_code}: {message}"
+        )
+
     async def stream_chat(
         self,
         model: ModelConfig,
@@ -514,19 +542,33 @@ class AnthropicProvider(BaseRemoteProvider):
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream(
-                "POST", "https://api.anthropic.com/v1/messages", headers=headers, json=payload
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data = json.loads(line.removeprefix("data: ").strip())
-                    if data.get("type") == "content_block_delta":
-                        delta = data.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            yield token_event(delta.get("text", ""))
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST", "https://api.anthropic.com/v1/messages", headers=headers, json=payload
+                ) as response:
+                    if response.status_code >= 400:
+                        await response.aread()
+                        response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        raw = line.removeprefix("data: ").strip()
+                        if not raw or raw.startswith(":"):
+                            continue
+                        try:
+                            data = json.loads(raw)
+                        except json.JSONDecodeError:
+                            # SSE keep-alive/comment ou frame parcial: ignore a linha
+                            continue
+                        if data.get("type") == "content_block_delta":
+                            delta = data.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                yield token_event(delta.get("text", ""))
+        except httpx.HTTPStatusError as exc:
+            raise self._provider_error(exc) from exc
+        except httpx.RequestError as exc:
+            raise ProviderExecutionError(f"Falha de rede ao chamar Anthropic: {exc}") from exc
 
     async def list_models(self) -> list[ProviderModel]:
         headers = {
@@ -552,6 +594,14 @@ class AnthropicProvider(BaseRemoteProvider):
 class GoogleProvider(BaseRemoteProvider):
     provider = ProviderName.google
 
+    def _provider_error(self, exc: httpx.HTTPStatusError) -> ProviderExecutionError:
+        try:
+            detail = exc.response.json().get("error", {})
+        except ValueError:
+            detail = {}
+        message = detail.get("message") or exc.response.reason_phrase or "erro sem mensagem"
+        return ProviderExecutionError(f"Google retornou erro {exc.response.status_code}: {message}")
+
     async def stream_chat(
         self,
         model: ModelConfig,
@@ -570,9 +620,11 @@ class GoogleProvider(BaseRemoteProvider):
                     "parts": [{"text": message["content"]}],
                 }
             )
+        # A chave vai no header (x-goog-api-key), nunca na URL: assim ela não
+        # vaza em mensagens de erro do httpx (que ecoam a URL completa).
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{provider_model_id}:streamGenerateContent?alt=sse&key={api_key}"
+            f"{provider_model_id}:streamGenerateContent?alt=sse"
         )
         generation_config: dict[str, Any] = {}
         if model.temperature is not None:
@@ -592,23 +644,40 @@ class GoogleProvider(BaseRemoteProvider):
         payload: dict[str, Any] = {"contents": contents}
         if generation_config:
             payload["generationConfig"] = generation_config
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("POST", url, json=payload) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data = json.loads(line.removeprefix("data: ").strip())
-                    for candidate in data.get("candidates", []):
-                        for part in candidate.get("content", {}).get("parts", []):
-                            if text := part.get("text"):
-                                yield token_event(text)
+        headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("POST", url, headers=headers, json=payload) as response:
+                    if response.status_code >= 400:
+                        await response.aread()
+                        response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        raw = line.removeprefix("data: ").strip()
+                        if not raw or raw.startswith(":"):
+                            continue
+                        try:
+                            data = json.loads(raw)
+                        except json.JSONDecodeError:
+                            # SSE keep-alive/comment ou frame parcial: ignore a linha
+                            continue
+                        for candidate in data.get("candidates", []):
+                            for part in candidate.get("content", {}).get("parts", []):
+                                if text := part.get("text"):
+                                    yield token_event(text)
+        except httpx.HTTPStatusError as exc:
+            raise self._provider_error(exc) from exc
+        except httpx.RequestError as exc:
+            raise ProviderExecutionError(f"Falha de rede ao chamar Google: {exc}") from exc
 
     async def list_models(self) -> list[ProviderModel]:
         api_key = self.api_key()
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        # Chave no header (não na URL) para não vazar em mensagens de erro.
+        url = "https://generativelanguage.googleapis.com/v1beta/models"
+        headers = {"x-goog-api-key": api_key}
         async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.get(url)
+            response = await client.get(url, headers=headers)
             response.raise_for_status()
         provider_models = []
         for item in response.json().get("models", []):

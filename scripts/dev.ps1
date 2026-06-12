@@ -142,7 +142,9 @@ $DocsPort = Get-DevPort -Name "DOCS_PORT" -DefaultValue "3000"
 $PgAdminPort = Get-DevPort -Name "PGADMIN_PORT" -DefaultValue "8080"
 $RedisCommanderPort = Get-DevPort -Name "REDIS_COMMANDER_PORT" -DefaultValue "8081"
 
+Assert-DevPortAvailable -ServiceName "docs" -EnvName "DOCS_PORT" -Port $DocsPort -ContainerName "truths-forge-docs" -SuggestedPort 13000
 Assert-DevPortAvailable -ServiceName "pgAdmin" -EnvName "PGADMIN_PORT" -Port $PgAdminPort -ContainerName "truths-forge-pgadmin" -SuggestedPort 18080
+Assert-DevPortAvailable -ServiceName "redis-commander" -EnvName "REDIS_COMMANDER_PORT" -Port $RedisCommanderPort -ContainerName "truths-forge-redis-commander" -SuggestedPort 18081
 
 Write-Host "Starting Truth's Forge AI full container dev stack..."
 # `--build` so quando -Build (Dockerfile mudou). No caminho rapido,

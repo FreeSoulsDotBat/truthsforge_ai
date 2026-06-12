@@ -52,6 +52,7 @@ def find_duplicate(
     filename: str,
     size_bytes: int,
     checksum_sha256: str | None = None,
+    content_crc: int | None = None,
 ) -> PlatformFile | None:
     normalized_name = safe_filename(filename).lower()
     if checksum_sha256:
@@ -66,17 +67,26 @@ def find_duplicate(
         if checksum_match:
             return checksum_match
 
+    def _name_size_match(platform_file: PlatformFile) -> bool:
+        if platform_file.size_bytes != size_bytes:
+            return False
+        names = {
+            safe_filename(platform_file.filename).lower(),
+            safe_filename(platform_file.original_filename).lower(),
+        }
+        if not (names & {normalized_name}):
+            return False
+        # Quando ambos os lados expõem o CRC do conteúdo (entradas ZIP), nome+tamanho
+        # iguais não bastam: só é duplicata se o CRC também bater. Evita marcar
+        # arquivos distintos com mesmo nome/tamanho como duplicados.
+        if content_crc is not None and isinstance(platform_file.metadata, dict):
+            existing_crc = platform_file.metadata.get("zip_entry_crc")
+            if existing_crc is not None and existing_crc != content_crc:
+                return False
+        return True
+
     return next(
-        (
-            platform_file
-            for platform_file in files
-            if platform_file.size_bytes == size_bytes
-            and {
-                safe_filename(platform_file.filename).lower(),
-                safe_filename(platform_file.original_filename).lower(),
-            }
-            & {normalized_name}
-        ),
+        (platform_file for platform_file in files if _name_size_match(platform_file)),
         None,
     )
 
@@ -163,6 +173,7 @@ def register_zip_entries_as_platform_files(
                 existing_files,
                 filename=base_name,
                 size_bytes=info.file_size,
+                content_crc=info.CRC,
             )
             payload = PlatformFileCreate(
                 filename=filename,
@@ -178,6 +189,7 @@ def register_zip_entries_as_platform_files(
                     "archive_filename": archive_file.filename,
                     "job_id": job_id,
                     "zip_entry": info.filename,
+                    "zip_entry_crc": info.CRC,
                     "compressed_size": info.compress_size,
                     "from_archive": True,
                     "project_id": archive_project_id,

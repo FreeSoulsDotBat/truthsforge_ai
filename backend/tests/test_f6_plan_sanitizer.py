@@ -65,6 +65,45 @@ def test_detects_geom_ref_in_scalar_and_center() -> None:
     assert any(a.kind == "drop_geom_ref_value" for a in a2)
 
 
+def test_at_refs_spared_only_when_resolver_flag_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    # F7: @-ref VÁLIDA só é poupada quando o resolver está ATIVO p/ resolvê-la.
+    # Com a flag OFF, ninguém resolve @-refs → o guardrail derruba (senão chegaria
+    # crua ao adapter e cairia em (0,0)). A forma CRUA (sem @) cai nas duas configs.
+    from app.core.config import settings
+
+    spared = {
+        "diameter_mm": 6,
+        "origin_mm": ["@body('Placa').bbox.max_z - 20", 0, 0],
+    }
+    # Flag ON: o resolver resolverá os @-refs depois → sanitizer POUPA.
+    monkeypatch.setattr(settings, "modeling_spatial_resolution_enabled", True, raising=False)
+    cleaned_on, actions_on = sanitize_tool_arguments("fusion.add_cylinder", spared)
+    assert cleaned_on == spared and actions_on == []
+
+    # Flag OFF (default): @-ref em origin_mm é DERRUBADA (regressão do guardrail
+    # evitada).
+    monkeypatch.setattr(settings, "modeling_spatial_resolution_enabled", False, raising=False)
+    cleaned_off, actions_off = sanitize_tool_arguments("fusion.add_cylinder", spared)
+    assert "origin_mm" not in cleaned_off and cleaned_off["diameter_mm"] == 6
+    assert any(a.kind == "drop_geom_ref_value" for a in actions_off)
+
+    # Com a flag OFF, as formas @-ref COMUNS (.center/.normal/.direction) — que o
+    # regex _GEOM_REF_RE NÃO casa (')' antes do '.center') — também caem, pela
+    # PRESENÇA do @-ref, não chegam cruas ao adapter.
+    for field, ref in (
+        ("origin_mm", "@token('F_TOP').center"),
+        ("axis", "@edge('E1').direction"),
+        ("center_mm", "@body('Placa').center"),
+    ):
+        c_off, _ = sanitize_tool_arguments("fusion.add_cylinder", {field: ref, "diameter_mm": 6})
+        assert field not in c_off, f"{field}={ref} deveria cair com flag OFF"
+
+    # Forma CRUA (sem @) cai independente da flag.
+    raw = {"position_mm": ["Placa.bbox.max_z - 20", 0]}
+    cleaned_raw, _ = sanitize_tool_arguments("fusion.add_cylinder", raw)
+    assert "position_mm" not in cleaned_raw
+
+
 def test_remaps_alias_axis_line_to_axis() -> None:
     cleaned, actions = sanitize_tool_arguments(
         "fusion.revolve_profile", {"sketch": "s", "axis_line": "y"}

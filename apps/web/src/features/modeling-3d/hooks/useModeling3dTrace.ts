@@ -68,7 +68,7 @@ export function useRecordClientTrace(traceId?: string | null, planId?: string | 
         })
         .catch((error) => {
           // Silenciado — apenas console pra debug. Não exibe pra UI.
-           
+
           console.debug("[trace] failed to record client event:", eventType, error);
         });
     },

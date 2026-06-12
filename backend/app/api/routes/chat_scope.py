@@ -137,27 +137,6 @@ def _validate_attachment_project_scope(
         )
 
 
-def _project_scope_matches(
-    raw_project_id: str | None,
-    *,
-    active_project_id: str | None,
-    scope_mode: str,
-) -> bool:
-    normalized = raw_project_id or None
-    global_ids = {None, DEFAULT_GENERAL_PROJECT_ID}
-    if scope_mode == "global_only":
-        return normalized in global_ids
-    if scope_mode == "project_only":
-        if active_project_id:
-            return normalized == active_project_id
-        return normalized in global_ids
-    if scope_mode == "project_plus_global":
-        if active_project_id:
-            return normalized in {active_project_id, None, DEFAULT_GENERAL_PROJECT_ID}
-        return normalized in global_ids
-    return True
-
-
 __all__ = [
     "MAX_CONTEXT_PROJECTS",
     "_agent_allowed_project_ids",
@@ -167,7 +146,6 @@ __all__ = [
     "_metadata_project_id",
     "_normalize_project_ids",
     "_platform_file_scope_project_id",
-    "_project_scope_matches",
     "_runtime_allowed_project_ids",
     "_validate_active_project_scope",
     "_validate_attachment_project_scope",

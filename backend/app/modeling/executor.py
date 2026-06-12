@@ -35,6 +35,7 @@ from app.modeling.artifacts import ModelingArtifactService
 from app.modeling.mcp_client import LocalMCPClient
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.snapshot_service import ModelingSnapshotService
+from app.modeling.spatial_ref import SpatialRefError
 
 
 def _unwrap_inner_fusion_result(output: dict[str, Any]) -> dict[str, Any]:
@@ -191,6 +192,69 @@ class _StepOutcome:
     ok: bool
 
 
+# Chaves de args concretos que carregam um token de entidade (face/aresta) a
+# resolver para geometria legível no trace de diagnóstico de posicionamento.
+_PLACEMENT_TOKEN_KEYS = ("face_token_one", "face_token_two", "edge", "edge_token", "token")
+
+
+def _entity_geom_from_state(token: str, state: Any) -> dict[str, Any] | None:
+    """Geometria LEGÍVEL de um token (face/aresta) a partir do ``ModelState`` —
+    faz o trace explicar QUAL face foi casada e ONDE ela está (corpo, centro,
+    normal). ``{token, resolved: False}`` quando o token não está no estado."""
+
+    if state is None or not token:
+        return None
+    for b in getattr(state, "bodies", []) or []:
+        for f in b.faces:
+            if f.token == token:
+                return {
+                    "token": token,
+                    "body": b.name,
+                    "kind": "face",
+                    "type": f.type,
+                    "center_mm": f.center_mm,
+                    "normal": f.normal_axis,
+                    "area_mm2": f.area_mm2,
+                    "radius_mm": f.radius_mm,
+                }
+        for e in b.edges:
+            if e.token == token:
+                return {
+                    "token": token,
+                    "body": b.name,
+                    "kind": "edge",
+                    "length_mm": e.length_mm,
+                    "start_mm": e.start_point_mm,
+                    "end_mm": e.end_point_mm,
+                }
+    return {"token": token, "resolved": False}
+
+
+def _placement_diag(concrete: list[Any], state: Any) -> dict[str, Any]:
+    """Diagnóstico de posicionamento para o trace: args concretos de cada passo +
+    geometria das faces/arestas casadas + bboxes dos corpos. Transforma um token
+    opaco em 'onde está', tornando o trace auto-explicativo para mis-place — sem
+    precisar de dump do plano."""
+
+    diag_steps: list[dict[str, Any]] = []
+    seen: list[str] = []
+    for c in concrete:
+        args = dict(getattr(c, "input_json", None) or {})
+        diag_steps.append({"tool": getattr(c, "tool_name", "?"), "args": args})
+        for k, v in args.items():
+            if isinstance(v, str) and v and (k in _PLACEMENT_TOKEN_KEYS or "token" in k):
+                if v not in seen:
+                    seen.append(v)
+    faces = [g for g in (_entity_geom_from_state(t, state) for t in seen) if g]
+    bodies = None
+    if state is not None:
+        bodies = [
+            {"name": b.name, "bbox_min_mm": b.bbox_min_mm, "bbox_max_mm": b.bbox_max_mm}
+            for b in (getattr(state, "bodies", []) or [])[:20]
+        ]
+    return {"concrete": diag_steps, "resolved_faces": faces, "bodies": bodies}
+
+
 class ModelingExecutorService:
     """Executes plans by dispatching steps and recording tool calls."""
 
@@ -207,6 +271,9 @@ class ModelingExecutorService:
         self.artifacts = artifacts
         # Tracer compartilhado (no-op se a store não tem record_trace_events_bulk).
         self._tracer = get_tracer(store if hasattr(store, "record_trace_events_bulk") else None)
+        # F8: carry-forward do ModelState (plan_id, after) p/ ser o before do
+        # próximo passo — evita 2 probes/passo na proveniência.
+        self._provenance_carry: tuple[str, Any] | None = None
 
     def execute_plan(self, plan: ModelingPlan) -> ModelingExecutionResult:
         """Execute every runnable step of ``plan`` and persist the result."""
@@ -228,7 +295,26 @@ class ModelingExecutorService:
         next_steps: list[ModelingPlanStep] = []
 
         for step in plan.steps:
-            if step.error:
+            if step.status == ModelingStepStatus.completed:
+                # Retry idempotente: passo já concluído numa execução anterior NÃO
+                # re-executa — re-rodar add_box/extrude recriaria corpos no design
+                # ativo (geometria duplicada). Preserva resultado/proveniência
+                # originais e fica fora de executed/blocked (sem duplicar
+                # histórico nem eventos).
+                next_steps.append(step)
+                self._tracer.record(
+                    "executor.step_skipped",
+                    source=ModelingTraceSource.backend,
+                    level=ModelingTraceLevel.info,
+                    message=f"Step {step.seq} já concluído — pulado (retry idempotente)",
+                    payload={"step_id": step.id, "tool_name": step.tool_name},
+                    plan_id=plan.id,
+                )
+                continue
+            if step.error and step.status != ModelingStepStatus.failed:
+                # Bloqueio ESTRUTURAL (policy/blocklist/rejeição), não desfecho de
+                # execução: continua bloqueado. Passos ``failed`` passam adiante —
+                # são exatamente o alvo do retry explícito do card.
                 blocked_step_ids.append(step.id)
                 next_steps.append(step)
                 self._tracer.record(
@@ -257,7 +343,18 @@ class ModelingExecutorService:
                 )
                 continue
 
-            outcome = self._execute_single_step(step, plan=plan)
+            run_step = step
+            if step.status == ModelingStepStatus.failed:
+                # Retry explícito do card (plano ``failed``): o passo que falhou
+                # re-executa do zero com o erro anterior limpo (o desfecho novo
+                # carimba status/output). Passos ``running`` órfãos de queda não
+                # existem hoje (nenhum caminho persiste step como ``running``);
+                # se aparecerem (dado legado), caem no caminho normal e
+                # RE-EXECUTAM — desfecho da execução interrompida é desconhecido
+                # e congelar bloquearia o plano; eventual duplicação é acusada
+                # pelo read-back/auto-crítica (F8).
+                run_step = step.model_copy(update={"error": None, "output_json": {}})
+            outcome = self._execute_single_step(run_step, plan=plan)
             executed_step_ids.append(step.id)
             events.append(outcome.event)
             if outcome.tool_call_id is not None:
@@ -312,7 +409,9 @@ class ModelingExecutorService:
     # single-step execution (extension seam for the Fase 2 agentic loop)
     # ------------------------------------------------------------------
 
-    def _execute_single_step(self, step: ModelingPlanStep, *, plan: ModelingPlan) -> _StepOutcome:
+    def _execute_single_step(
+        self, step: ModelingPlanStep, *, plan: ModelingPlan, from_expansion: bool = False
+    ) -> _StepOutcome:
         """Run one runnable step end-to-end and return its outcome.
 
         Dispatch → unwrap inner Fusion failures → register artifacts →
@@ -341,6 +440,22 @@ class ModelingExecutorService:
             plan_id=plan.id,
         )
 
+        # F7 (P5): resolução de posicionamento paramétrico ANTES do dispatch
+        # (atrás de flag; probe só quando o passo carrega ref/é declarativo).
+        # Inline → reescreve args; tool declarativa → expande e executa cada
+        # concreto. Flag OFF / passo sem ref = no-op (caminho atual intacto).
+        try:
+            step, expanded_steps = self._maybe_resolve_spatial(
+                step, plan=plan, from_expansion=from_expansion
+            )
+        except SpatialRefError as exc:
+            return self._spatial_failure_outcome(step, plan, exc)
+        if expanded_steps is not None:
+            return self._run_expanded_steps(step, expanded_steps, plan)
+
+        # F8: estado ANTES do dispatch (carry-forward ou probe), p/ a proveniência.
+        prov_before = self._provenance_before_state(step, plan)
+
         started_at = time.perf_counter()
         output = self._dispatch_step(step, plan=plan)
         duration_ms = int((time.perf_counter() - started_at) * 1000)
@@ -348,6 +463,10 @@ class ModelingExecutorService:
         # antes da decisão de sucesso, senão falhas chegam como verdes.
         output = _unwrap_inner_fusion_result(output)
         output = self.artifacts.register_outputs(output, plan=plan, step=step)
+
+        # F8: grava o ChangeRecord (o que o passo criou/modificou/consumiu/
+        # deletou) em output["_provenance"] ANTES de persistir o tool_call.
+        self._attach_provenance(step, plan, output, prov_before)
 
         tool_call = self._record_tool_call(
             plan=plan, step=step, output=output, duration_ms=duration_ms
@@ -403,6 +522,414 @@ class ModelingExecutorService:
             tool_call_id=tool_call.id if tool_call is not None else None,
             event=event,
             ok=step_ok,
+        )
+
+    # ------------------------------------------------------------------
+    # F7: resolução de posicionamento paramétrico (pré-dispatch, flag-gated)
+    # ------------------------------------------------------------------
+
+    def _maybe_resolve_spatial(
+        self, step: ModelingPlanStep, *, plan: ModelingPlan, from_expansion: bool = False
+    ) -> tuple[ModelingPlanStep, list[ModelingPlanStep] | None]:
+        """Resolve refs/placement do passo antes do dispatch (Frente F7).
+
+        Retorna ``(step, expandidos)``: no-op/inline → ``(step', None)``; tool
+        declarativa F7 → ``(step, [passos concretos])``. Probe ``query_geometry``
+        e resolução só rodam quando o passo realmente carrega ref ou é
+        declarativo — flag OFF é no-op puro (caminho de coordenada absoluta).
+        """
+
+        from app.core.config import settings
+
+        # F9 Pilar 3 (Gate B): enforcement de coordenada relativa. Independente da
+        # flag de resolução — RECUSA um move_body cuja coordenada absoluta sobreponha
+        # outro corpo OU o deixe longe de todos (bugs reais: tampa sobreposta / a
+        # 80 mm), levantando SpatialRefError tipado (tratado em :417). Só move_body,
+        # só com a flag ON → no máximo 1 probe extra; flag OFF = no-op puro.
+        # NÃO checa o move_body que o PRÓPRIO resolver emitiu (from_expansion): esse
+        # já é o delta medido (place_body align=coplanar/edge/gap pode deixar offset
+        # lateral de propósito — re-checá-lo daria falso-positivo).
+        if (
+            settings.modeling_relative_enforcement_enabled
+            and step.tool_name == "fusion.move_body"
+            and not from_expansion
+        ):
+            from app.modeling.model_state import capture_model_state
+            from app.modeling.spatial_resolver import enforce_relative_coord
+
+            enforce_relative_coord(
+                capture_model_state(self, plan),
+                step.tool_name,
+                dict(step.input_json or {}),
+            )
+
+        # F8 Sub4: relação genérica (relate_bodies) → deriva medindo + expande nas
+        # primitivas F7. Atrás da própria flag (desacopla do gate F7); flag OFF =
+        # cai no caminho normal (o passo crua erra claro no adapter).
+        from app.modeling.relation_resolver import RELATE_TOOL
+
+        if settings.modeling_relation_placement_enabled and step.tool_name == RELATE_TOOL:
+            return self._resolve_relation_step(step, plan=plan)
+        if step.tool_name == RELATE_TOOL:
+            # Relation flag OFF: NÃO deixe o caminho F7 abaixo tentar resolver os
+            # @body refs do relate_bodies (o leftover-ref guard daria um erro
+            # enganoso "campo não suportado: moving"). Cai cru no adapter → erro
+            # claro fusion.spatial_not_resolved, como o invariante documenta.
+            return step, None
+
+        if not settings.modeling_spatial_resolution_enabled:
+            return step, None
+
+        from app.modeling.spatial_resolver import (
+            F7_PLACEMENT_TOOLS,
+            materialize_steps,
+            needs_resolution,
+            resolve_step,
+        )
+        from app.modeling.tool_registry import is_read_only
+
+        if not needs_resolution(
+            step.tool_name, step.input_json, read_only=is_read_only(step.tool_name)
+        ):
+            return step, None
+
+        # Probe ao vivo: o resolver precisa da geometria REAL (tokens/bbox/pontas)
+        # dos corpos já criados nos passos anteriores. capture_model_state é
+        # best-effort (None se não-fusion/falha); refs sem estado caem em
+        # SpatialRefError (erro tipado), não em mis-place.
+        from app.modeling.model_state import capture_model_state
+
+        state = capture_model_state(self, plan)
+        concrete, actions = resolve_step(step.tool_name, dict(step.input_json or {}), state)
+        self._tracer.record(
+            "executor.spatial_resolved",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.info,
+            message=f"F7: {step.tool_name} → {len(concrete)} passo(s) concreto(s)",
+            payload={
+                "step_id": step.id,
+                "tool_name": step.tool_name,
+                "concrete_tools": [c.tool_name for c in concrete],
+                "actions": [a.detail for a in actions],
+                "had_state": state is not None,
+                # Observabilidade F7: args concretos da junta + geometria das faces
+                # casadas (token → corpo/centro/normal) + bboxes — o trace mostra
+                # QUAL face ancorou e ONDE (diagnóstico de mis-place sem dump).
+                "placement": _placement_diag(concrete, state),
+            },
+            plan_id=plan.id,
+        )
+        # Inline (1→1, mesma tool): só reescreve os args resolvidos.
+        if step.tool_name not in F7_PLACEMENT_TOOLS and len(concrete) == 1:
+            return step.model_copy(update={"input_json": dict(concrete[0].input_json)}), None
+        # Declarativa (1→N): materializa os passos concretos para execução.
+        return step, materialize_steps(step, concrete)
+
+    def _resolve_relation_step(
+        self, step: ModelingPlanStep, *, plan: ModelingPlan
+    ) -> tuple[ModelingPlanStep, list[ModelingPlanStep] | None]:
+        """F8 Sub4: resolve um passo ``fusion.relate_bodies`` — probe ao vivo,
+        deriva a primitiva F7 medindo e materializa os passos concretos. Erro
+        tipado (``RelationUnderivableError`` ⊂ ``SpatialRefError``) propaga p/ o
+        ``_spatial_failure_outcome`` do chamador (nunca posiciona no escuro)."""
+
+        from app.modeling.model_state import capture_model_state
+        from app.modeling.relation_resolver import resolve_relation
+        from app.modeling.spatial_resolver import materialize_steps
+
+        state = capture_model_state(self, plan)
+        concrete, actions, derived = resolve_relation(dict(step.input_json or {}), state)
+        self._tracer.record(
+            "executor.relation_resolved",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.info,
+            message=f"F8: {step.tool_name} → {len(concrete)} passo(s) concreto(s)",
+            payload={
+                "step_id": step.id,
+                "tool_name": step.tool_name,
+                "kind": (step.input_json or {}).get("kind"),
+                "concrete_tools": [c.tool_name for c in concrete],
+                "actions": [a.detail for a in actions],
+                "had_state": state is not None,
+                # Observabilidade F8: role→primitiva derivada + geometria das faces
+                # casadas (token → corpo/centro/normal) + bboxes. O trace explica
+                # SOZINHO onde a peça foi ancorada (ex.: aro lateral vs centro).
+                "derived": {
+                    "primitive_tool": derived.primitive_tool,
+                    "primitive_args": derived.primitive_args,
+                    "measured": derived.measured,
+                    "notes": derived.notes,
+                },
+                "placement": _placement_diag(concrete, state),
+            },
+            plan_id=plan.id,
+        )
+        return step, materialize_steps(step, concrete)
+
+    def _run_expanded_steps(
+        self,
+        original: ModelingPlanStep,
+        concrete: list[ModelingPlanStep],
+        plan: ModelingPlan,
+    ) -> _StepOutcome:
+        """Executa os passos concretos de uma tool declarativa F7 em sequência e
+        agrega num único ``_StepOutcome`` (para o chamador, a placement é 1
+        passo). Para no primeiro que falhar — os seguintes dependem dele."""
+
+        # Constituição (inegociável): uma tool declarativa `additive` NÃO pode
+        # "lavar" um concreto high_risk/destrutivo (ex.: combine_bodies da
+        # combine-DENTRO) e auto-executá-lo sem aprovação humana. Pré-varre e
+        # BLOQUEIA a expansão inteira ANTES de executar qualquer passo (fail-safe,
+        # sem deixar corpos soltos). A UX de aprovar o sub-passo é follow-up.
+        # Gate pela CATEGORIA intrínseca do concreto — NÃO pelo risk_level herdado
+        # do declarativo (esse já foi consumido pelo gate de aprovação no nível do
+        # plano; re-checá-lo re-bloquearia um placement já aprovado pelo humano).
+        from app.modeling.tool_registry import is_blocked, is_destructive, is_high_risk
+
+        # Combine-DENTRO (high_risk) só auto-executa quando o passo declarativo FOI
+        # aprovado pelo dono no card do plano — apply_modeling_policy marca
+        # distribute_along+alternate como approval_required, então o card disclosa a
+        # fusão ANTES de executar. Sem essa aprovação → bloqueia (fail-safe da
+        # constituição: human-in-the-loop p/ a fusão dos corpos).
+        expansion_approved = (
+            original.approval_required and original.status == ModelingStepStatus.approved
+        )
+        # Defense-in-depth (constituição): a pré-varredura cobre TAMBÉM os
+        # destrutivos — nenhum resolver atual emite concreto destrutivo, mas se
+        # um vier a emitir (ex.: delete/rollback), ele NÃO pode auto-executar
+        # lavado por um declarativo additive sem aprovação humana.
+        blocked = [
+            c
+            for c in concrete
+            if is_high_risk(c.tool_name) or is_blocked(c.tool_name) or is_destructive(c.tool_name)
+        ]
+        if blocked and not expansion_approved:
+            return self._spatial_expansion_blocked(original, blocked, plan)
+
+        outcomes: list[_StepOutcome] = []
+        for concrete_step in concrete:
+            # Concretos não são F7 nem carregam ref → o resolver F7 é no-op p/ eles.
+            # ``from_expansion=True`` também ISENTA o enforcement F9 (Gate B): o
+            # move_body concreto é o delta JÁ medido pelo resolver, não um chute.
+            oc = self._execute_single_step(concrete_step, plan=plan, from_expansion=True)
+            outcomes.append(oc)
+            if not oc.ok:
+                break
+
+        # Expansão VAZIA = no-op de sucesso (placement cujo Δ≈0: o corpo já está na
+        # posição calculada — comum em edição). all([])==True; não tratar como falha.
+        ok = all(o.ok for o in outcomes)
+        n_ok = sum(1 for o in outcomes if o.ok)
+        last = outcomes[-1] if outcomes else None
+
+        def _expanded_entry(o: _StepOutcome) -> dict[str, Any]:
+            # F8: PRESERVA o _provenance de cada concreto (gravado por
+            # _attach_provenance dentro de _execute_single_step). Sem isto,
+            # history_from_plan reconstrói histórico VAZIO p/ todo placement/
+            # relação (a auto-crítica rodaria cega — o coração do F8.D1).
+            entry: dict[str, Any] = {"tool_name": o.step.tool_name, "ok": o.ok}
+            prov = o.output.get("_provenance") if isinstance(o.output, dict) else None
+            if prov is not None:
+                entry["_provenance"] = prov
+            return entry
+
+        agg_output: dict[str, Any] = {
+            "ok": ok,
+            "tool_name": original.tool_name,
+            "transport": "backend",
+            "mcp_server": "spatial_resolver",
+            "expanded": [_expanded_entry(o) for o in outcomes],
+            "message": (
+                last.output.get("message")
+                if last
+                else "Placement: corpo já na posição calculada (sem movimento)."
+            ),
+        }
+        status = ModelingStepStatus.completed if ok else ModelingStepStatus.failed
+        updated = original.model_copy(
+            update={
+                "status": status,
+                "output_json": agg_output,
+                "error": None if ok else "F7: passo concreto falhou",
+                "completed_at": now_utc(),
+            }
+        )
+        return _StepOutcome(
+            step=updated,
+            output=agg_output,
+            tool_call_id=(last.tool_call_id if last is not None else None),
+            event=f"{original.seq}. {original.tool_name} → {n_ok}/{len(concrete)} concreto(s)",
+            ok=ok,
+        )
+
+    def _spatial_expansion_blocked(
+        self,
+        original: ModelingPlanStep,
+        blocked: list[ModelingPlanStep],
+        plan: ModelingPlan,
+    ) -> _StepOutcome:
+        """Bloqueia (fail-safe) uma expansão F7 que conteria concreto high_risk
+        sem aprovação. Passo declarativo vira FALHO com erro tipado claro."""
+
+        names = ", ".join(sorted({c.tool_name for c in blocked}))
+        msg = (
+            f"Placement F7 expande para operação que exige aprovação humana "
+            f"({names}); não auto-executa (constituição: high_risk/destrutivo no "
+            f"caminho feliz). Aprovação de sub-passo é follow-up."
+        )
+        output: dict[str, Any] = {
+            "ok": False,
+            "tool_name": original.tool_name,
+            "transport": "backend",
+            "mcp_server": "spatial_resolver",
+            "error_code": "fusion.spatial_expansion_requires_approval",
+            "message": msg,
+        }
+        self._tracer.record(
+            "executor.step_error",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.warn,
+            message=f"Step {original.seq} F7 bloqueado: expande p/ {names} (aprovação)",
+            payload={"step_id": original.id, "tool_name": original.tool_name, "blocked": names},
+            plan_id=plan.id,
+        )
+        tool_call = self._record_tool_call(plan=plan, step=original, output=output, duration_ms=0)
+        updated = original.model_copy(
+            update={
+                "status": ModelingStepStatus.failed,
+                "output_json": output,
+                "error": msg,
+                "completed_at": now_utc(),
+            }
+        )
+        return _StepOutcome(
+            step=updated,
+            output=output,
+            tool_call_id=(tool_call.id if tool_call is not None else None),
+            event=f"{original.seq}. {original.tool_name} bloqueado (expansão high_risk)",
+            ok=False,
+        )
+
+    def _spatial_failure_outcome(
+        self, step: ModelingPlanStep, plan: ModelingPlan, exc: SpatialRefError
+    ) -> _StepOutcome:
+        """Converte um erro de resolução F7 num passo FALHO claro (nunca chuta)."""
+
+        code = getattr(exc, "code", "fusion.spatial_ref_unresolved")
+        output: dict[str, Any] = {
+            "ok": False,
+            "tool_name": step.tool_name,
+            "transport": "backend",
+            "mcp_server": "spatial_resolver",
+            "error_code": code,
+            "message": str(exc),
+        }
+        self._tracer.record(
+            "executor.step_error",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.error,
+            message=f"Step {step.seq} F7 não resolvido: {exc}",
+            payload={"step_id": step.id, "tool_name": step.tool_name, "error_code": code},
+            plan_id=plan.id,
+        )
+        # Paridade com a falha de dispatch normal: persiste o tool_call (status
+        # error) p/ a falha F7 não sumir do painel de tool_calls.
+        tool_call = self._record_tool_call(plan=plan, step=step, output=output, duration_ms=0)
+        updated = step.model_copy(
+            update={
+                "status": ModelingStepStatus.failed,
+                "output_json": output,
+                "error": str(exc),
+                "completed_at": now_utc(),
+            }
+        )
+        return _StepOutcome(
+            step=updated,
+            output=output,
+            tool_call_id=(tool_call.id if tool_call is not None else None),
+            event=f"{step.seq}. {step.tool_name} não resolvido (F7)",
+            ok=False,
+        )
+
+    # ------------------------------------------------------------------
+    # F8: proveniência de operações (captura before/after, flag-gated)
+    # ------------------------------------------------------------------
+
+    def _provenance_active(self, step: ModelingPlanStep) -> bool:
+        from app.core.config import settings
+
+        if not settings.modeling_provenance_enabled:
+            return False
+        if not step.tool_name.startswith("fusion."):
+            return False
+        # Só passos MUTATIVOS — read-only (query_geometry probe) não gera
+        # proveniência (e evita recursão na captura).
+        from app.modeling.tool_registry import is_read_only
+
+        return not is_read_only(step.tool_name)
+
+    def _provenance_before_state(self, step: ModelingPlanStep, plan: ModelingPlan):
+        """Estado ANTES do passo: carry-forward do after do passo anterior (mesmo
+        plano) ou um probe fresco. ``None`` se a proveniência está inativa."""
+
+        if not self._provenance_active(step):
+            return None
+        if self._provenance_carry is not None and self._provenance_carry[0] == plan.id:
+            return self._provenance_carry[1]
+        from app.modeling.model_state import capture_model_state
+
+        return capture_model_state(self, plan)
+
+    def _attach_provenance(
+        self,
+        step: ModelingPlanStep,
+        plan: ModelingPlan,
+        output: dict[str, Any],
+        before_state: Any,
+    ) -> None:
+        """Captura o after, monta o ChangeRecord e o anexa em
+        ``output["_provenance"]`` (zero-migration) + trace; carrega o after p/ ser
+        o before do próximo passo. Best-effort — nunca quebra a execução."""
+
+        if not self._provenance_active(step):
+            return
+        try:
+            from app.modeling.model_state import capture_model_state
+            from app.modeling.provenance import build_change_record
+            from app.modeling.tool_registry import descriptor
+
+            after = capture_model_state(self, plan)
+            self._provenance_carry = (plan.id, after)
+            desc = descriptor(step.tool_name)
+            category = desc.category.value if desc is not None else None
+            record = build_change_record(
+                step.tool_name,
+                before_state,
+                after,
+                category=category,
+                seq=step.seq,
+                step_id=step.id,
+            )
+        except Exception:  # noqa: BLE001 - proveniência é observabilidade, best-effort
+            return
+        if isinstance(output, dict):
+            output["_provenance"] = record.model_dump(mode="json")
+        self._tracer.record(
+            "executor.provenance_recorded",
+            source=ModelingTraceSource.backend,
+            level=ModelingTraceLevel.info,
+            message=f"Step {step.seq} proveniência: {record.summary}",
+            payload={
+                "step_id": step.id,
+                "tool_name": step.tool_name,
+                "summary": record.summary,
+                "created": len(record.created),
+                "modified": len(record.modified),
+                "consumed": len(record.consumed),
+                "deleted": len(record.deleted),
+                "uncertain": len(record.uncertain),
+            },
+            plan_id=plan.id,
         )
 
     # ------------------------------------------------------------------

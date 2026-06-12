@@ -27,6 +27,8 @@ def _query_inner(**overrides):
         "name": "Pino",
         "stable_id": "abc123def456",
         "dimensions_mm": [10, 10, 20],
+        "bbox_min_mm": [-5, -5, 0],
+        "bbox_max_mm": [5, 5, 20],
         "is_solid": True,
         "is_closed": True,
         "surface_area_mm2": 706.8,
@@ -59,8 +61,22 @@ def _query_inner(**overrides):
                 "length_mm": 31.4,
                 "is_circular": True,
                 "radius_mm": 5.0,
+                "start_point_mm": None,
+                "end_point_mm": None,
+                "direction": None,
                 "adjacent_face_tokens": ["TOK_FACE_CYL", "TOK_FACE_TOP"],
-            }
+            },
+            {
+                "edge_index": 1,
+                "edge_token": "TOK_EDGE_STRAIGHT",
+                "length_mm": 20.0,
+                "is_circular": False,
+                "radius_mm": None,
+                "start_point_mm": [0, 0, 0],
+                "end_point_mm": [0, 0, 20],
+                "direction": [0, 0, 1],
+                "adjacent_face_tokens": ["TOK_FACE_CYL"],
+            },
         ],
     }
     body.update(overrides)
@@ -102,6 +118,37 @@ def test_parser_tolerates_missing_fields() -> None:
     state = model_state_from_query_output(minimal)
     assert state is not None and state.bodies[0].name == "X"
     assert state.bodies[0].faces == [] and state.bodies[0].edges == []
+    # F7: campos novos ausentes (adapter antigo) -> None, sem quebrar.
+    assert state.bodies[0].bbox_min_mm is None and state.bodies[0].bbox_max_mm is None
+
+
+def test_parser_reads_f7_bbox_and_edge_endpoints() -> None:
+    # F7 (P2): bbox absoluto do corpo + pontas/direção de aresta reta, que o
+    # resolver de posicionamento consome (ancorar bbox.max_z, eixo da aresta).
+    state = model_state_from_query_output(_query_inner())
+    body = state.bodies[0]
+    assert body.bbox_min_mm == [-5, -5, 0] and body.bbox_max_mm == [5, 5, 20]
+    circ, straight = body.edges[0], body.edges[1]
+    # Circular: sem pontas/direção (eixo vem do centro/raio).
+    assert circ.start_point_mm is None and circ.direction is None
+    # Reta: pontas e direção unitária preservadas.
+    assert straight.start_point_mm == [0, 0, 0] and straight.end_point_mm == [0, 0, 20]
+    assert straight.direction == [0, 0, 1] and straight.is_circular is False
+
+
+def test_parser_preserves_is_open_boundary() -> None:
+    # F9 F0: o parser descartava ``is_open_boundary`` (a borda de abertura que
+    # o script mede); sem ele ``cover_opening`` e o estado semântico cegam.
+    faces = [
+        {"face_token": "TOK_OPEN", "type": "planar", "is_open_boundary": True},
+        {"face_token": "TOK_SOLID", "type": "planar", "is_open_boundary": False},
+        {"face_token": "TOK_LEGACY", "type": "planar"},  # adapter antigo -> None
+    ]
+    state = model_state_from_query_output(_query_inner(faces=faces))
+    by_token = {f.token: f for f in state.bodies[0].faces}
+    assert by_token["TOK_OPEN"].is_open_boundary is True
+    assert by_token["TOK_SOLID"].is_open_boundary is False
+    assert by_token["TOK_LEGACY"].is_open_boundary is None
 
 
 def test_parser_returns_none_without_bodies() -> None:

@@ -422,7 +422,7 @@ class ChatSession(BaseModel):
         runs, normalise empty strings here so the model loads cleanly.
         """
 
-        if isinstance(value, str) and not value.strip():
+        if value is None or (isinstance(value, str) and not value.strip()):
             return "Sem título"
         return value
 
@@ -544,16 +544,12 @@ class ChatStreamRequest(BaseModel):
     agent_ids: list[str] = Field(default_factory=list)
     project_id: str | None = None
     folder_id: str | None = None
-    project_scope_mode: Literal["project_only", "project_plus_global", "global_only"] = (
-        "global_only"
-    )
     context_project_ids: list[str] = Field(default_factory=list)
-    context_document_ids: list[str] = Field(
-        default_factory=list, max_length=MAX_CONTEXT_DOCUMENT_IDS
-    )
-    context_knowledge_base_ids: list[str] = Field(
-        default_factory=list, max_length=MAX_CONTEXT_KNOWLEDGE_BASE_IDS
-    )
+    # max_length é validado APÓS o dedup em ``validate_response_modes`` (não no
+    # Field), senão um payload com duplicatas que caberia no limite após dedup
+    # seria rejeitado com 422 sobre a contagem crua.
+    context_document_ids: list[str] = Field(default_factory=list)
+    context_knowledge_base_ids: list[str] = Field(default_factory=list)
     reasoning_override: Literal["default", "long"] = "default"
     deep_research: bool = False
     deep_research_max_tool_calls: int = Field(default=20, ge=1, le=100)
@@ -561,12 +557,8 @@ class ChatStreamRequest(BaseModel):
     image_model_id: str | None = None
     reasoning_summary: Literal["off", "auto"] = "off"
     multi_agent_mode: bool = False
-    attached_document_ids: list[str] = Field(
-        default_factory=list, max_length=MAX_CHAT_ATTACHMENT_DOCUMENT_IDS
-    )
-    attached_file_ids: list[str] = Field(
-        default_factory=list, max_length=MAX_CHAT_ATTACHMENT_FILE_IDS
-    )
+    attached_document_ids: list[str] = Field(default_factory=list)
+    attached_file_ids: list[str] = Field(default_factory=list)
     modeling_3d: ChatModeling3DContext = Field(default_factory=ChatModeling3DContext)
 
     @model_validator(mode="after")
@@ -575,6 +567,21 @@ class ChatStreamRequest(BaseModel):
         self.context_knowledge_base_ids = list(dict.fromkeys(self.context_knowledge_base_ids))
         self.attached_document_ids = list(dict.fromkeys(self.attached_document_ids))
         self.attached_file_ids = list(dict.fromkeys(self.attached_file_ids))
+        # Limites aplicados após o dedup (ver nota nos Fields).
+        if len(self.context_document_ids) > MAX_CONTEXT_DOCUMENT_IDS:
+            raise ValueError(f"context_document_ids excede o máximo de {MAX_CONTEXT_DOCUMENT_IDS}.")
+        if len(self.context_knowledge_base_ids) > MAX_CONTEXT_KNOWLEDGE_BASE_IDS:
+            raise ValueError(
+                f"context_knowledge_base_ids excede o máximo de {MAX_CONTEXT_KNOWLEDGE_BASE_IDS}."
+            )
+        if len(self.attached_document_ids) > MAX_CHAT_ATTACHMENT_DOCUMENT_IDS:
+            raise ValueError(
+                f"attached_document_ids excede o máximo de {MAX_CHAT_ATTACHMENT_DOCUMENT_IDS}."
+            )
+        if len(self.attached_file_ids) > MAX_CHAT_ATTACHMENT_FILE_IDS:
+            raise ValueError(
+                f"attached_file_ids excede o máximo de {MAX_CHAT_ATTACHMENT_FILE_IDS}."
+            )
         if self.deep_research and self.response_mode == "image":
             raise ValueError("Deep Research e geração de imagem são modos mutuamente exclusivos.")
         if self.reasoning_summary != "off" and self.response_mode != "text":
@@ -787,7 +794,10 @@ class ProjectFolderDeleteResult(BaseModel):
 class ModelingCapability(BaseModel):
     software: ModelingSoftware
     connected: bool = False
-    transport: Literal["stdio", "http", "mock", "local"] = "mock"
+    # ``mcp_http`` = servidor MCP standalone (ADR-017). Sem ele no Literal,
+    # GET /api/3d/capabilities estourava ValidationError (500) exatamente no
+    # modo standalone e derrubava o diagnóstico da UI.
+    transport: Literal["stdio", "http", "mock", "local", "mcp_http"] = "mock"
     tools: list[str] = Field(default_factory=list)
     status: str = "adapter_mock"
     detail: str = ""
@@ -869,6 +879,25 @@ class ModelStateFace(BaseModel):
     radius_mm: float | None = None  # cilíndrica/cônica/esférica
     normal_axis: str | None = None  # +x..-z quando planar
     center_mm: list[float] | None = None
+    # F8 Sub4: face na borda de uma abertura (ex.: topo de uma caixa ocada). O
+    # script (atrás do gate) marca medindo o B-Rep; None no mock. A relação
+    # ``cover_opening`` mira a maior face com esta flag; sem ela cai no top_planar.
+    is_open_boundary: bool | None = None
+    # F9 Pilar 2: papéis semânticos DERIVADos por medição (top_planar/bottom_planar/
+    # largest_planar/open_boundary) p/ o LLM ECOAR em vez de copiar token. Vazio
+    # quando o derive não roda (flag OFF) ou o papel é ambíguo (NUNCA chuta).
+    roles: list[str] = Field(default_factory=list)
+
+
+class BodyAdjacency(BaseModel):
+    """F9 Pilar 2: adjacência DERIVADA entre dois corpos (quem encosta/interfere em
+    quem). Medida por folga no eixo do mate + sobreposição no plano perpendicular —
+    é o "touches" que o LLM lê p/ entender a montagem entre steps."""
+
+    other: str  # nome (ou stable_id) do outro corpo
+    axis: str | None = None  # eixo do mate (x/y/z)
+    gap_mm: float | None = None  # folga medida (≈0 = contato; <0 = penetração)
+    interference: bool = False  # True quando os sólidos se penetram
 
 
 class ModelStateEdge(BaseModel):
@@ -876,6 +905,11 @@ class ModelStateEdge(BaseModel):
     length_mm: float | None = None
     is_circular: bool = False
     radius_mm: float | None = None  # arestas em arco/círculo (furos/knuckle)
+    # F7: pontas/direção de arestas retas (None em circulares). O resolver de
+    # posicionamento ancora "along(fraction)" e deriva eixo de junta daqui.
+    start_point_mm: list[float] | None = None
+    end_point_mm: list[float] | None = None
+    direction: list[float] | None = None  # vetor unitário (end - start)
     adjacent_face_tokens: list[str] = Field(default_factory=list)
 
 
@@ -883,13 +917,25 @@ class ModelStateBody(BaseModel):
     stable_id: str | None = None
     name: str | None = None
     dimensions_mm: list[float] | None = None
+    # F7: bbox absoluto (min/max em mm). dimensions_mm é só o tamanho; o
+    # resolver ancora por "bbox.max_z"/"corner"/"center" a partir destes.
+    bbox_min_mm: list[float] | None = None
+    bbox_max_mm: list[float] | None = None
     is_solid: bool | None = None
     is_closed: bool | None = None
     surface_area_mm2: float | None = None
+    # F8: volume p/ fechar o delta de proveniência. None até o read-back emitir
+    # (toque de script fora do escopo puro); o diff só usa quando presente.
+    volume_mm3: float | None = None
     face_count: int | None = None
     edge_count: int | None = None
     faces: list[ModelStateFace] = Field(default_factory=list)
     edges: list[ModelStateEdge] = Field(default_factory=list)
+    # F9 Pilar 2: adjacências DERIVADAS (quem este corpo encosta/penetra) +
+    # rótulo de papel best-effort ("container"/"lid"/...). Vazio/None quando o
+    # derive não roda (flag OFF) ou o sinal é ambíguo (NUNCA rotula errado).
+    touches: list[BodyAdjacency] = Field(default_factory=list)
+    body_label: str | None = None
 
 
 class ModelState(BaseModel):
@@ -903,6 +949,174 @@ class ModelState(BaseModel):
     bodies: list[ModelStateBody] = Field(default_factory=list)
     timeline_count: int | None = None
     parameters: dict[str, str] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# F8 — Proveniência de operações + mudanças (ADR-023). Vocabulário comum de
+# IDENTIDADE entre os subsistemas: handle estável que JÁ existe (stable_id de
+# corpo, entityToken de face/aresta) — NÃO um token opaco novo.
+# ---------------------------------------------------------------------------
+
+
+class EntityRef(BaseModel):
+    """Referência a uma entidade por handle ESTÁVEL (não opaco-novo)."""
+
+    kind: Literal["body", "face", "edge", "sketch_curve"]
+    handle: str  # stable_id (corpo) | entityToken (face/aresta) | curve_id (curva)
+    name: str | None = None  # apelido legível (body.name / role), quando há
+    parent_body: str | None = None  # corpo dono (stable_id/name), p/ face/aresta
+
+
+class GeometricDelta(BaseModel):
+    """Métrica medida antes→depois de uma operação (numérica/vetorial)."""
+
+    metric: str  # bbox_min_mm|bbox_max_mm|surface_area_mm2|volume_mm3|face_count|edge_count
+    before: Any | None = None
+    after: Any | None = None
+    delta: Any | None = None  # escalar p/ números, lista p/ vetores, None se N/A
+
+
+class EntityChange(BaseModel):
+    """Uma entidade afetada por uma operação."""
+
+    ref: EntityRef
+    # created/modified/deleted/consumed (absorvida por feature) ou uncertain
+    # (handle sumiu mas a categoria do tool não previa — não afirma errado).
+    op: Literal["created", "modified", "consumed", "deleted", "uncertain"]
+    deltas: list[GeometricDelta] = Field(default_factory=list)
+    notes: str | None = None
+
+
+class ChangeRecord(BaseModel):
+    """Proveniência determinística de UM step: o que criou/modificou/consumiu/
+    deletou + delta geométrico. Produzido por código (mede o B-Rep), não pelo LLM."""
+
+    tool_name: str
+    tool_category: str | None = None  # ToolCategory.value
+    seq: int | None = None
+    step_id: str | None = None
+    created: list[EntityChange] = Field(default_factory=list)
+    modified: list[EntityChange] = Field(default_factory=list)
+    consumed: list[EntityChange] = Field(default_factory=list)
+    deleted: list[EntityChange] = Field(default_factory=list)
+    uncertain: list[EntityChange] = Field(default_factory=list)
+    bodies_before: int | None = None
+    bodies_after: int | None = None
+    captured_before: bool = False
+    captured_after: bool = False
+    summary: str = ""
+
+
+class OperationHistory(BaseModel):
+    """Histórico agregado (derivado dos ChangeRecords) — consultável e
+    renderizável p/ o contexto do planner/corretor."""
+
+    records: list[ChangeRecord] = Field(default_factory=list)
+    current_entities: list[EntityRef] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# F8 Sub 3 — Auto-crítica estruturada (ADR-023). Substitui o juiz-de-visão como
+# fonte de feedback: classifica FALTOU/DEMAIS/ERRADO/CERTO por checagem
+# DETERMINÍSTICA (geométrica). INVARIANTE: REPORTA, nunca auto-executa correção.
+# ---------------------------------------------------------------------------
+
+
+class IntentSpec(BaseModel):
+    """O 'esperado' normalizado contra o qual o avaliador compara. Derivado
+    barato dos ``expected_*`` dos steps + tools declarativas + acceptance."""
+
+    expected_body_count: int | None = None
+    expected_bodies: list[dict[str, Any]] = Field(default_factory=list)  # {name?, dims_mm?}
+    disjoint_groups: list[list[str]] = Field(default_factory=list)  # refs que NÃO podem interferir
+    acceptance_text: str | None = None  # camada semântica (julgamento do LLM)
+
+
+class Finding(BaseModel):
+    kind: Literal["missing", "excess", "wrong", "correct"]
+    source: Literal["deterministic", "semantic"]
+    severity: Literal["info", "warn", "error", "critical"]
+    check_id: str  # body_count|orphan_body|interference|op_no_effect|...
+    entity_ref: str | None = None  # stable_id/token/op — NUNCA coordenada solta
+    detail: str
+    expected: Any | None = None
+    measured: Any | None = None
+
+
+class ModelVerdict(BaseModel):
+    overall: Literal["ok", "incomplete", "diverged", "broken"]
+    findings: list[Finding] = Field(default_factory=list)
+    summary: str = ""
+    # True quando os checks geométricos cobriram a intenção e NÃO precisou de LLM.
+    deterministic_complete: bool = False
+
+
+# ---------------------------------------------------------------------------
+# F8 Sub 4 — Posicionamento por RELAÇÃO genérica + verificador geométrico
+# (ADR-023). O LLM declara uma relação de vocabulário FECHADO; o backend DERIVA a
+# geometria MEDINDO o ModelState e a expande nas primitivas F7 provadas
+# (place_body/align_axis/distribute_along). Cada kind = composição de primitivas
+# mensuráveis (barreira contra macro-por-produto). O verificador REPORTA contato/
+# interferência/DOF; o reparo determinístico é proposto, não auto-aplicado.
+# ---------------------------------------------------------------------------
+
+
+class RelationSpec(BaseModel):
+    """Relação declarativa entre dois corpos (vocabulário fechado). Referências
+    por NOME legível (``@body('Tampa')``/``Tampa``) — nunca token opaco."""
+
+    kind: Literal[
+        "flush_mate",
+        "cover_opening",
+        "seat_in_pocket",
+        "coaxial_insert",
+        "hinge_along_shared_edge",
+        "distribute_on_edge",
+    ]
+    moving: str  # corpo que se move até a referência
+    reference: str  # corpo de destino (fica parado)
+    moving_role: str | None = None  # override do role da face do moving
+    reference_role: str | None = None  # override do role da face da referência
+    count: int | None = None  # distribute_on_edge
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class DerivedRelation(BaseModel):
+    """Resultado de MEDIR o estado p/ uma ``RelationSpec``: a primitiva F7
+    concreta (tool + args com descritores role/predicado) que o resolver F7
+    expande. ``measured`` registra o que foi medido (raio, role escolhido)."""
+
+    kind: str
+    primitive_tool: str  # fusion.place_body | fusion.align_axis | fusion.distribute_along
+    primitive_args: dict[str, Any] = Field(default_factory=dict)
+    measured: dict[str, Any] = Field(default_factory=dict)
+    notes: str = ""
+
+
+class GeometricContactReport(BaseModel):
+    """Verificação GEOMÉTRICA determinística de uma relação após execução:
+    contato (faces encostam), interferência (sobreposição de volume) e DOF
+    (graus de liberdade pela junta). **Só reporta** — o reparo é proposto à parte."""
+
+    relation_kind: str
+    moving: str
+    reference: str
+    contact_ok: bool = False
+    gap_mm: float | None = None  # folga medida entre os corpos no eixo do mate
+    interference_mm3: float = 0.0  # sobreposição de bbox (deveria ser ~0)
+    dof_ok: bool | None = None  # DOF medido bate com o esperado da junta
+    ok: bool = True
+    findings: list[str] = Field(default_factory=list)
+
+
+class RelationRepairProposal(BaseModel):
+    """Correção determinística PROPOSTA (não auto-aplicada — gate P6): re-junta
+    com ``offset`` medido p/ fechar a folga, ou afastar p/ matar interferência."""
+
+    relation_kind: str
+    reason: str  # gap | interference
+    offset_mm: float  # delta a aplicar na junta (sinal = direção)
+    detail: str = ""
 
 
 class ModelingSubGoalStatus(StrEnum):
@@ -962,11 +1176,25 @@ class ModelingPlan(BaseModel):
     planner em edições/blocos seguintes (faces/edges com tokens estáveis +
     medidas), substituindo o contexto textual pobre. ``None`` quando a captura
     falhou, não há body, ou o software não suporta (JSONB, migration-free)."""
+    model_verdict: ModelVerdict | None = None
+    """F8 (Sub3.2): auto-crítica estruturada produzida (best-effort) ao fim da
+    execução quando ``modeling_self_critique_enabled`` está ligado — compara o
+    ``IntentSpec`` derivado do plano com o histórico de proveniência + o
+    ``model_state`` real e classifica faltou/demais/errado/certo. **Só reporta**;
+    entra no contexto do próximo bloco como feedback. ``None`` quando a flag está
+    OFF ou a avaliação não se aplica (JSONB, migration-free)."""
     sub_goals: list[ModelingSubGoal] = Field(default_factory=list)
     """F2: decomposição hierárquica (só no plano ``primary`` quando o
     planejamento hierárquico está ligado). Cada sub-objetivo é executado como
     um bloco ``kind=edit`` com ``parent_plan_id`` = este plano. Vazio no fluxo
     one-shot legado."""
+    trace_id: str | None = None
+    """Trace de observabilidade da PROPOSTA do plano — a MESMA fonte do dump
+    SSE ``_modeling_plan_metadata`` (o contextvar bindado por ``start_trace``),
+    persistida no payload (JSONB, migration-free). Sem isto o contrato REST
+    (``GET/POST /api/3d/plans...``) perdia o trace na primeira re-busca do
+    card e o modal de diagnóstico se auto-desfazia (RF-024). ``None`` em
+    planos antigos ou com observabilidade desligada."""
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
 
@@ -979,10 +1207,11 @@ class ModelingPlanCreate(BaseModel):
     kind: ModelingPlanKind = ModelingPlanKind.primary
     parent_plan_id: str | None = None
     software_override: ModelingSoftware | None = None
-    knowledge_base_ids: list[str] = Field(default_factory=list, max_length=12)
+    # max_length validado após o dedup em ``normalize_software_override``.
+    knowledge_base_ids: list[str] = Field(default_factory=list)
     # F4: imagens/arquivos anexados pelo usuário (image-to-model). O planner
     # analisa cada um (vision/Blender) e injeta a descrição no contexto.
-    attached_file_ids: list[str] = Field(default_factory=list, max_length=8)
+    attached_file_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def normalize_software_override(self) -> ModelingPlanCreate:
@@ -990,6 +1219,10 @@ class ModelingPlanCreate(BaseModel):
             self.software_override = None
         self.knowledge_base_ids = list(dict.fromkeys(self.knowledge_base_ids))
         self.attached_file_ids = list(dict.fromkeys(self.attached_file_ids))
+        if len(self.knowledge_base_ids) > 12:
+            raise ValueError("knowledge_base_ids excede o máximo de 12.")
+        if len(self.attached_file_ids) > 8:
+            raise ValueError("attached_file_ids excede o máximo de 8.")
         return self
 
 

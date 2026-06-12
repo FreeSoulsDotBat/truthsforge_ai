@@ -9,6 +9,24 @@
 
 export const PLACEHOLDER = "—";
 
+// Rótulos PT-BR para status de plano/etapa (produto é PT-BR — AGENTS.md).
+// Fonte única compartilhada por ModelingPlanCard e ModelingEditCard.
+const STATUS_LABEL: Record<string, string> = {
+  draft: "rascunho",
+  waiting_approval: "aguardando aprovação",
+  approved: "aprovado",
+  running: "executando",
+  completed: "concluído",
+  rejected: "rejeitado",
+  failed: "falhou",
+  pending: "pendente"
+};
+
+export function statusLabel(status: string | undefined | null): string {
+  if (!status) return PLACEHOLDER;
+  return STATUS_LABEL[status] ?? status;
+}
+
 export function formatDurationMs(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || Number.isNaN(ms)) return PLACEHOLDER;
   if (ms < 0) return PLACEHOLDER;

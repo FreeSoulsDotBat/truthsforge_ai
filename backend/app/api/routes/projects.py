@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, HTTPException
 
 from app.chat.session_cleanup import delete_chat_session_with_files
@@ -11,6 +13,8 @@ from app.core.contracts import (
     ProjectUpdate,
 )
 from app.storage.store import get_store
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -110,6 +114,15 @@ def delete_project_folder(folder_id: str) -> ProjectFolderDeleteResult:
             delete_chat_session_with_files(store, session_id, delete_files=True)
             deleted_chat_session_ids.append(session_id)
         except HTTPException:
+            continue
+        except Exception:
+            # Falha não-HTTP (storage/filesystem) não deve abortar a exclusão
+            # da pasta inteira; registra e segue com as demais sessões.
+            logger.exception(
+                "Falha ao excluir sessão %s durante delete da pasta %s",
+                session_id,
+                folder_id,
+            )
             continue
 
     try:

@@ -106,9 +106,19 @@ def test_list_tools_exposes_fusion_allowlist(mcp_server):
                     return [tool.name for tool in listed.tools]
 
     names = asyncio.run(_go())
-    assert set(names) == set(ADAPTER_FUSION_TOOLS)
+    from app.modeling.mcp_standalone.tools import executable_fusion_tools
+
+    # Paridade list/call real: só tools com handler executável no script são
+    # expostas (fusion.relate_bodies é UNRELEASED/expandida pré-dispatch e
+    # ficaria inexecutável para um cliente externo).
+    assert set(names) == set(executable_fusion_tools())
+    assert set(names) <= set(ADAPTER_FUSION_TOOLS)
+    assert "fusion.relate_bodies" not in names
     # run_script nunca é exposto (RF-023).
     assert "fusion.run_script" not in names
+    # Destrutivas nunca são anunciadas no standalone (sem humano no circuito).
+    assert "fusion.delete_body" not in names
+    assert "fusion.rollback_timeline" not in names
 
 
 def test_call_tool_returns_envelope(mcp_server):
@@ -119,6 +129,42 @@ def test_call_tool_returns_envelope(mcp_server):
     assert envelope["transport"] == "mcp_http"
     # Sem Fusion conectado, o servidor devolve envelope mock ok=True.
     assert envelope["ok"] is True
+
+
+def test_executable_fusion_tools_exclude_destructive_and_high_risk():
+    from app.modeling import tool_registry
+    from app.modeling.mcp_standalone.tools import executable_fusion_tools
+
+    names = executable_fusion_tools()
+    assert "fusion.delete_body" not in names
+    assert "fusion.rollback_timeline" not in names
+    assert not any(
+        tool_registry.is_destructive(name) or tool_registry.is_high_risk(name) for name in names
+    )
+    # Tools aditivas continuam na superfície executável.
+    assert "fusion.add_box" in names
+    assert "fusion.create_sketch" in names
+
+
+def test_execute_fusion_tool_refuses_destructive_directly():
+    """Defesa em profundidade: a recusa vale mesmo fora do tools/list."""
+    from app.modeling.mcp_standalone.server import execute_fusion_tool
+
+    adapter = FusionDesktopAdapter(enable_autodesk_mcp=False)
+    for tool in ("fusion.delete_body", "fusion.rollback_timeline"):
+        envelope = execute_fusion_tool(adapter, tool, {"body": "b1"})
+        assert envelope["ok"] is False
+        assert envelope["error_code"] == "fusion.human_approval_required"
+        assert envelope["retryable"] is False
+        assert "aprovação humana" in envelope["message"]
+
+
+def test_call_tool_refuses_destructive_via_mcp(mcp_server):
+    """End-to-end: cliente MCP com token válido NÃO executa destrutivo."""
+    client = StandaloneMCPClient(url=mcp_server.url, token=mcp_server.token)
+    envelope = client.execute_step(_step("fusion.delete_body", body="b1"))
+    assert envelope["ok"] is False
+    assert envelope["error_code"] == "fusion.human_approval_required"
 
 
 def test_call_tool_rejects_non_allowlisted(mcp_server):
@@ -179,6 +225,95 @@ def test_local_client_routes_fusion_via_mcp_http():
     )
     client.execute_step(internal)
     assert fake.calls == ["fusion.open_design"]  # inalterado
+
+
+# ------------------------------------------------------------ auth: token em disco
+
+
+def _patch_auth_settings(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from app.modeling.mcp_standalone import auth
+
+    monkeypatch.setattr(
+        auth,
+        "settings",
+        SimpleNamespace(modeling_mcp_server_token="", modeling_dir=tmp_path),
+    )
+    return auth
+
+
+def test_auth_new_token_created_with_o_excl_and_mode_600(monkeypatch, tmp_path):
+    import os
+
+    auth = _patch_auth_settings(monkeypatch, tmp_path)
+    opens: list[tuple[int, int]] = []
+    real_open = os.open
+
+    def tracking_open(path, flags, mode=0o777, **kwargs):
+        opens.append((flags, mode))
+        return real_open(path, flags, mode, **kwargs)
+
+    monkeypatch.setattr(auth.os, "open", tracking_open)
+
+    token = auth.load_or_create_token()
+    assert token
+    assert (tmp_path / auth.TOKEN_FILENAME).read_text(encoding="utf-8").strip() == token
+    flags, mode = opens[0]
+    assert flags & os.O_CREAT and flags & os.O_EXCL
+    assert mode == 0o600
+
+
+def test_auth_existing_token_is_reused(monkeypatch, tmp_path):
+    auth = _patch_auth_settings(monkeypatch, tmp_path)
+    (tmp_path / auth.TOKEN_FILENAME).write_text("tok-existente\n", encoding="utf-8")
+    assert auth.load_or_create_token() == "tok-existente"
+
+
+def test_auth_empty_token_file_restricts_perms_before_writing(monkeypatch, tmp_path):
+    """Ramo FileExistsError + arquivo vazio: chmod 0o600 ANTES de gravar o segredo,
+    sem janela world-readable entre write e chmod (POSIX)."""
+    import os
+    from pathlib import Path
+
+    auth = _patch_auth_settings(monkeypatch, tmp_path)
+    token_file = tmp_path / auth.TOKEN_FILENAME
+    token_file.write_text("", encoding="utf-8")
+
+    events: list[tuple[str, int]] = []
+    real_open = os.open
+
+    def tracking_open(path, flags, mode=0o777, **kwargs):
+        events.append(("open", flags))
+        return real_open(path, flags, mode, **kwargs)
+
+    real_chmod = Path.chmod
+
+    def tracking_chmod(self, mode, **kwargs):
+        events.append(("chmod", mode))
+        return real_chmod(self, mode, **kwargs)
+
+    monkeypatch.setattr(auth.os, "open", tracking_open)
+    monkeypatch.setattr(Path, "chmod", tracking_chmod)
+
+    token = auth.load_or_create_token()
+    assert token
+    assert token_file.read_text(encoding="utf-8").strip() == token
+
+    # A primeira abertura (O_EXCL) falha porque o arquivo já existe; o ramo de
+    # recuperação precisa restringir a permissão antes de abrir para gravação.
+    trunc_idx = next(
+        i for i, (kind, value) in enumerate(events) if kind == "open" and value & os.O_TRUNC
+    )
+    chmod_idx = next(
+        i for i, (kind, value) in enumerate(events) if kind == "chmod" and value == 0o600
+    )
+    assert chmod_idx < trunc_idx, "chmod(0o600) deve preceder a gravação do token"
+    # E nenhuma gravação ocorre via caminho permissivo (sem O_TRUNC nem O_EXCL).
+    write_opens = [
+        value for kind, value in events if kind == "open" and value & (os.O_WRONLY | os.O_RDWR)
+    ]
+    assert all(value & (os.O_TRUNC | os.O_EXCL) for value in write_opens)
 
 
 def test_auth_rejects_missing_token(mcp_server):

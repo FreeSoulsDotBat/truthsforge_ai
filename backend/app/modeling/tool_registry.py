@@ -350,7 +350,8 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "fusion.shell_body",
         _FUSION,
         _MUT,
-        "Oca um corpo deixando paredes de espessura definida (open_faces top/bottom/none) (Onda C).",
+        "Oca um corpo deixando paredes de espessura definida "
+        "(open_faces top/bottom/none) (Onda C).",
     ),
     _t(
         "fusion.hole",
@@ -489,6 +490,36 @@ _REGISTRY_ENTRIES: tuple[ToolDescriptor, ...] = (
         "Junta revolute/rigid/slider/cylindrical entre corpos/componentes (F3).",
     ),
     _t(
+        "fusion.place_body",
+        _FUSION,
+        _ADD,
+        "Posiciona um corpo encostando uma face na outra (flush) por referência "
+        "declarativa; o backend MEDE as faces e calcula a translação EXATA "
+        "(move_body determinístico, folga 0) — sem coordenada chutada (F7).",
+    ),
+    _t(
+        "fusion.align_axis",
+        _FUSION,
+        _ADD,
+        "Alinha o eixo de um corpo a uma face cilíndrica de destino; o resolver "
+        "F7 expande em junta revolute/cilíndrica (F7).",
+    ),
+    _t(
+        "fusion.distribute_along",
+        _FUSION,
+        _ADD,
+        "Distribui N primitivas (ex.: knuckles) ao longo de uma aresta, com "
+        "alternância e combine-DENTRO; resolvido no backend F7 (F7).",
+    ),
+    _t(
+        "fusion.relate_bodies",
+        _FUSION,
+        _ADD,
+        "Relação declarativa entre 2 corpos (flush_mate/cover_opening/coaxial_insert/"
+        "hinge_along_shared_edge/seat_in_pocket/distribute_on_edge); o backend deriva "
+        "a geometria medindo e expande nas primitivas F7 (F8 Sub4).",
+    ),
+    _t(
         "fusion.knuckle_hinge",
         _FUSION,
         _ADD,
@@ -575,6 +606,31 @@ DEPRECATED_PLANNER_TOOLS: frozenset[str] = frozenset(
 )
 
 
+# Tools registradas mas AINDA NÃO oferecidas ao planner LLM — atrás de flag +
+# pendentes de gate Fusion (não ofereça um mecanismo não validado ao modelo). O
+# executor as resolve quando a flag liga; o owner valida via probe no gate; só
+# então entram no nudge/PLANNER_TOOLSET.
+# `fusion.relate_bodies` foi LIBERADO (2026-06-09) após o gate F8.R1 aprovar a
+# derivação `flush_mate` no Fusion real (tampa encostou flush medindo as faces).
+UNRELEASED_PLANNER_TOOLS: frozenset[str] = frozenset()
+
+
+# Tools declarativas FLAG-GATED (auditoria 2026-06-10, fechado 2026-06-12): a
+# EXECUTABILIDADE não muda (seguem na allowlist do executor/policy; com a flag
+# OFF o adapter erra tipado `fusion.spatial_not_resolved`), mas a VISIBILIDADE
+# ao planner é decidida em RUNTIME por :func:`planner_toolset` — com a flag OFF
+# o LLM não vê toolset/schema de uma tool fadada a falhar. Avaliar a flag aqui
+# em import-time congelaria settings instanciados por env de teste; por isso a
+# leitura acontece a cada chamada.
+SPATIAL_PLANNER_TOOLS: frozenset[str] = frozenset(
+    {"fusion.place_body", "fusion.align_axis", "fusion.distribute_along"}
+)
+"""Trio F7 — visível ao planner só com ``modeling_spatial_resolution_enabled``."""
+
+RELATION_PLANNER_TOOLS: frozenset[str] = frozenset({"fusion.relate_bodies"})
+"""F8 Sub4 — visível ao planner só com ``modeling_relation_placement_enabled``."""
+
+
 # ---------------------------------------------------------------------------
 # Derived collections. Computed at import time so legacy callers keep working
 # while we migrate to direct registry access in Ondas 2–3.
@@ -612,13 +668,47 @@ def _planner_visible() -> tuple[str, ...]:
             return False  # probe do loop visual (render→visão), não passo do plano
         if entry.name in DEPRECATED_PLANNER_TOOLS:
             return False
+        if entry.name in UNRELEASED_PLANNER_TOOLS:
+            return False
         return True
 
     return tuple(entry.name for entry in _REGISTRY_ENTRIES if visible(entry))
 
 
 PLANNER_TOOLSET: tuple[str, ...] = _planner_visible()
-"""Tools the LLM planner can pick. Subset of ``TOOL_REGISTRY``."""
+"""SUPERSET estático das tools que o planner PODE ver (estado "flags ON").
+
+Compat shim para validações/auditoria; a visibilidade REAL ao planner (toolset
++ schemas no prompt) deve vir de :func:`planner_toolset`, que aplica as flags
+F7/F8 em runtime.
+"""
+
+
+def planner_toolset() -> tuple[str, ...]:
+    """Toolset do planner avaliado em RUNTIME (flags F7/F8).
+
+    Parte de :data:`PLANNER_TOOLSET` (superset estático) e oculta as tools
+    declarativas cuja flag está OFF: o trio F7 (``place_body``/``align_axis``/
+    ``distribute_along``) sem ``modeling_spatial_resolution_enabled`` e
+    ``relate_bodies`` sem ``modeling_relation_placement_enabled``. Sem isso o
+    LLM era ensinado (schema no prompt) a escolher tools que falhariam
+    garantido no adapter (auditoria 2026-06-10). A executabilidade no
+    executor/policy NÃO passa por aqui — segue allowlist + erro tipado.
+    """
+
+    # Import tardio: settings podem ser instanciados por env de teste e a flag
+    # deve ser lida no momento da chamada, não no import do módulo.
+    from app.core.config import settings
+
+    hidden: set[str] = set()
+    if not settings.modeling_spatial_resolution_enabled:
+        hidden |= SPATIAL_PLANNER_TOOLS
+    if not settings.modeling_relation_placement_enabled:
+        hidden |= RELATION_PLANNER_TOOLS
+    if not hidden:
+        return PLANNER_TOOLSET
+    return tuple(name for name in PLANNER_TOOLSET if name not in hidden)
+
 
 BLENDER_TOOLS: list[str] = list(_by_software(_BLENDER))
 """Allowlist consumed by :class:`BlenderAdapter`."""
@@ -664,6 +754,13 @@ def is_high_risk(tool_name: str) -> bool:
     return entry is not None and entry.category is ToolCategory.high_risk
 
 
+def is_destructive(tool_name: str) -> bool:
+    """``True`` when the tool is classified as destructive (removes geometry/files)."""
+
+    entry = TOOL_REGISTRY.get(tool_name)
+    return entry is not None and entry.category is ToolCategory.destructive
+
+
 def is_known(tool_name: str) -> bool:
     """``True`` when the tool is registered (regardless of category)."""
 
@@ -673,9 +770,9 @@ def is_known(tool_name: str) -> bool:
 def requires_approval(tool_name: str, risk_level: ModelingRiskLevel | str | None) -> bool:
     """Single decision point for approval gating.
 
-    A step requires approval iff it is high-risk **and** not read-only. The
-    ``risk_level`` parameter lets callers escalate medium/low tools when the
-    planner explicitly marked them ``high``.
+    A step requires approval when the tool is high-risk or destructive (and
+    not read-only). The ``risk_level`` parameter lets callers escalate
+    medium/low tools when the planner explicitly marked them ``high``.
     """
 
     if is_blocked(tool_name):
@@ -683,6 +780,8 @@ def requires_approval(tool_name: str, risk_level: ModelingRiskLevel | str | None
     if is_read_only(tool_name):
         return False
     if is_high_risk(tool_name):
+        return True
+    if is_destructive(tool_name):
         return True
     if risk_level is None:
         return False
@@ -707,6 +806,8 @@ __all__ = [
     "HIGH_RISK_TOOL_NAMES",
     "PLANNER_TOOLSET",
     "READ_ONLY_TOOL_NAMES",
+    "RELATION_PLANNER_TOOLS",
+    "SPATIAL_PLANNER_TOOLS",
     "TOOL_REGISTRY",
     "ToolCategory",
     "ToolDescriptor",
@@ -714,8 +815,10 @@ __all__ = [
     "descriptor",
     "descriptors",
     "is_blocked",
+    "is_destructive",
     "is_high_risk",
     "is_known",
     "is_read_only",
+    "planner_toolset",
     "requires_approval",
 ]

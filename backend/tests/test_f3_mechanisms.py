@@ -165,3 +165,27 @@ def test_macros_compose_validated_primitives() -> None:
     )
     assert "_add_cylinder({" in screw  # haste + cabeça
     assert "_thread({" in screw  # rosca modelada
+
+
+def test_open_boundary_distinguishes_shell_rim_from_through_hole() -> None:
+    # F9: ``loops.count > 1`` sozinho NÃO marca abertura — uma placa SÓLIDA com
+    # furo passante (parafuso) também tem 2 loops e não é abertura. O script
+    # gerado compara face.area com a área delimitada pelo loop EXTERNO: aro de
+    # shell = quadro fino (razão pequena) → marca; placa com furo pequeno =
+    # razão alta → NÃO marca; medida indisponível → NÃO marca (sem
+    # falso-positivo nos roles open_boundary/lid/container do F8/F9).
+    script = build_autodesk_fusion_script(tool_name="fusion.thread", arguments={"diameter_mm": 6.0})
+    ast.parse(script)
+    assert "OPEN_BOUNDARY_AREA_RATIO = 0.5" in script
+    assert "def _outer_loop_hull_area(face):" in script
+    assert "def _face_is_open_boundary(face):" in script
+    # O caminho loops>1 decide pela RAZÃO de área, nunca retorna True direto.
+    assert "hull_area = _outer_loop_hull_area(face)" in script
+    assert "return (face.area / hull_area) < OPEN_BOUNDARY_AREA_RATIO" in script
+    # Em dúvida (medida indisponível) não marca.
+    assert "if hull_area is None:" in script
+    # A decisão direta antiga (loops>1 ⇒ True) sumiu: o único return do ramo é
+    # o da razão de área (asserts acima) — confere que não há True incondicional
+    # entre o teste de loops e a medição.
+    branch = script.split("if face.loops.count > 1:", 1)[1].split("except", 1)[0]
+    assert "return True" not in branch

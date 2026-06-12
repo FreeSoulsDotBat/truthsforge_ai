@@ -33,6 +33,13 @@ cd /pgadmin4
 /venv/bin/python3 setup.py update-user "$PGADMIN_DEFAULT_EMAIL" --password "$PGADMIN_DEFAULT_PASSWORD" --admin --active --no-console >/tmp/pgadmin-reset.log 2>&1
 if [ "$?" -ne 0 ]; then
   /venv/bin/python3 setup.py add-user "$PGADMIN_DEFAULT_EMAIL" "$PGADMIN_DEFAULT_PASSWORD" --admin --active --no-console >/tmp/pgadmin-reset.log 2>&1
+  if [ "$?" -ne 0 ]; then
+    # Nem update-user nem add-user funcionaram: aborta para nao reportar
+    # sucesso falso (o exit do script seguiria o load-servers la embaixo).
+    echo "pgAdmin user reset FAILED (update-user e add-user):" >&2
+    cat /tmp/pgadmin-reset.log >&2
+    exit 1
+  fi
 fi
 
 PGPASS_FILE=/var/lib/pgadmin/truths-forge.pgpass
@@ -69,6 +76,9 @@ EOF
 
 docker exec truths-forge-pgadmin sh -lc $ResetCommand
 if ($LASTEXITCODE -ne 0) {
+  # Ecoa os logs internos para diagnostico antes de abortar (ficavam
+  # escondidos em /tmp dentro do container).
+  docker exec truths-forge-pgadmin sh -lc "cat /tmp/pgadmin-reset.log /tmp/pgadmin-servers.log 2>/dev/null" 2>$null
   throw "docker exec truths-forge-pgadmin failed"
 }
 

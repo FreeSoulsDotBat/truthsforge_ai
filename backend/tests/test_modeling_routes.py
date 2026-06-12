@@ -5,7 +5,13 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from app.core.contracts import ModelingExecutionMode, ModelingPlanCreate, ModelingSoftware
+from app.core.contracts import (
+    ModelingApprovalRequest,
+    ModelingExecutionMode,
+    ModelingPlanCreate,
+    ModelingPlanStatus,
+    ModelingSoftware,
+)
 from app.main import app
 from app.modeling.blender_adapter import BlenderAdapter
 from app.modeling.fusion_adapter import FusionDesktopAdapter
@@ -25,6 +31,24 @@ def _create_plan_via_service(**kwargs: Any) -> dict[str, Any]:
     payload = ModelingPlanCreate(**kwargs)
     plan = get_modeling_service(get_store()).create_plan(payload)
     return json.loads(plan.model_dump_json())
+
+
+def test_safe_error_detail_allowlists_typed_orchestrator_errors() -> None:
+    """F1 (follow-up do conselho do PR #50): os ``ValueError`` tipados do
+    orchestrator mantêm a mensagem real (só chat_id/estágio — sem eco de LLM nem
+    detalhe de infra); qualquer outra exceção vira genérica, sem vazar o texto."""
+
+    from app.api.routes.chat_modeling import _safe_error_detail
+    from app.modeling.chat_orchestrator import InvalidEditStage, NotAModelingChat
+
+    assert "is not a modeling-3D chat" in _safe_error_detail(NotAModelingChat("chat-123"))
+    assert "propose_edit_plan" in _safe_error_detail(InvalidEditStage(None))
+
+    # ValueError genérico (ex.: validação do planner que INTERPOLA saída do LLM):
+    # a mensagem NÃO pode chegar ao chat/metadata — vira texto + nome do tipo.
+    detail = _safe_error_detail(ValueError("software_choice inválido vindo do LLM: <eco>"))
+    assert detail == "erro interno (ValueError)"
+    assert "<eco>" not in detail
 
 
 EXPECTED_BLENDER_TOOLS = {
@@ -187,6 +211,130 @@ def test_chat_stream_3d_reject_returns_plan_to_discovery(monkeypatch) -> None:
     assert rejected.json()["status"] == "rejected"
 
 
+def test_plan_rest_payload_carries_trace_id(monkeypatch) -> None:
+    """RF-024: o ``trace_id`` da proposta não pode existir só no dump SSE — o
+    contrato REST ``ModelingPlan`` (GET/POST /api/3d/plans...) devolve o MESMO
+    trace persistido, senão o modal de diagnóstico perde o trace na primeira
+    re-busca do card."""
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "Crie um cubo simples no Blender.",
+            "title": "Cubo de teste — trace REST",
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "safe_auto",
+                "software_override": "blender",
+            },
+        },
+    )
+    assert response.status_code == 200
+    plan = _modeling_plan_from_sse(response.text)
+    assert plan is not None
+    assert plan["trace_id"], "o dump SSE deve carregar o trace_id da proposta"
+
+    persisted = client.get(f"/api/3d/plans/{plan['id']}").json()
+    assert persisted["trace_id"] == plan["trace_id"]
+
+    # A primeira ação do card (approve) devolve o plano SEM perder o trace.
+    approved = client.post(f"/api/3d/plans/{plan['id']}/approve", json={"decision": "approve"})
+    assert approved.status_code == 200
+    assert approved.json()["trace_id"] == plan["trace_id"]
+
+
+def test_chat_stream_3d_storage_error_does_not_leak_internals(monkeypatch) -> None:
+    """Exceção de infraestrutura (DSN/SQL) no propose NÃO pode virar mensagem
+    visível nem metadata persistida — só o nome do tipo + texto genérico; o
+    traceback completo vai para o log (``_safe_error_detail``)."""
+
+    from app.api.routes import chat_modeling
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+
+    secret = "postgresql://forge:senha-secreta@10.0.0.7:5432/truths_forge_ai"
+
+    class FakeStorageError(RuntimeError):
+        pass
+
+    class ExplodingOrchestrator:
+        def propose_plan(self, *args: Any, **kwargs: Any) -> Any:
+            raise FakeStorageError(f"connection failed for dsn {secret}")
+
+        def propose_edit_plan(self, *args: Any, **kwargs: Any) -> Any:
+            raise FakeStorageError(f"connection failed for dsn {secret}")
+
+    monkeypatch.setattr(
+        chat_modeling, "get_modeling_orchestrator", lambda store: ExplodingOrchestrator()
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "Crie um cubo simples no Blender.",
+            "title": "Cubo de teste — erro de storage",
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "safe_auto",
+                "software_override": "blender",
+            },
+        },
+    )
+    assert response.status_code == 200
+    raw = response.text
+    assert secret not in raw, "detalhe interno (DSN) vazou para o SSE"
+    assert "senha-secreta" not in raw
+    assert "erro interno (FakeStorageError)" in raw
+    assert "Não consegui criar o plano 3D via MCP" in raw
+
+
+def test_chat_stream_3d_domain_error_stays_readable(monkeypatch) -> None:
+    """Erros de domínio do modeling (mensagens PT-BR intencionais) continuam
+    legíveis no chat — a sanitização só esconde o que não é de domínio."""
+
+    from app.api.routes import chat_modeling
+    from app.core.contracts import ChatModelingStage
+    from app.modeling.chat_state import ChatModelingEvent, InvalidModelingStageTransition
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+
+    domain_error = InvalidModelingStageTransition(
+        ChatModelingStage.executing, ChatModelingEvent.PLAN_PROPOSED
+    )
+    domain_message = str(domain_error)
+
+    class DomainOrchestrator:
+        def propose_plan(self, *args: Any, **kwargs: Any) -> Any:
+            raise domain_error
+
+        def propose_edit_plan(self, *args: Any, **kwargs: Any) -> Any:
+            raise domain_error
+
+    monkeypatch.setattr(
+        chat_modeling, "get_modeling_orchestrator", lambda store: DomainOrchestrator()
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "Crie um cubo simples no Blender.",
+            "title": "Cubo de teste — erro de domínio",
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "safe_auto",
+                "software_override": "blender",
+            },
+        },
+    )
+    assert response.status_code == 200
+    raw = response.text
+    assert domain_message in raw
+    assert "erro interno" not in raw
+
+
 def test_modeling_plan_executes_fluid_steps_without_plan_approval(monkeypatch) -> None:
     monkeypatch.setattr(FusionDesktopAdapter, "is_available", lambda self: False)
 
@@ -234,6 +382,192 @@ def test_blender_plan_uses_mcp_boundary_without_desktop_adapter(monkeypatch) -> 
     assert blender_steps
     assert all(step["output_json"]["mcp_server"] == "blender_mcp" for step in blender_steps)
     assert all(step["output_json"]["transport"] == "mock" for step in blender_steps)
+
+
+def test_modeling_execute_refuses_waiting_approval_and_completed(monkeypatch) -> None:
+    """Anti-replay (C5): /execute sem aprovação ou sobre plano concluído → 409."""
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+
+    client = TestClient(app)
+    plan = _create_plan_via_service(
+        prompt="Crie um cubo de teste no Blender.",
+        mode=ModelingExecutionMode.approval_required,
+        software_override=ModelingSoftware.blender,
+    )
+    plan_id = plan["id"]
+    store = get_store()
+    service = get_modeling_service(store)
+
+    # Força o gate da P1: plano aguardando aprovação não executa.
+    pending = store.get_modeling_plan(plan_id).model_copy(
+        update={"status": ModelingPlanStatus.waiting_approval}
+    )
+    store.upsert_modeling_plan(pending)
+    refused = client.post(f"/api/3d/plans/{plan_id}/execute")
+    assert refused.status_code == 409
+
+    # Aprovado → executa normalmente.
+    service.approve_plan(plan_id, ModelingApprovalRequest(decision="approve"))
+    executed = client.post(f"/api/3d/plans/{plan_id}/execute")
+    assert executed.status_code == 200
+
+    # Concluído → um card antigo não pode re-executar (nem re-aprovar).
+    done = store.get_modeling_plan(plan_id).model_copy(
+        update={"status": ModelingPlanStatus.completed}
+    )
+    store.upsert_modeling_plan(done)
+    replay = client.post(f"/api/3d/plans/{plan_id}/execute")
+    assert replay.status_code == 409
+    reapprove = client.post(f"/api/3d/plans/{plan_id}/approve", json={"decision": "approve"})
+    assert reapprove.status_code == 409
+
+    # Rejeitado → não ressuscita como aprovado nem executa.
+    rejected = store.get_modeling_plan(plan_id).model_copy(
+        update={"status": ModelingPlanStatus.rejected}
+    )
+    store.upsert_modeling_plan(rejected)
+    assert client.post(f"/api/3d/plans/{plan_id}/execute").status_code == 409
+    assert (
+        client.post(f"/api/3d/plans/{plan_id}/approve", json={"decision": "approve"}).status_code
+        == 409
+    )
+
+
+def _modeling_chat_with_plan(store, *, stage, plan_status=None):
+    """Chat 3D + plano vinculado, para os testes do caminho vivo (DT-006)."""
+
+    from app.core.contracts import (
+        ChatSession,
+        ModelingPlan,
+        ModelingPlanStep,
+        ModelingRiskLevel,
+    )
+
+    session = ChatSession(
+        title="Chat 3D caminho vivo",
+        is_modeling_3d=True,
+        modeling_stage=stage,
+    )
+    store.upsert_chat_session(session)
+    plan = ModelingPlan(
+        prompt="cubo de teste",
+        software_choice=ModelingSoftware.blender,
+        conversation_id=session.id,
+        status=plan_status or ModelingPlanStatus.waiting_approval,
+        steps=[
+            ModelingPlanStep(
+                seq=1,
+                title="Criar cubo",
+                software=ModelingSoftware.blender,
+                tool_name="blender.create_mesh_primitive",
+                risk_level=ModelingRiskLevel.medium,
+                input_json={"primitive": "cube"},
+            )
+        ],
+    )
+    store.upsert_modeling_plan(plan)
+    session = session.model_copy(update={"modeling_plan_id": plan.id})
+    store.upsert_chat_session(session)
+    return session, plan
+
+
+def test_card_approve_and_execute_drive_chat_state_machine(monkeypatch) -> None:
+    """DT-006 (caminho vivo): /approve e /execute transitam o estágio do chat
+    pela state machine (planning→approved→executing→editing), em vez de
+    bypassar o orchestrator."""
+
+    from app.core.contracts import ChatModelingStage
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+    store = get_store()
+    session, plan = _modeling_chat_with_plan(store, stage=ChatModelingStage.planning)
+
+    client = TestClient(app)
+    approved = client.post(f"/api/3d/plans/{plan.id}/approve", json={"decision": "approve"})
+    assert approved.status_code == 200
+    assert store.get_chat_session(session.id).modeling_stage == ChatModelingStage.approved
+
+    executed = client.post(f"/api/3d/plans/{plan.id}/execute")
+    assert executed.status_code == 200
+    refreshed = store.get_chat_session(session.id)
+    assert refreshed.modeling_stage == ChatModelingStage.editing
+    assert refreshed.modeling_plan_id == plan.id
+
+
+def test_card_reject_returns_chat_to_discovery_with_reason(monkeypatch) -> None:
+    """RF-007 (caminho vivo): rejeitar pelo card volta o chat para a descoberta,
+    limpa o plano vinculado e registra a justificativa no HISTÓRICO (é dali
+    que a descoberta do turno seguinte lê o contexto)."""
+
+    from app.core.contracts import ChatModelingStage
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+    store = get_store()
+    session, plan = _modeling_chat_with_plan(store, stage=ChatModelingStage.planning)
+
+    client = TestClient(app)
+    rejected = client.post(
+        f"/api/3d/plans/{plan.id}/approve",
+        json={"decision": "reject", "reason": "a tampa precisa ser articulada"},
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "rejected"
+
+    refreshed = store.get_chat_session(session.id)
+    assert refreshed.modeling_stage == ChatModelingStage.discovery
+    assert refreshed.modeling_plan_id is None
+    history = [
+        message.content
+        for message in (getattr(refreshed, "messages", []) or [])
+        if message.role == "assistant"
+    ]
+    assert any("a tampa precisa ser articulada" in content for content in history)
+
+    # O turno seguinte (justificativa) não pode mais estourar
+    # InvalidModelingStageTransition: o estágio voltou para discovery.
+    assert refreshed.modeling_stage == ChatModelingStage.discovery
+
+
+def test_card_failed_execution_lands_failed_stage(monkeypatch) -> None:
+    """DT-008 (caminho vivo): falha de execução leva o chat ao estágio
+    ``failed`` (alcançável), não o deixa preso em ``planning``."""
+
+    from app.core.contracts import ChatModelingStage, ModelingExecutionResult
+    from app.modeling.chat_orchestrator import ModelingChatOrchestrator
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+    store = get_store()
+    session, plan = _modeling_chat_with_plan(store, stage=ChatModelingStage.planning)
+
+    def _fail_execution(self, target_plan):
+        failed = target_plan.model_copy(update={"status": ModelingPlanStatus.failed})
+        store.upsert_modeling_plan(failed)
+        return ModelingExecutionResult(
+            plan=failed,
+            executed_step_ids=[],
+            blocked_step_ids=[step.id for step in failed.steps],
+            events=["falha simulada"],
+            tool_call_ids=[],
+        )
+
+    monkeypatch.setattr(ModelingChatOrchestrator, "_run_execution", _fail_execution)
+
+    client = TestClient(app)
+    assert (
+        client.post(f"/api/3d/plans/{plan.id}/approve", json={"decision": "approve"}).status_code
+        == 200
+    )
+    executed = client.post(f"/api/3d/plans/{plan.id}/execute")
+    assert executed.status_code == 200
+    assert store.get_chat_session(session.id).modeling_stage == ChatModelingStage.failed
+
+    # Retry explícito do card a partir de ``failed`` volta ao ciclo de execução.
+    monkeypatch.undo()
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+    retried = client.post(f"/api/3d/plans/{plan.id}/execute")
+    assert retried.status_code == 200
+    assert store.get_chat_session(session.id).modeling_stage == ChatModelingStage.editing
 
 
 def test_modeling_plan_only_draft_does_not_execute_directly(monkeypatch) -> None:
@@ -1181,6 +1515,43 @@ def test_modeling_policy_classifies_tier2_tools_correctly() -> None:
     assert by_tool["blender.repair_non_manifold"].approval_required is True
     # apply_subdivision: alteração normal allowlistada → autoexecução no fluxo fluido
     assert by_tool["blender.apply_subdivision"].approval_required is False
+
+
+def test_modeling_policy_requires_approval_for_destructive_tools() -> None:
+    """P6/P8: deleções NUNCA auto-executam, mesmo com risk_level low do LLM."""
+
+    from app.core.contracts import (
+        ModelingExecutionMode,
+        ModelingPlan,
+        ModelingPlanStatus,
+        ModelingPlanStep,
+        ModelingRiskLevel,
+        ModelingSoftware,
+        ModelingStepStatus,
+    )
+    from app.modeling.policy import apply_modeling_policy
+
+    plan = ModelingPlan(
+        prompt="remova o corpo",
+        software_choice=ModelingSoftware.fusion,
+        mode=ModelingExecutionMode.safe_auto,
+        steps=[
+            ModelingPlanStep(
+                seq=1,
+                title="Deletar corpo",
+                software=ModelingSoftware.fusion,
+                tool_name="fusion.delete_body",
+                risk_level=ModelingRiskLevel.low,
+                approval_required=False,
+            ),
+        ],
+    )
+    enforced = apply_modeling_policy(plan)
+    step = enforced.steps[0]
+    assert step.approval_required is True
+    assert step.status == ModelingStepStatus.waiting_approval
+    assert enforced.approval_required is True
+    assert enforced.status == ModelingPlanStatus.waiting_approval
 
 
 def test_modeling_policy_autoexecutes_normal_changes_but_blocks_high_risk() -> None:

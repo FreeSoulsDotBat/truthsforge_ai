@@ -33,17 +33,25 @@ function Invoke-Compose {
 }
 
 $TestDataDir = "/tmp/truths_forge_test_$([Guid]::NewGuid().ToString('N'))"
-Invoke-Compose @(
-  "exec",
-  "-T",
-  "-e", "TRUTHS_FORGE_STORAGE_BACKEND=json",
-  "-e", "TRUTHS_FORGE_ENV=test",
-  "-e", "TRUTHS_FORGE_DATA_DIR=$TestDataDir",
-  "backend",
-  "python",
-  "-m",
-  "pytest"
-)
+try {
+  Invoke-Compose @(
+    "exec",
+    "-T",
+    "-e", "TRUTHS_FORGE_STORAGE_BACKEND=json",
+    "-e", "TRUTHS_FORGE_ENV=test",
+    "-e", "TRUTHS_FORGE_DATA_DIR=$TestDataDir",
+    "backend",
+    "python",
+    "-m",
+    "pytest"
+  )
+}
+finally {
+  # Remove o diretorio temporario unico por run para nao vazar disco no
+  # container de longa duracao (cada GUID acumularia em /tmp sem isso).
+  docker compose --env-file $EnvFile -f $ComposeFile -f $ComposeDevFile `
+    exec -T backend rm -rf $TestDataDir 2>$null
+}
 Invoke-Compose @("exec", "-T", "backend", "python", "-m", "ruff", "format", "--check", "app", "tests")
 Invoke-Compose @("exec", "-T", "backend", "python", "-m", "ruff", "check", "app", "tests")
 Invoke-Compose @("exec", "-T", "web", "pnpm", "--filter", "@truths-forge/web", "format:check")

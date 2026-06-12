@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from app.core.contracts import (
     ModelingPlan,
     ModelingPlanStatus,
@@ -162,6 +164,39 @@ def test_loop_exhausts_iterations_and_rolls_back() -> None:
     assert result.plan.steps[1].id in result.blocked_step_ids
 
 
+def test_loop_exhausted_divergence_fails_plan_explicitly() -> None:
+    """RF-011/CS-003: divergência geométrica que persiste pelas 5 iterações
+    termina como FALHA explícita (plano ``failed``), não como sucesso com o
+    plano preso em ``running``."""
+
+    store = _FakeStore()
+    executor = _ScriptedExecutor(store, decide=lambda step: True)  # tool sempre ok
+    rollbacks: list[str] = []
+
+    def verifier(step, output):
+        return {"expected_mm": 40, "measured_mm": 30}  # nunca converge
+
+    def corrector(step, output, attempt):
+        return step.model_copy(update={"input_json": {**step.input_json, "_try": attempt}})
+
+    loop = ModelingAgentLoop(
+        executor,
+        corrector=corrector,
+        verifier=verifier,
+        rollback=lambda plan: rollbacks.append(plan.id),
+    )
+    result = loop.run(_plan(_step(1, "fusion.extrude_profile"), _step(2, "fusion.hole")))
+
+    assert result.plan.status is ModelingPlanStatus.failed
+    failed_step = result.plan.steps[0]
+    assert failed_step.status is ModelingStepStatus.failed
+    assert "Divergência geométrica persistente" in (failed_step.error or "")
+    assert rollbacks == [result.plan.id]
+    # Passo 2 ficou bloqueado (o motor PAROU).
+    assert result.plan.steps[1].id in result.blocked_step_ids
+    assert any("divergência geométrica persistente" in event.lower() for event in result.events)
+
+
 def test_loop_corrects_on_geometric_divergence_even_when_tool_ok() -> None:
     store = _FakeStore()
     executor = _ScriptedExecutor(store, decide=lambda step: True)  # tool sempre ok
@@ -179,6 +214,56 @@ def test_loop_corrects_on_geometric_divergence_even_when_tool_ok() -> None:
     assert result.plan.status is ModelingPlanStatus.completed
     # Apesar de ok=True, a divergência geométrica forçou 1 correção.
     assert executor.calls == [("fusion.extrude_profile", True), ("fusion.extrude_profile", True)]
+
+
+def test_loop_persists_failed_durably_when_corrector_raises() -> None:
+    """B (observabilidade): se o corretor estoura exceção (ex.: LLM/timeout/
+    cancelamento), o plano NÃO pode congelar em ``approved`` — o desfecho
+    ``failed`` e o passo que falhou precisam estar duráveis na store ANTES de a
+    exceção propagar. Era a raiz do "deu falha mas não consigo confirmar":
+    o upsert terminal vivia só no fim do laço e era pulado na exceção."""
+
+    import pytest
+
+    store = _FakeStore()
+    executor = _ScriptedExecutor(store, decide=lambda step: False)  # passo 1 falha
+
+    def boom_corrector(step, output, attempt):
+        raise RuntimeError("corretor estourou (simula LLM/timeout)")
+
+    loop = ModelingAgentLoop(executor, corrector=boom_corrector)
+    plan = _plan(_step(1, "fusion.hole"), _step(2, "fusion.extrude_profile"))
+
+    with pytest.raises(RuntimeError):
+        loop.run(plan)
+
+    persisted = store.plans[plan.id]
+    assert persisted.status is ModelingPlanStatus.failed  # não ficou em `approved`
+    # o passo que falhou ficou durável (carimbado antes do corretor estourar)
+    assert persisted.steps[0].status is ModelingStepStatus.failed
+    assert persisted.steps[0].output_json is not None
+
+
+def test_loop_persists_running_snapshot_each_step() -> None:
+    """B: o plano é persistido a CADA passo (status=running) — não só no fim.
+    Garante estado parcial verdadeiro se a request cair no meio do build."""
+
+    seen_status: list[ModelingPlanStatus] = []
+
+    class _SpyStore(_FakeStore):
+        def upsert_modeling_plan(self, plan: ModelingPlan) -> ModelingPlan:
+            seen_status.append(plan.status)
+            return super().upsert_modeling_plan(plan)
+
+    store = _SpyStore()
+    executor = _ScriptedExecutor(store, decide=lambda step: True)
+    loop = ModelingAgentLoop(executor, corrector=lambda s, o, a: s)
+    result = loop.run(_plan(_step(1, "fusion.add_box"), _step(2, "fusion.extrude_profile")))
+
+    # houve ao menos um snapshot `running` antes do `completed` final
+    assert ModelingPlanStatus.running in seen_status
+    assert seen_status[-1] is ModelingPlanStatus.completed
+    assert result.plan.status is ModelingPlanStatus.completed
 
 
 def test_build_dimension_verifier_compares_list_dims() -> None:
@@ -413,6 +498,39 @@ def test_correct_step_uses_llm_to_fix_step() -> None:
     assert fixed.error is None
 
 
+def test_correct_step_allows_same_high_risk_tool_already_approved() -> None:
+    """RF-009: a aprovação única do plano cobre o delta corretivo — um step
+    high-risk aprovado pode ser corrigido com a própria tool sem pausar."""
+
+    gateway = _FakeGateway(
+        {
+            "tool_name": "fusion.combine_bodies",
+            "input_json": json.dumps({"operation": "join", "_fixed": True}),
+        }
+    )
+    step = _step(2, "fusion.combine_bodies", operation="cut")
+    output = {"ok": False, "error_code": "fusion.boom", "message": "falhou"}
+
+    fixed = correct_step(step, output, 1, gateway=gateway, model=object())
+
+    assert fixed.tool_name == "fusion.combine_bodies"
+    assert fixed.input_json.get("_fixed") is True
+
+
+def test_correct_step_rejects_escalation_to_approval_requiring_tool() -> None:
+    """P6/P8: correção não pode ESCALAR um step seguro para tool que exige
+    aprovação (ex.: delete_body) — o caller trata e cai em "sem correção"."""
+
+    gateway = _FakeGateway(
+        {"tool_name": "fusion.delete_body", "input_json": json.dumps({"name": "Body1"})}
+    )
+    step = _step(2, "fusion.add_box", size_mm=10)
+    output = {"ok": False, "error_code": "fusion.boom", "message": "falhou"}
+
+    with pytest.raises(ValueError, match="escalaria"):
+        correct_step(step, output, 1, gateway=gateway, model=object())
+
+
 def test_orchestrator_run_execution_uses_loop_when_flag_on(monkeypatch) -> None:
     from app.core.config import settings
     from app.modeling.chat_orchestrator import ModelingChatOrchestrator
@@ -557,8 +675,8 @@ def test_capture_model_state_populates_and_persists_plan() -> None:
 
 def test_capture_model_state_skips_non_fusion() -> None:
     """Captura só roda para fusion; blender/outros não geram probe."""
-    from app.modeling.agent_loop import _maybe_capture_model_state
     from app.core.contracts import ModelingSoftware as _SW
+    from app.modeling.agent_loop import _maybe_capture_model_state
 
     store = _FakeStore()
 
@@ -576,3 +694,175 @@ def test_capture_model_state_skips_non_fusion() -> None:
     plan = plan.model_copy(update={"software_choice": _SW.blender})
     _maybe_capture_model_state(ex, plan)
     assert ex.calls == 0 and plan.model_state is None
+
+
+# ----------------------------------------------------- F8: surfacing do veredito
+
+
+def test_attach_verdict_notice_warns_on_divergence() -> None:
+    # O sistema não deve reportar "finalizado" limpo quando a auto-crítica viu
+    # corpos a mais/órfãos (ex.: BoxOuter (1)/Lid (2) duplicados do gate).
+    from app.core.contracts import (
+        Finding,
+        ModelingExecutionResult,
+        ModelVerdict,
+    )
+    from app.modeling.agent_loop import _attach_verdict_notice
+
+    plan = _plan(_step(1, "fusion.add_box", name="BoxOuter"))
+    plan.model_verdict = ModelVerdict(
+        overall="diverged",
+        findings=[
+            Finding(
+                kind="excess",
+                source="deterministic",
+                severity="warn",
+                check_id="orphan_body",
+                detail="corpo 'Lid (2)' não estava previsto (órfão).",
+            )
+        ],
+    )
+    result = ModelingExecutionResult(
+        plan=plan,
+        executed_step_ids=[],
+        blocked_step_ids=[],
+        events=["1. ok"],
+        tool_call_ids=[],
+    )
+    out = _attach_verdict_notice(result, plan)
+    assert any("Lid (2)" in e for e in out.events)
+    assert any("divergiu" in e for e in out.events)
+
+
+def test_attach_verdict_notice_noop_when_ok_or_absent() -> None:
+    from app.core.contracts import ModelingExecutionResult, ModelVerdict
+    from app.modeling.agent_loop import _attach_verdict_notice
+
+    plan = _plan(_step(1, "fusion.add_box", name="BoxOuter"))
+    base = ModelingExecutionResult(
+        plan=plan, executed_step_ids=[], blocked_step_ids=[], events=["1. ok"], tool_call_ids=[]
+    )
+    # sem veredito (flag OFF) → events idênticos.
+    assert _attach_verdict_notice(base, plan).events == ["1. ok"]
+    # veredito ok → idem.
+    plan.model_verdict = ModelVerdict(overall="ok")
+    assert _attach_verdict_notice(base, plan).events == ["1. ok"]
+
+
+def test_maybe_evaluate_verdict_is_mute_without_model_state(monkeypatch) -> None:
+    """Fix (review): plan.model_state None = read-back falhou (best-effort). O
+    avaliador NÃO pode acusar "0 corpos / faltou N" falso — fica mudo (sem
+    verdict persistido) e explica no trace (agent_loop.verdict_skipped)."""
+
+    from app.core.config import settings
+    from app.modeling.agent_loop import _maybe_evaluate_verdict
+
+    monkeypatch.setattr(settings, "modeling_self_critique_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "modeling_visual_verification_enabled", False, raising=False)
+
+    events: list[str] = []
+
+    class _SpyTracer(_FakeTracer):
+        def record(self, event_type, *args, **kwargs):
+            events.append(event_type)
+
+    store = _FakeStore()
+    executor = _ScriptedExecutor(store, decide=lambda step: True)
+    executor._tracer = _SpyTracer()
+    plan = _plan(_step(1, "fusion.add_box", name="Caixa"))
+    assert plan.model_state is None  # read-back nunca rodou/falhou
+
+    _maybe_evaluate_verdict(executor, object(), plan)
+
+    assert plan.model_verdict is None  # avaliador mudo (nada de "faltou N" falso)
+    assert "agent_loop.verdict_skipped" in events
+    assert store.plans == {}  # nada persistido
+
+
+def test_self_critique_without_provenance_warns_once_per_plan(monkeypatch) -> None:
+    """Fix (review): self_critique ON sem provenance ON deixa os checks de
+    histórico (op_no_effect) sem cobertura em silêncio. Warning ÚNICO por plano.
+
+    Captura com handler próprio no logger do módulo (o logging JSON da app não
+    propaga ao root — caplog ficaria cego)."""
+
+    import logging as _logging
+    from uuid import uuid4
+
+    from app.core.config import settings
+    from app.modeling.agent_loop import warn_self_critique_without_provenance
+
+    records: list[_logging.LogRecord] = []
+
+    class _ListHandler(_logging.Handler):
+        def emit(self, record: _logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _ListHandler(level=_logging.WARNING)
+    mod_logger = _logging.getLogger("app.modeling.agent_loop")
+    mod_logger.addHandler(handler)
+    try:
+        monkeypatch.setattr(settings, "modeling_provenance_enabled", False, raising=False)
+        plan_id = f"m3d_plan_warn_{uuid4().hex}"
+        warn_self_critique_without_provenance(plan_id)
+        warn_self_critique_without_provenance(plan_id)  # repetição: deduplicada
+
+        hits = [r for r in records if plan_id in r.getMessage()]
+        assert len(hits) == 1
+        assert "sem cobertura" in hits[0].getMessage()
+
+        # Com a proveniência LIGADA não há gap — nenhum warning.
+        records.clear()
+        monkeypatch.setattr(settings, "modeling_provenance_enabled", True, raising=False)
+        warn_self_critique_without_provenance(f"m3d_plan_warn_{uuid4().hex}")
+        assert records == []
+    finally:
+        mod_logger.removeHandler(handler)
+
+
+def _boom_visual(*a, **k):  # pragma: no cover - não deve ser chamado
+    raise AssertionError("replan visual destrutivo não deveria rodar aqui")
+
+
+def test_visual_autocorrect_off_by_default_skips_replan(monkeypatch) -> None:
+    # O caso do gate m3d_plan_60232db8: env reaproveitada do F7 tem visual ON e
+    # self_critique OFF. O replan destrutivo (que alucinou e duplicou corpos) NÃO
+    # pode rodar — é opt-in (default OFF).
+    from app.core.config import settings
+    from app.modeling.agent_loop import _maybe_visual_correction
+
+    monkeypatch.setattr(settings, "modeling_visual_verification_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "modeling_self_critique_enabled", False, raising=False)
+    monkeypatch.setattr(settings, "modeling_visual_autocorrect_enabled", False, raising=False)
+    monkeypatch.setattr("app.modeling.visual_critique.run_visual_correction", _boom_visual)
+    _maybe_visual_correction(object(), object(), _plan(_step(1, "fusion.add_box", name="X")))
+
+
+def test_visual_correction_skipped_when_self_critique_on(monkeypatch) -> None:
+    # Mesmo com o opt-in ON, a auto-crítica geométrica (F8) é primária → o replan
+    # visual se aposenta (vira achado semântico do veredito, sem recriar corpos).
+    from app.core.config import settings
+    from app.modeling.agent_loop import _maybe_visual_correction
+
+    monkeypatch.setattr(settings, "modeling_visual_verification_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "modeling_visual_autocorrect_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "modeling_self_critique_enabled", True, raising=False)
+    monkeypatch.setattr("app.modeling.visual_critique.run_visual_correction", _boom_visual)
+    _maybe_visual_correction(object(), object(), _plan(_step(1, "fusion.add_box", name="X")))
+
+
+def test_visual_replan_runs_only_with_explicit_optin(monkeypatch) -> None:
+    # Opt-in ON + self_critique OFF → o loop legado roda (back-compat deliberado).
+    from app.core.config import settings
+    from app.modeling.agent_loop import _maybe_visual_correction
+
+    monkeypatch.setattr(settings, "modeling_visual_verification_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "modeling_visual_autocorrect_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "modeling_self_critique_enabled", False, raising=False)
+    called: list[bool] = []
+    monkeypatch.setattr(
+        "app.modeling.visual_critique.run_visual_correction",
+        lambda *a, **k: called.append(True),
+    )
+    _maybe_visual_correction(object(), object(), _plan(_step(1, "fusion.add_box", name="X")))
+    assert called == [True]

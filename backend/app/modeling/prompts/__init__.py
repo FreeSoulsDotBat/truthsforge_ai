@@ -16,9 +16,7 @@ _PROMPTS_DIR = Path(__file__).resolve().parent
 def _load(name: str) -> str:
     path = _PROMPTS_DIR / name
     if not path.is_file():
-        raise FileNotFoundError(
-            f"Prompt asset {name!r} not found at {path}."
-        )
+        raise FileNotFoundError(f"Prompt asset {name!r} not found at {path}.")
     return path.read_text(encoding="utf-8")
 
 

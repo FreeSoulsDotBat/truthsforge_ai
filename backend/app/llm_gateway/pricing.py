@@ -1,19 +1,41 @@
 import fnmatch
 import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from app.core.contracts import ProviderModel, ProviderName
 
+logger = logging.getLogger(__name__)
+
 PRICING_PATH = Path(__file__).with_name("model_pricing.json")
 
 
-@lru_cache(maxsize=1)
-def _pricing_entries() -> list[dict[str, Any]]:
-    payload = json.loads(PRICING_PATH.read_text(encoding="utf-8"))
+def _pricing_signature() -> float:
+    """Assinatura (mtime) do arquivo de preços para invalidar o cache ao editá-lo."""
+    try:
+        return PRICING_PATH.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+@lru_cache(maxsize=4)
+def _pricing_entries_cached(signature: float) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(PRICING_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        # Arquivo ausente/corrompido não deve quebrar listagem de modelos.
+        logger.warning("Falha ao ler %s: %s", PRICING_PATH.name, exc)
+        return []
     entries = payload.get("entries", [])
     return entries if isinstance(entries, list) else []
+
+
+def _pricing_entries() -> list[dict[str, Any]]:
+    # Chaveia o cache pelo mtime: editar o JSON em tempo de execução passa a refletir
+    # sem reiniciar o backend.
+    return _pricing_entries_cached(_pricing_signature())
 
 
 def _matches_model(model_id: str, patterns: object) -> bool:

@@ -1154,18 +1154,22 @@ class DevStore:
             return category
 
     def list_chat_sessions(self) -> list[ChatSessionWithMessages]:
-        messages = self._list("messages", ChatMessage)
-        grouped: dict[str, list[ChatMessage]] = {}
-        for message in messages:
-            grouped.setdefault(message.session_id, []).append(message)
-        sessions = []
-        for raw in self._data["chat_sessions"]:
-            session = ChatSession(**raw)
-            sessions.append(
-                ChatSessionWithMessages(
-                    **_dump_model(session), messages=grouped.get(session.id, [])
+        # Lock leitura: writers multi-colecao (delete_chat_session/delete_project_folder)
+        # reescrevem sessions e messages em passos separados; o RLock garante um
+        # snapshot cross-colecao consistente.
+        with self._lock:
+            messages = self._list("messages", ChatMessage)
+            grouped: dict[str, list[ChatMessage]] = {}
+            for message in messages:
+                grouped.setdefault(message.session_id, []).append(message)
+            sessions = []
+            for raw in self._data["chat_sessions"]:
+                session = ChatSession(**raw)
+                sessions.append(
+                    ChatSessionWithMessages(
+                        **_dump_model(session), messages=grouped.get(session.id, [])
+                    )
                 )
-            )
         return sorted(
             sessions,
             key=lambda item: (item.updated_at, item.created_at, item.id),
@@ -1173,7 +1177,8 @@ class DevStore:
         )
 
     def list_chat_session_summaries(self) -> list[ChatSessionWithMessages]:
-        sessions = [ChatSession(**raw) for raw in self._data["chat_sessions"]]
+        with self._lock:
+            sessions = [ChatSession(**raw) for raw in self._data["chat_sessions"]]
         summaries = [
             ChatSessionWithMessages(**_dump_model(session), messages=[]) for session in sessions
         ]
@@ -1309,9 +1314,7 @@ class DevStore:
                 self._data["messages"].append(payload)
             for session in self._data["chat_sessions"]:
                 if session["id"] == message.session_id:
-                    session["updated_at"] = (
-                        _dump_model(now_utc()) if False else now_utc().isoformat()
-                    )
+                    session["updated_at"] = now_utc().isoformat()
             self._write()
             return message
 
@@ -1331,7 +1334,8 @@ class DevStore:
             return imported, skipped
 
     def chat_session_exists(self, session_id: str) -> bool:
-        return any(item["id"] == session_id for item in self._data["chat_sessions"])
+        with self._lock:
+            return any(item["id"] == session_id for item in self._data["chat_sessions"])
 
     def delete_chat_session(self, session_id: str) -> bool:
         with self._lock:
@@ -1632,7 +1636,3 @@ def get_dev_store() -> DevStore:
         settings.ensure_local_dirs()
         _dev_store = DevStore(settings.state_dir / "dev-store.json")
     return _dev_store
-
-
-def get_store() -> DevStore:
-    return get_dev_store()

@@ -41,7 +41,9 @@ export interface ServerStatus {
   features: Record<string, boolean>;
 }
 
-export type ModelingTransport = "stdio" | "http" | "mock" | "local";
+// ``mcp_http`` = servidor MCP standalone (ADR-017); espelha o Literal do
+// backend (contracts.ModelingCapability.transport).
+export type ModelingTransport = "stdio" | "http" | "mock" | "local" | "mcp_http";
 export type ModelingPlannerSource = "llm" | "heuristic";
 export type ModelingToolCallStatus = "ok" | "error" | "blocked";
 export type ModelingPrintabilitySeverity = "info" | "warning" | "error";
@@ -113,9 +115,10 @@ export interface ModelingPlan {
   steps: ModelingPlanStep[];
   planner_source?: ModelingPlannerSource | null;
   fallback_reason?: string | null;
-  // Presente apenas quando o plano é serializado via SSE (rota chat stream).
-  // Endpoints REST que devolvem ``ModelingPlan`` puro não populam — use
-  // ``GET /api/3d/plans/{id}/trace`` consultando pelo plan_id nesse caso.
+  // RF-024: serializado tanto via SSE (rota chat stream) quanto pelos
+  // endpoints REST (GET/POST /api/3d/plans). Como payloads antigos podem vir
+  // sem ele, `withModelingPlan` preserva o trace_id já conhecido (fallback
+  // defensivo) — sem isso o modal de diagnóstico vira no-op após ações do card.
   trace_id?: string | null;
   kind?: ModelingPlanKind;
   parent_plan_id?: string | null;
@@ -123,8 +126,45 @@ export interface ModelingPlan {
   // Presente quando a captura best-effort teve sucesso; habilita o botão
   // "Desfazer última edição" (POST /api/3d/plans/{id}/rollback).
   rollback_marker?: number | null;
+  // F1/F8 (RF-012/013): read-back pós-execução e veredito da auto-crítica
+  // (esperado × medido). Serializados pelos endpoints REST; tipados de forma
+  // permissiva até a UI dedicada do relatório de verificação.
+  model_state?: ModelingModelState | null;
+  model_verdict?: ModelingModelVerdict | null;
+  sub_goals?: ModelingSubGoal[] | null;
   created_at: string;
   updated_at: string;
+}
+
+// F1: estado rico do modelo (read-back). Espelho permissivo de
+// ``contracts.ModelState`` — campos consultados pontualmente pela UI.
+export interface ModelingModelState {
+  bodies?: Array<Record<string, unknown>>;
+  captured_at?: string | null;
+  [key: string]: unknown;
+}
+
+// F8: veredito da auto-crítica geométrica (``contracts.ModelVerdict``).
+export interface ModelingModelVerdict {
+  overall?: string;
+  summary?: string;
+  findings?: Array<{
+    kind?: string;
+    expected?: unknown;
+    measured?: unknown;
+    [key: string]: unknown;
+  }>;
+  deterministic_complete?: boolean;
+  [key: string]: unknown;
+}
+
+// F2: sub-objetivo do planejamento hierárquico (``contracts.ModelingSubGoal``).
+export interface ModelingSubGoal {
+  id?: string;
+  title?: string;
+  status?: string;
+  executed_plan_id?: string | null;
+  [key: string]: unknown;
 }
 
 export interface ModelingPlanCreate {
@@ -172,6 +212,10 @@ export interface ChatModeling3DContext {
   enabled: boolean;
   mode?: ModelingExecutionMode;
   software_override?: ModelingSoftware | null;
+  // P3: opt-in por chat. null/undefined = não alterar a preferência atual da
+  // sessão; true/false atualiza o ``modeling_fluid_mode`` da ChatSession.
+  // Alinhado com backend/app/core/contracts.py::ChatModeling3DContext.
+  fluid_mode?: boolean | null;
 }
 
 export interface ModelingApprovalRequest {

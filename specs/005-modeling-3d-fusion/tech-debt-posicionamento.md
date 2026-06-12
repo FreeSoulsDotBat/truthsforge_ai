@@ -47,7 +47,7 @@ o estado e **critica** o erro, mas a **decisão de posição** continua frágil.
 
 ## 3. Itens de débito acumulados (para a refatoração varrer)
 
-### 3.1 Posicionamento e orientação (núcleo)
+### 3.1 Posicionamento e orientação (núcleo) — ▶ ENDEREÇADO por **F7** (ADR-022, `micro/fase-F7-posicionamento.md`)
 - [ ] Primitiva/conceito de **ancoragem** a face/aresta/eixo (token F1) — colar,
   alinhar, centrar na espessura, distribuir N ao longo de aresta.
 - [ ] Posição **relativa** entre bodies (encostar A em B, offset por face) sem
@@ -81,7 +81,7 @@ o estado e **critica** o erro, mas a **decisão de posição** continua frágil.
 - [ ] **F5**: diff estruturado snapshot↔ao-vivo (hoje só anexa os dois blocos).
 - [ ] **F6**: 9.4 verifier LLM atrás de flag; 9.5 templates por padrão frequente.
 
-### 3.5 Limpeza / dívida de manutenção
+### 3.5 Limpeza / dívida de manutenção — ▶ parcialmente em **F7** (combine×joint via combine-DENTRO/joint-ENTRE)
 - [ ] **Macros deprecadas** (`knuckle_hinge`/`metric_screw`): handlers ainda no
   adapter (`DEPRECATED_PLANNER_TOOLS`) — decidir remover de vez vs. manter p/
   smoke. `add_circle`/`add_cylinder` têm batch; padronizar batch nas primitivas.

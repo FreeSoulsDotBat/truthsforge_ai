@@ -175,32 +175,40 @@ async def save_generated_images_from_markdown(
         )
 
     local_file_prefix = f"{settings.public_base_url.rstrip('/')}/api/files/"
+    # Deduplica por URL: a mesma URL remota pode aparecer N vezes no markdown.
+    # Sem cache, cada ocorrência baixava o arquivo e criava um platform file
+    # de novo (banda/IO/disco). Baixa/cria uma vez e reusa o stored_url,
+    # substituindo TODAS as ocorrências da URL.
+    downloaded_urls: dict[str, str] = {}
     for match in remote_matches:
         source_url = match.group(1)
         if source_url.startswith(local_file_prefix):
             continue
-        downloaded = await _download_remote_generated_image(source_url)
-        if downloaded is None:
-            continue
-        raw, content_type = downloaded
-        platform_file = _create_generated_image_file(
-            raw=raw,
-            content_type=content_type,
-            store=store,
-            session_id=session_id,
-            message_id=message_id,
-            project_id=project_id,
-            folder_id=folder_id,
-            index=len(generated_files) + 1,
-            existing_files=existing_files,
-            existing_names=existing_names,
-            source_url=source_url,
-        )
-        generated_files.append(platform_file)
-        stored_url = f"{settings.public_base_url.rstrip('/')}/api/files/{platform_file.id}/content"
-        updated_content = updated_content.replace(
-            match.group(0), f"![Imagem gerada]({stored_url})", 1
-        )
+        stored_url = downloaded_urls.get(source_url)
+        if stored_url is None:
+            downloaded = await _download_remote_generated_image(source_url)
+            if downloaded is None:
+                continue
+            raw, content_type = downloaded
+            platform_file = _create_generated_image_file(
+                raw=raw,
+                content_type=content_type,
+                store=store,
+                session_id=session_id,
+                message_id=message_id,
+                project_id=project_id,
+                folder_id=folder_id,
+                index=len(generated_files) + 1,
+                existing_files=existing_files,
+                existing_names=existing_names,
+                source_url=source_url,
+            )
+            generated_files.append(platform_file)
+            stored_url = (
+                f"{settings.public_base_url.rstrip('/')}/api/files/{platform_file.id}/content"
+            )
+            downloaded_urls[source_url] = stored_url
+        updated_content = updated_content.replace(match.group(0), f"![Imagem gerada]({stored_url})")
 
     return updated_content, generated_files
 

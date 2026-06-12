@@ -78,7 +78,9 @@ def _make_platform_file(
 
 def _analyzer(store: _FakeStore, blender: _FakeBlender) -> ModelingAttachmentAnalyzer:
     return ModelingAttachmentAnalyzer(
-        store=store, gateway=None, blender=blender  # type: ignore[arg-type]
+        store=store,
+        gateway=None,
+        blender=blender,  # type: ignore[arg-type]
     )
 
 
@@ -230,9 +232,7 @@ def test_analyze_mesh_falls_back_to_metadata_when_blender_unavailable(
 
 def test_analyze_mesh_captures_blender_exceptions(tmp_path: Path) -> None:
     store = _FakeStore()
-    pf = _make_platform_file(
-        tmp_path, filename="part.stl", content=b"x", content_type="model/stl"
-    )
+    pf = _make_platform_file(tmp_path, filename="part.stl", content=b"x", content_type="model/stl")
     store.files[pf.id] = pf
     blender = _FakeBlender(raise_on_execute=True)
     analyzer = _analyzer(store, blender)
@@ -250,9 +250,7 @@ def test_analyze_mesh_marks_failure_when_blender_returns_ok_false(
     tmp_path: Path,
 ) -> None:
     store = _FakeStore()
-    pf = _make_platform_file(
-        tmp_path, filename="part.stl", content=b"x", content_type="model/stl"
-    )
+    pf = _make_platform_file(tmp_path, filename="part.stl", content=b"x", content_type="model/stl")
     store.files[pf.id] = pf
     blender = _FakeBlender(
         response={

@@ -112,6 +112,10 @@ _TRANSITIONS: dict[tuple[_STAGE_OR_NONE, ChatModelingEvent], ChatModelingStage] 
     # Recovery from ``failed`` mirrors the editing loop: a successful edit/
     # retry moves to ``editing``; a pending high-risk retry stays in
     # ``failed``; rejecting it returns to ``discovery``.
+    # Retry explícito do card re-executa o plano falho (volta ao ciclo de
+    # execução) e rejeitar o plano falho retoma a descoberta (RF-007).
+    (ChatModelingStage.failed, ChatModelingEvent.EXECUTION_STARTED): (ChatModelingStage.executing),
+    (ChatModelingStage.failed, ChatModelingEvent.PLAN_REJECTED): (ChatModelingStage.discovery),
     (ChatModelingStage.failed, ChatModelingEvent.EDIT_AUTO_EXECUTED): (ChatModelingStage.editing),
     (ChatModelingStage.failed, ChatModelingEvent.EDIT_HIGH_RISK_REQUESTED): (
         ChatModelingStage.failed

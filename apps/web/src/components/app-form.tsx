@@ -72,9 +72,13 @@ export function AgentLLMNumberInput({
 }) {
   const [draftValue, setDraftValue] = useState(() => numberInputDraft(value));
 
+  // Reflete mudanças externas do valor sem atropelar o rascunho que o próprio input gerou
+  // (ex.: vírgula decimal de usuários PT-BR durante a digitação).
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setDraftValue(numberInputDraft(value));
+    setDraftValue((current) =>
+      normalizeNumberDraft(current) === String(value ?? "") ? current : numberInputDraft(value)
+    );
   }, [value]);
 
   function commitDraft(rawValue: string, clearIncomplete = false) {

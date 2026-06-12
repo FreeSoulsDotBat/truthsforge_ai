@@ -8,8 +8,9 @@ backends:
 
 * :class:`InMemoryJobQueue` — default; identical to the previous behaviour,
   suited to dev / single-replica.
-* :class:`RedisJobQueue` — backed by a Redis/Valkey sorted set + dedup set so
-  the queue can be shared across backend replicas.
+* :class:`RedisJobQueue` — backed by a Redis/Valkey sorted set + per-id TTL'd
+  dedup markers so the queue can be shared across backend replicas and a marker
+  orphaned by a worker crash expires instead of blocking re-enqueues forever.
 
 The backend is chosen by ``settings.queue_backend`` (``memory`` |
 ``redis`` | ``valkey``). If a Redis/Valkey backend is requested but
@@ -69,6 +70,15 @@ class JobQueue(ABC):
         """Re-add an in-flight ``item`` (retry) without dedup changes."""
 
 
+# TTL (segundos) do marcador de dedup no backend Redis/Valkey. Um worker que
+# caia (SIGKILL/restart) entre o ``bzpopmin`` e ``release``/``requeue`` deixaria
+# o marcador orfao para sempre, bloqueando todo re-enfileiramento futuro do id
+# (inclusive a recuperacao periodica). Com TTL o marcador se auto-cura: o pior
+# caso e o re-enfileiramento do id ficar bloqueado por no maximo este intervalo.
+# O TTL e renovado a cada ``put``/``requeue`` enquanto o item segue em voo.
+_DEDUP_TTL_SECONDS = 900
+
+
 class InMemoryJobQueue(JobQueue):
     """In-process queue — the historical behaviour, default backend."""
 
@@ -113,26 +123,32 @@ class RedisJobQueue(JobQueue):
     def __init__(self, client: object, namespace: str) -> None:
         self._client = client
         self._zset = f"tf:jobq:{namespace}:z"
-        self._enqueued = f"tf:jobq:{namespace}:enq"
+        # Dedup marker is one TTL'd key per id (``...:enq:<id>``) instead of a
+        # single TTL-less set, so a marker orphaned by a worker crash expires
+        # on its own (``_DEDUP_TTL_SECONDS``) and stops blocking re-enqueues.
+        self._enqueued_prefix = f"tf:jobq:{namespace}:enq:"
         self._seq_key = f"tf:jobq:{namespace}:seq"
+
+    def _enqueued_key(self, item: str) -> str:
+        return f"{self._enqueued_prefix}{item}"
 
     def _score(self, priority: int) -> float:
         seq = int(self._client.incr(self._seq_key))
         return priority * _PRIORITY_SCALE + seq
 
     def put(self, item: str, priority: int = 0) -> bool:
-        # ``sadd`` (dedup marker) and ``zadd`` (work set) are separate commands.
-        # If ``zadd`` fails after ``sadd`` succeeded, roll the dedup marker back
-        # so the item isn't permanently orphaned (the marker would otherwise
-        # block every future enqueue, including recovery, with no work entry to
-        # pop). Order is kept ``sadd`` -> ``zadd`` so an in-flight item (already
-        # in the dedup set) is never re-queued.
-        if not self._client.sadd(self._enqueued, item):
+        # ``set ... nx ex`` is the atomic dedup marker; ``zadd`` (work set) is a
+        # separate command. If ``zadd`` fails after the marker was set, delete
+        # the marker so the item isn't permanently orphaned (the marker would
+        # otherwise block every future enqueue, including recovery, with no work
+        # entry to pop). Order is kept marker -> ``zadd`` so an in-flight item
+        # (marker still present) is never re-queued.
+        if not self._client.set(self._enqueued_key(item), "1", nx=True, ex=_DEDUP_TTL_SECONDS):
             return False
         try:
             self._client.zadd(self._zset, {item: self._score(priority)})
         except Exception:
-            self._client.srem(self._enqueued, item)
+            self._client.delete(self._enqueued_key(item))
             raise
         return True
 
@@ -144,9 +160,11 @@ class RedisJobQueue(JobQueue):
         return member.decode() if isinstance(member, bytes | bytearray) else str(member)
 
     def release(self, item: str) -> None:
-        self._client.srem(self._enqueued, item)
+        self._client.delete(self._enqueued_key(item))
 
     def requeue(self, item: str, priority: int = 0) -> None:
+        # Refresh the dedup TTL while the item is still in flight (retry).
+        self._client.expire(self._enqueued_key(item), _DEDUP_TTL_SECONDS)
         self._client.zadd(self._zset, {item: self._score(priority)})
 
 

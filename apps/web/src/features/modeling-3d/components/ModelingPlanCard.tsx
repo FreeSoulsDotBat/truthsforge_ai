@@ -16,6 +16,7 @@ import { useId, useMemo, useState } from "react";
 
 import { Badge } from "../../../components/ui/Badge";
 import { cn } from "../../../lib/utils";
+import { statusLabel } from "../modeling-format";
 import type { ModelingPlan, ModelingPlanEdit, ModelingPlanStep, ModelingRiskLevel } from "../types";
 
 interface DraftStep {
@@ -92,24 +93,15 @@ const RISK_BADGE_CLASS: Record<ModelingRiskLevel, string> = {
   high: "bg-[color-mix(in_srgb,var(--err)_12%,transparent)] text-forge-red border-forge-red/60"
 };
 
-const STATUS_LABEL: Record<string, string> = {
-  draft: "rascunho",
-  waiting_approval: "aguardando aprovação",
-  approved: "aprovado",
-  running: "executando",
-  completed: "concluído",
-  rejected: "rejeitado",
-  failed: "falhou",
-  pending: "pendente"
-};
-
-function statusLabel(status: string | undefined | null): string {
-  if (!status) return "—";
-  return STATUS_LABEL[status] ?? status;
-}
-
 function highRiskSteps(steps: ModelingPlanStep[]): ModelingPlanStep[] {
   return steps.filter((step) => step.risk_level === "high" || step.approval_required === true);
+}
+
+/** C (observabilidade): primeiro passo que falhou, p/ o card dizer QUAL e por quê
+ *  em vez do genérico "falhou em uma ou mais etapas". Só é durável após o fix B
+ *  (o loop passou a persistir `step.error` a cada passo, não só no fim). */
+function firstFailedStep(steps: ModelingPlanStep[]): ModelingPlanStep | undefined {
+  return steps.find((step) => step.status === "failed" || (step.error != null && step.error !== ""));
 }
 
 function isApprovable(plan: ModelingPlan): boolean {
@@ -148,6 +140,7 @@ export function ModelingPlanCard({
   const [editError, setEditError] = useState<string | null>(null);
   const rejectInputId = useId();
   const highRisk = useMemo(() => highRiskSteps(plan.steps), [plan.steps]);
+  const failedStep = useMemo(() => firstFailedStep(plan.steps), [plan.steps]);
   const summary = (plan.rationale || plan.prompt || "").trim();
   const showApprovalButtons = isApprovable(plan) && !!(onApprove || onReject || onEditPlan);
   const showExecutingBlock = isExecuting(plan);
@@ -217,6 +210,10 @@ export function ModelingPlanCard({
         inputJson = draft.inputText.trim() ? JSON.parse(draft.inputText) : {};
       } catch {
         setEditError(`Etapa ${index + 1}: JSON inválido no campo de argumentos.`);
+        return;
+      }
+      if (typeof inputJson !== "object" || inputJson === null || Array.isArray(inputJson)) {
+        setEditError(`Etapa ${index + 1}: argumentos devem ser um objeto JSON.`);
         return;
       }
       steps.push({
@@ -539,6 +536,11 @@ export function ModelingPlanCard({
             <XCircle size={14} aria-hidden />
             <span>Execução falhou em uma ou mais etapas.</span>
           </div>
+          {failedStep && (
+            <p className="mt-1.5 text-[11px] leading-snug text-forge-red/90" data-testid="modeling-plan-failed-detail">
+              Passo {failedStep.seq} ({failedStep.tool_name}){failedStep.error ? `: ${failedStep.error}` : "."}
+            </p>
+          )}
           <div className="mt-2 flex flex-wrap gap-2">
             {onRetry && (
               <button

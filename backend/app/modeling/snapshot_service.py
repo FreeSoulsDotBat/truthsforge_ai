@@ -166,7 +166,18 @@ class ModelingSnapshotService:
             )
 
         files_dir = storage / "files"
+        if not files_dir.is_dir():
+            raise ValueError(
+                "Conteúdo do snapshot ausente (diretório files/ não existe); "
+                "restauração abortada para não reportar sucesso silencioso."
+            )
         restored_paths = restore_from_snapshot(files_dir, workspace)
+        expected = len(snapshot.files or [])
+        if expected and len(restored_paths) != expected:
+            raise ValueError(
+                "Restauração incompleta: snapshot declarava "
+                f"{expected} arquivo(s) mas {len(restored_paths)} foram restaurados."
+            )
         timestamp = now_utc()
         updated = snapshot.model_copy(update={"restored_at": timestamp})
         self.store.upsert_modeling_snapshot(updated)
