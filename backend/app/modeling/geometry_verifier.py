@@ -16,9 +16,14 @@ from __future__ import annotations
 from app.core.contracts import (
     GeometricContactReport,
     ModelState,
-    ModelStateBody,
     RelationRepairProposal,
     RelationSpec,
+)
+from app.modeling.geometry_core import (
+    bbox_overlap_volume,
+    find_body_by_ref,
+    gap_along,
+    mate_axis,
 )
 
 __all__ = ["verify_relation", "propose_repair"]
@@ -41,57 +46,6 @@ _EXPECTED_DOF = {
 }
 
 
-def _find_body(state: ModelState | None, ref: str) -> ModelStateBody | None:
-    for b in state.bodies if state else []:
-        if b.stable_id == ref or b.name == ref:
-            return b
-    return None
-
-
-def _center(b: ModelStateBody) -> list[float] | None:
-    if not (b.bbox_min_mm and b.bbox_max_mm):
-        return None
-    return [(b.bbox_min_mm[i] + b.bbox_max_mm[i]) / 2.0 for i in range(3)]
-
-
-def _mate_axis(m: ModelStateBody, r: ModelStateBody) -> int:
-    """Eixo do mate = aquele de maior separação entre os centros (o empilhamento).
-
-    Limitação conhecida (laudo F8, baixa/latente): a inferência por centro erra se
-    o desalinhamento lateral exceder a altura do empilhamento. A medição robusta
-    viria da NORMAL da face-alvo declarada na recipe (top_planar/open_boundary) —
-    follow-up quando o verificador for plugado no loop (hoje só reporta, não-ligado)."""
-
-    cm, cr = _center(m), _center(r)
-    if cm is None or cr is None:
-        return 2  # default z
-    return max(range(3), key=lambda i: abs(cm[i] - cr[i]))
-
-
-def _gap_along(m: ModelStateBody, r: ModelStateBody, axis: int) -> float:
-    """Folga (positiva) ou penetração (negativa) entre m e r ao longo de ``axis``."""
-
-    cm, cr = _center(m), _center(r)
-    if cm is None or cr is None:
-        return 0.0
-    if cm[axis] >= cr[axis]:  # m acima de r
-        return m.bbox_min_mm[axis] - r.bbox_max_mm[axis]
-    return r.bbox_min_mm[axis] - m.bbox_max_mm[axis]
-
-
-def _bbox_overlap_volume(a: ModelStateBody, b: ModelStateBody) -> float:
-    if not (a.bbox_min_mm and a.bbox_max_mm and b.bbox_min_mm and b.bbox_max_mm):
-        return 0.0
-    vol = 1.0
-    for i in range(3):
-        lo = max(a.bbox_min_mm[i], b.bbox_min_mm[i])
-        hi = min(a.bbox_max_mm[i], b.bbox_max_mm[i])
-        if hi - lo <= 0:
-            return 0.0
-        vol *= hi - lo
-    return vol
-
-
 def verify_relation(spec: RelationSpec, state_after: ModelState | None) -> GeometricContactReport:
     """Mede a relação no estado pós-execução. ``contact_ok``/``gap_mm``/
     ``interference_mm3``/``dof_ok`` + achados legíveis. Só reporta."""
@@ -99,8 +53,8 @@ def verify_relation(spec: RelationSpec, state_after: ModelState | None) -> Geome
     report = GeometricContactReport(
         relation_kind=spec.kind, moving=spec.moving, reference=spec.reference
     )
-    m = _find_body(state_after, spec.moving)
-    r = _find_body(state_after, spec.reference)
+    m = find_body_by_ref(state_after, spec.moving)
+    r = find_body_by_ref(state_after, spec.reference)
     if m is None or r is None:
         report.ok = False
         report.findings.append(
@@ -110,12 +64,12 @@ def verify_relation(spec: RelationSpec, state_after: ModelState | None) -> Geome
         return report
 
     if spec.kind in _FLUSH_KINDS:
-        axis = _mate_axis(m, r)
-        gap = _gap_along(m, r, axis)
+        axis = mate_axis(m, r)
+        gap = gap_along(m, r, axis)
         report.gap_mm = round(gap, 3)
         if gap < -_EPS:
             # penetração: interferência REAL ao longo do eixo do mate.
-            report.interference_mm3 = round(_bbox_overlap_volume(m, r), 2)
+            report.interference_mm3 = round(bbox_overlap_volume(m, r), 2)
             report.contact_ok = False
             report.ok = False
             report.findings.append(
@@ -134,7 +88,7 @@ def verify_relation(spec: RelationSpec, state_after: ModelState | None) -> Geome
         # Contenção/encaixe (coaxial, bolso): sobreposição de bbox é ESPERADA (o
         # pino entra no furo, a peça assenta no bolso) — NUNCA tratar como
         # penetração. Contato = overlap>0; sem overlap, o encaixe não ocorreu.
-        ov = _bbox_overlap_volume(m, r)
+        ov = bbox_overlap_volume(m, r)
         report.contact_ok = ov > 0
         if ov <= 0:
             report.ok = False

@@ -315,14 +315,14 @@ def enforce_relative_coord(
     if not ref or not isinstance(translation, (list, tuple)) or len(translation) < 3:
         return
 
-    from app.modeling.geometry_verifier import (
-        _bbox_overlap_volume,
-        _find_body,
-        _gap_along,
-        _mate_axis,
+    from app.modeling.geometry_core import (
+        bbox_overlap_volume,
+        find_body_by_ref,
+        gap_along,
+        mate_axis,
     )
 
-    moving = _find_body(state, str(ref))
+    moving = find_body_by_ref(state, str(ref))
     if moving is None or not (moving.bbox_min_mm and moving.bbox_max_mm):
         return
     try:
@@ -341,7 +341,7 @@ def enforce_relative_coord(
 
     # Sobreposição: a posição resultante penetra outro corpo → sempre errado.
     for other in others:
-        if _bbox_overlap_volume(moved, other) > overlap_tol_mm3:
+        if bbox_overlap_volume(moved, other) > overlap_tol_mm3:
             raise SpatialRefError(
                 f"move_body posiciona '{ref}' SOBREPONDO o corpo '{other.name}' "
                 "(coordenada absoluta chutada). Use place_body declarativo: o "
@@ -352,7 +352,7 @@ def enforce_relative_coord(
     # Longe: o corpo móvel fica afastado de TODOS (não encaixa em nada). Mede a
     # folga no eixo de maior separação de cada par; recusa se o vizinho mais
     # próximo está além da tolerância (o caso "tampa a 80 mm").
-    nearest = min(abs(_gap_along(moved, o, _mate_axis(moved, o))) for o in others)
+    nearest = min(abs(gap_along(moved, o, mate_axis(moved, o))) for o in others)
     if nearest > far_tol_mm:
         raise SpatialRefError(
             f"move_body deixa '{ref}' a {nearest:.1f} mm do corpo mais próximo "

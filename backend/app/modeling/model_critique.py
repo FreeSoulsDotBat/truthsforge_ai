@@ -22,6 +22,7 @@ from app.core.contracts import (
     ModelVerdict,
     OperationHistory,
 )
+from app.modeling.geometry_core import bbox_overlap_volume
 
 __all__ = ["build_model_verdict", "render_verdict_block", "verdict_notice"]
 
@@ -107,20 +108,6 @@ def _check_orphan_bodies(intent: IntentSpec, state: ModelState | None) -> list[F
     return out
 
 
-def _bbox_overlap_volume(a: ModelStateBody, b: ModelStateBody) -> float:
-    if not (a.bbox_min_mm and a.bbox_max_mm and b.bbox_min_mm and b.bbox_max_mm):
-        return 0.0
-    vol = 1.0
-    for i in range(3):
-        lo = max(a.bbox_min_mm[i], b.bbox_min_mm[i])
-        hi = min(a.bbox_max_mm[i], b.bbox_max_mm[i])
-        overlap = hi - lo
-        if overlap <= _OVERLAP_EPS:
-            return 0.0
-        vol *= overlap
-    return vol
-
-
 def _check_interference(intent: IntentSpec, state: ModelState | None) -> list[Finding]:
     by = _bodies_by_ref(state)
     out: list[Finding] = []
@@ -128,7 +115,7 @@ def _check_interference(intent: IntentSpec, state: ModelState | None) -> list[Fi
         bodies = [by[r] for r in group if r in by]
         for i in range(len(bodies)):
             for j in range(i + 1, len(bodies)):
-                ov = _bbox_overlap_volume(bodies[i], bodies[j])
+                ov = bbox_overlap_volume(bodies[i], bodies[j], eps=_OVERLAP_EPS)
                 if ov > 0:
                     out.append(
                         Finding(

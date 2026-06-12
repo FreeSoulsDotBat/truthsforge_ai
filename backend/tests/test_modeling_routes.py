@@ -33,6 +33,24 @@ def _create_plan_via_service(**kwargs: Any) -> dict[str, Any]:
     return json.loads(plan.model_dump_json())
 
 
+def test_safe_error_detail_allowlists_typed_orchestrator_errors() -> None:
+    """F1 (follow-up do conselho do PR #50): os ``ValueError`` tipados do
+    orchestrator mantêm a mensagem real (só chat_id/estágio — sem eco de LLM nem
+    detalhe de infra); qualquer outra exceção vira genérica, sem vazar o texto."""
+
+    from app.api.routes.chat_modeling import _safe_error_detail
+    from app.modeling.chat_orchestrator import InvalidEditStage, NotAModelingChat
+
+    assert "is not a modeling-3D chat" in _safe_error_detail(NotAModelingChat("chat-123"))
+    assert "propose_edit_plan" in _safe_error_detail(InvalidEditStage(None))
+
+    # ValueError genérico (ex.: validação do planner que INTERPOLA saída do LLM):
+    # a mensagem NÃO pode chegar ao chat/metadata — vira texto + nome do tipo.
+    detail = _safe_error_detail(ValueError("software_choice inválido vindo do LLM: <eco>"))
+    assert detail == "erro interno (ValueError)"
+    assert "<eco>" not in detail
+
+
 EXPECTED_BLENDER_TOOLS = {
     "blender.create_mesh_primitive",
     "blender.apply_bevel",

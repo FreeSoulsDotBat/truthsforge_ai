@@ -94,11 +94,7 @@ def _bbox_volume(b: ModelStateBody) -> float:
 
 
 def _derive_touches(state: ModelState) -> None:
-    from app.modeling.geometry_verifier import (
-        _bbox_overlap_volume,
-        _gap_along,
-        _mate_axis,
-    )
+    from app.modeling.geometry_core import bbox_overlap_volume, gap_along, mate_axis
 
     bodies = [b for b in state.bodies if b.bbox_min_mm and b.bbox_max_mm]
     for b in bodies:
@@ -106,13 +102,13 @@ def _derive_touches(state: ModelState) -> None:
         for o in bodies:
             if o is b:
                 continue
-            axis = _mate_axis(b, o)
-            gap = _gap_along(b, o, axis)
+            axis = mate_axis(b, o)
+            gap = gap_along(b, o, axis)
             # Só conta como adjacência se compartilham área no plano perpendicular
             # (exclui corpos lado-a-lado, alinhados mas sem contato real).
             if _perp_overlap_area(b, o, axis) <= 0:
                 continue
-            overlap = _bbox_overlap_volume(b, o)
+            overlap = bbox_overlap_volume(b, o)
             # CONTENÇÃO esperada (pino no furo): a interseção cobre ≥80% da menor
             # bbox ⇒ um corpo está essencialmente DENTRO do outro — encaixe, não
             # colisão. O render do <model-state> (model_state.py, fora deste

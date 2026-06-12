@@ -35,7 +35,11 @@ from app.core.contracts import (
     now_utc,
 )
 from app.cost_governor.service import estimate_tokens
-from app.modeling.chat_orchestrator import get_modeling_orchestrator
+from app.modeling.chat_orchestrator import (
+    InvalidEditStage,
+    NotAModelingChat,
+    get_modeling_orchestrator,
+)
 from app.modeling.chat_state import InvalidModelingStageTransition
 from app.modeling.fusion_adapter import FusionBridgeError
 from app.modeling.observability import current_trace_id, get_tracer
@@ -60,11 +64,17 @@ logger = logging.getLogger(__name__)
 _SAFE_MODELING_ERROR_TYPES: tuple[type[Exception], ...] = (
     FusionBridgeError,
     InvalidModelingStageTransition,
+    # ValueError tipados do orchestrator: a mensagem só interpola chat_id (UUID)
+    # e o estágio (enum) — sem eco de saída do LLM nem detalhe de infra. Hoje
+    # só alcançáveis por mutação concorrente do estágio (TOCTOU); allowlistados
+    # por higiene defensiva para não virarem "erro interno" se a janela abrir.
+    InvalidEditStage,
     ModelingInvalidEditTool,
     ModelingPlanNotApprovable,
     ModelingPlanNotEditable,
     ModelingPlanNotExecutable,
     ModelingRollbackUnavailable,
+    NotAModelingChat,
     # Cobre EntityRefError, AmbiguousRefError e RelationUnderivableError.
     SpatialRefError,
 )
