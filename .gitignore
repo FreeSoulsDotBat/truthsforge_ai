@@ -22,6 +22,9 @@ apps/docs/.docusaurus/
 !.env.example
 *.local
 
+# Claude Code: secrets/overrides locais (ex.: token do MCP do GitHub) — NUNCA versionar
+.claude/settings.local.json
+
 apps/mobile/android/
 apps/mobile/ios/
 apps/desktop/src-tauri/target/
