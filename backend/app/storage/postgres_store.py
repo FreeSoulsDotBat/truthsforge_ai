@@ -73,10 +73,17 @@ logger = logging.getLogger(__name__)
 _POSTGRES_CONNECT_ATTEMPTS = 8
 _POSTGRES_CONNECT_RETRY_DELAY_SECONDS = 1.0
 # Pool reutilizavel: evita abrir/fechar conexao por operacao (storage-002).
-# max_size precisa acomodar checkouts aninhados na mesma thread (um metodo segura
-# uma conexao e chama outro metodo que faz novo checkout); 10 cobre com folga.
+# max_size vem de settings.postgres_pool_max_size (env TRUTHS_FORGE_POSTGRES_POOL_MAX_SIZE,
+# default 10) e precisa acomodar checkouts ANINHADOS na mesma thread (um metodo
+# segura uma conexao e chama outro metodo que faz novo checkout); por isso o
+# piso 2 em _open_pool — com max_size=1 o checkout aninhado deadlocka.
 _POSTGRES_POOL_MIN_SIZE = 1
-_POSTGRES_POOL_MAX_SIZE = 10
+_POSTGRES_POOL_MAX_SIZE_FLOOR = 2
+# Health-check de checkout: apos restart do Postgres o pool pode reter conexoes
+# mortas; sem o check elas sao ENTREGUES e cada operacao estoura OperationalError
+# em serie ate o pool reciclar. Referencia capturada no import (constante) para
+# os testes poderem monkeypatchar a factory ConnectionPool sem perder o metodo real.
+_POSTGRES_POOL_CHECK = psycopg_pool.ConnectionPool.check_connection
 # Timeout do wait() de boot por tentativa; o retry externo cobre a janela total.
 _POSTGRES_POOL_WAIT_TIMEOUT_SECONDS = 5.0
 _POSTGRES_RETRYABLE_CONNECT_ERROR_SNIPPETS = (
@@ -124,12 +131,18 @@ class PostgresStore:
         # caso o Postgres ainda nao esteja pronto, mantendo o retry de boot existente.
         # PoolTimeout durante a janela de inicializacao e tratado como retryavel.
         last_error: Exception | None = None
+        # Piso 2: ver comentario das constantes (checkouts aninhados na mesma
+        # thread deadlockam com max_size=1).
+        max_size = max(_POSTGRES_POOL_MAX_SIZE_FLOOR, settings.postgres_pool_max_size)
         for attempt in range(1, _POSTGRES_CONNECT_ATTEMPTS + 1):
             pool = psycopg_pool.ConnectionPool(
                 conninfo=self.database_url,
                 min_size=_POSTGRES_POOL_MIN_SIZE,
-                max_size=_POSTGRES_POOL_MAX_SIZE,
+                max_size=max_size,
                 open=True,
+                # check no checkout: descarta conexoes mortas (Postgres
+                # reiniciado) em vez de entrega-las ao caller.
+                check=_POSTGRES_POOL_CHECK,
                 kwargs={"row_factory": dict_row},
             )
             try:

@@ -1188,6 +1188,13 @@ class ModelingPlan(BaseModel):
     planejamento hierárquico está ligado). Cada sub-objetivo é executado como
     um bloco ``kind=edit`` com ``parent_plan_id`` = este plano. Vazio no fluxo
     one-shot legado."""
+    trace_id: str | None = None
+    """Trace de observabilidade da PROPOSTA do plano — a MESMA fonte do dump
+    SSE ``_modeling_plan_metadata`` (o contextvar bindado por ``start_trace``),
+    persistida no payload (JSONB, migration-free). Sem isto o contrato REST
+    (``GET/POST /api/3d/plans...``) perdia o trace na primeira re-busca do
+    card e o modal de diagnóstico se auto-desfazia (RF-024). ``None`` em
+    planos antigos ou com observabilidade desligada."""
     created_at: datetime = Field(default_factory=now_utc)
     updated_at: datetime = Field(default_factory=now_utc)
 

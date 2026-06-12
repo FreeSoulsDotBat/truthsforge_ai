@@ -1,6 +1,6 @@
 import type { StreamStatusEvent } from "../../lib/api";
-import type { ChatMessage, ChatModeling3DContext, ChatSession } from "../../types/api";
-import type { ModelingPlan } from "../modeling-3d/types";
+import type { ChatMessage, ChatModeling3DContext, ChatModelingStage, ChatSession } from "../../types/api";
+import type { ModelingPlan, ModelingPlanStatus } from "../modeling-3d/types";
 
 export const DEFAULT_CHAT_TITLES = ["novo chat", "new chat"] as const;
 
@@ -130,15 +130,46 @@ export function withReasoningSummary(message: ChatMessage, chunk: string): ChatM
 }
 
 export function withModelingPlan(message: ChatMessage, plan: ModelingPlan): ChatMessage {
+  // RF-024: o trace_id historicamente só chegava via SSE; payloads REST
+  // (approve/execute/getPlan) podiam vir sem ele e apagar o valor já
+  // conhecido — o modal de diagnóstico virava no-op após a primeira ação do
+  // card. Mesmo com o backend serializando trace_id no REST, preserva o
+  // existente como fallback defensivo.
+  const previousPlan = messageMetadata(message).modeling_plan;
+  const nextPlan =
+    plan.trace_id == null && previousPlan?.id === plan.id && previousPlan.trace_id != null
+      ? { ...plan, trace_id: previousPlan.trace_id }
+      : plan;
   return {
     ...message,
     metadata: {
       ...(message.metadata ?? {}),
       response_mode: "modeling_3d",
-      modeling_plan: plan,
-      modeling_plan_id: plan.id
+      modeling_plan: nextPlan,
+      modeling_plan_id: nextPlan.id
     }
   };
+}
+
+// Fonte única do mapeamento status do plano → estágio da sessão de chat.
+// Usada tanto pelo handler SSE `modeling_plan` quanto pelo reconcile pós-409
+// (anti-replay C5) — mantê-los divergentes fazia um 409 com plano `running`
+// regredir a UI para a etapa de aprovação durante a execução.
+export function modelingStageForPlanStatus(status: ModelingPlanStatus): ChatModelingStage {
+  switch (status) {
+    case "completed":
+      return "editing";
+    case "failed":
+      return "failed";
+    case "rejected":
+      return "discovery";
+    case "draft":
+    case "waiting_approval":
+      return "planning";
+    case "approved":
+    case "running":
+      return "executing";
+  }
 }
 
 export function normalizeStreamExecutionModes({

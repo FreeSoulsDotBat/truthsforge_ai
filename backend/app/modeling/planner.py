@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import re
@@ -24,7 +25,7 @@ from app.core.contracts import (
 from app.llm_gateway.gateway import LLMGateway
 from app.modeling import tool_schemas
 from app.modeling.plan_sanitizer import sanitize_tool_arguments
-from app.modeling.tool_registry import PLANNER_TOOLSET, requires_approval
+from app.modeling.tool_registry import PLANNER_TOOLSET, planner_toolset, requires_approval
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +327,23 @@ EXECUTION_PLAN_SCHEMA: dict[str, Any] = {
 }
 
 
+def _execution_plan_schema() -> dict[str, Any]:
+    """Versão RUNTIME de :data:`EXECUTION_PLAN_SCHEMA` (flags F7/F8).
+
+    O enum de ``tool_name`` é recalculado por :func:`planner_toolset` a cada
+    chamada: com a flag OFF, as tools declarativas (place_body/align_axis/
+    distribute_along/relate_bodies) saem do Structured Output — o LLM não pode
+    nem escolher uma tool que falharia garantido no adapter (auditoria
+    2026-06-10). A constante estática segue como superset p/ auditoria/testes.
+    """
+
+    schema = copy.deepcopy(EXECUTION_PLAN_SCHEMA)
+    schema["properties"]["steps"]["items"]["properties"]["tool_name"]["enum"] = list(
+        planner_toolset()
+    )
+    return schema
+
+
 def choose_software(
     prompt: str, override: ModelingSoftware | None
 ) -> tuple[ModelingSoftware, float, str]:
@@ -421,7 +439,7 @@ def create_llm_plan(
             model=model,
             messages=messages,
             schema_name="modeling_execution_plan",
-            schema=EXECUTION_PLAN_SCHEMA,
+            schema=_execution_plan_schema(),
         )
     )
     return _plan_from_llm_payload(payload, parsed)
@@ -440,7 +458,7 @@ async def create_llm_plan_async(
         model=model,
         messages=messages,
         schema_name="modeling_execution_plan",
-        schema=EXECUTION_PLAN_SCHEMA,
+        schema=_execution_plan_schema(),
     )
     return _plan_from_llm_payload(payload, parsed)
 
@@ -565,6 +583,18 @@ CORRECTED_STEP_SCHEMA: dict[str, Any] = {
 }
 
 
+def _corrected_step_schema() -> dict[str, Any]:
+    """Versão RUNTIME de :data:`CORRECTED_STEP_SCHEMA` (flags F7/F8).
+
+    Mesma razão de :func:`_execution_plan_schema`: o corretor também não pode
+    "corrigir" um passo trocando-o por uma tool declarativa cuja flag está OFF.
+    """
+
+    schema = copy.deepcopy(CORRECTED_STEP_SCHEMA)
+    schema["properties"]["tool_name"]["enum"] = list(planner_toolset())
+    return schema
+
+
 def _correction_messages(
     step: ModelingPlanStep,
     output: dict[str, Any],
@@ -592,10 +622,12 @@ def _corrected_step_from_payload(
     step: ModelingPlanStep, parsed: dict[str, Any]
 ) -> ModelingPlanStep:
     tool_name = str(parsed.get("tool_name") or step.tool_name)
-    # Re-valida a allowlist: uma "correção" não pode introduzir tool fora do
-    # PLANNER_TOOLSET (defesa-em-profundidade caso o enum do Structured Output
-    # não seja estritamente honrado pelo provider).
-    if tool_name not in PLANNER_TOOLSET:
+    # Re-valida a allowlist RUNTIME (flags F7/F8): uma "correção" não pode
+    # introduzir tool fora de planner_toolset() (defesa-em-profundidade caso o
+    # enum do Structured Output não seja estritamente honrado pelo provider).
+    # Com a flag OFF a tool declarativa falharia garantido no adapter, então
+    # rejeitar aqui só antecipa o desfecho (o loop cai em "sem correção").
+    if tool_name not in planner_toolset():
         raise ValueError(
             f"tool_name '{tool_name}' fora da allowlist do planner; correção de passo rejeitada."
         )
@@ -648,7 +680,7 @@ async def correct_step_async(
         model=model,
         messages=messages,
         schema_name="modeling_corrected_step",
-        schema=CORRECTED_STEP_SCHEMA,
+        schema=_corrected_step_schema(),
     )
     return _corrected_step_from_payload(step, parsed)
 
@@ -1100,8 +1132,10 @@ def _build_messages(
         + _f7_placement_nudge()
         + _f9_relative_nudge()
         + "\n"
+        # Toolset RUNTIME (flags F7/F8): tools declarativas com a flag OFF não
+        # têm schema renderizado — o LLM não aprende uma tool fadada a falhar.
         "Ferramentas disponíveis (com argumentos/unidades/exemplos quando conhecidos):\n"
-        + tool_schemas.render_tool_schemas(list(PLANNER_TOOLSET))
+        + tool_schemas.render_tool_schemas(list(planner_toolset()))
         + "\n\nResponda apenas em JSON conforme o schema modeling_execution_plan."
     )
     user_prompt = payload.prompt.strip()
@@ -1168,6 +1202,9 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
     raw_steps = parsed.get("steps") or []
     if not isinstance(raw_steps, list) or not raw_steps:
         raise ValueError("Plano do LLM precisa conter ao menos uma etapa.")
+    # Allowlist RUNTIME (flags F7/F8): consistente com o enum/schemas que o
+    # LLM recebeu — tool flag-gated oculta é rejeitada também na volta.
+    allowed_tools = planner_toolset()
     steps: list[ModelingPlanStep] = []
     for index, item in enumerate(raw_steps, start=1):
         if not isinstance(item, dict):
@@ -1178,7 +1215,7 @@ def _plan_from_llm_payload(payload: ModelingPlanCreate, parsed: dict[str, Any]) 
         tool_name = str(item.get("tool_name") or "").strip()
         if not tool_name:
             raise ValueError(f"Etapa {index} sem tool_name.")
-        if tool_name not in PLANNER_TOOLSET:
+        if tool_name not in allowed_tools:
             raise ValueError(
                 f"tool_name '{tool_name}' fora da allowlist do planner; "
                 "etapa rejeitada antes da policy."

@@ -4,7 +4,6 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import type { DashboardView, Panel } from "./ui-state";
 
-type ChatProjectScopeMode = "project_only" | "project_plus_global" | "global_only";
 type ReasoningOverride = "default" | "long";
 type ResponseMode = "text" | "image";
 type ShortcutSubmenu = "agent" | "scope" | null;
@@ -20,7 +19,10 @@ function isDashboardView(value: unknown): value is DashboardView {
   return typeof value === "string" && dashboardViews.includes(value as DashboardView);
 }
 
-const staleKeys = ["modeling3dEnabled", "modeling3dMode", "modeling3dSoftware"] as const;
+// `chatProjectScopeMode` virou estado morto quando o payload do stream parou
+// de enviar `project_scope_mode`; removido do store em 2026-06 (nenhum payload
+// do front lia o valor — só set/sync/persist).
+const staleKeys = ["modeling3dEnabled", "modeling3dMode", "modeling3dSoftware", "chatProjectScopeMode"] as const;
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function migratePersistedState(persistedState: unknown, version: number): unknown {
@@ -50,7 +52,6 @@ export type AppStoreState = {
   selectedKnowledgeProjectId: string | null;
   selectedKnowledgeFolderId: string | null;
   chatProjectId: string | null;
-  chatProjectScopeMode: ChatProjectScopeMode;
   reasoningOverride: ReasoningOverride;
   deepResearch: boolean;
   deepResearchMaxToolCalls: number;
@@ -73,7 +74,6 @@ type AppStoreActions = {
   setSelectedKnowledgeProjectId: (next: Updater<string | null>) => void;
   setSelectedKnowledgeFolderId: (next: Updater<string | null>) => void;
   setChatProjectId: (next: Updater<string | null>) => void;
-  setChatProjectScopeMode: (next: Updater<ChatProjectScopeMode>) => void;
   setReasoningOverride: (next: Updater<ReasoningOverride>) => void;
   setDeepResearch: (next: Updater<boolean>) => void;
   setDeepResearchMaxToolCalls: (next: Updater<number>) => void;
@@ -98,7 +98,6 @@ const initialState: AppStoreState = {
   selectedKnowledgeProjectId: null,
   selectedKnowledgeFolderId: null,
   chatProjectId: null,
-  chatProjectScopeMode: "global_only",
   reasoningOverride: "default",
   deepResearch: false,
   deepResearchMaxToolCalls: 12,
@@ -126,8 +125,6 @@ export const useAppStore = create<AppStore>()(
       setSelectedKnowledgeFolderId: (next) =>
         set((state) => ({ selectedKnowledgeFolderId: applyUpdater(state.selectedKnowledgeFolderId, next) })),
       setChatProjectId: (next) => set((state) => ({ chatProjectId: applyUpdater(state.chatProjectId, next) })),
-      setChatProjectScopeMode: (next) =>
-        set((state) => ({ chatProjectScopeMode: applyUpdater(state.chatProjectScopeMode, next) })),
       setReasoningOverride: (next) =>
         set((state) => ({ reasoningOverride: applyUpdater(state.reasoningOverride, next) })),
       setDeepResearch: (next) => set((state) => ({ deepResearch: applyUpdater(state.deepResearch, next) })),
@@ -145,7 +142,10 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: "truths-forge-ui-state-v1",
-      version: 1,
+      // v2 (2026-06): remove `chatProjectScopeMode` do localStorage — sem o
+      // bump o `migrate` não roda (só dispara em mismatch de versão) e o merge
+      // raso da rehidratação reinjetaria a chave morta no store.
+      version: 2,
       storage: createJSONStorage(() => localStorage),
       migrate: migratePersistedState,
       partialize: (state) => ({
@@ -157,7 +157,6 @@ export const useAppStore = create<AppStore>()(
         selectedKnowledgeProjectId: state.selectedKnowledgeProjectId,
         selectedKnowledgeFolderId: state.selectedKnowledgeFolderId,
         chatProjectId: state.chatProjectId,
-        chatProjectScopeMode: state.chatProjectScopeMode,
         reasoningOverride: state.reasoningOverride,
         deepResearch: state.deepResearch,
         deepResearchMaxToolCalls: state.deepResearchMaxToolCalls,

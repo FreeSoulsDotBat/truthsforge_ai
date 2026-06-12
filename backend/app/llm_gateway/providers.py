@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from typing import Any, Literal
 
 import httpx
 
+from app.core.config import settings
 from app.core.contracts import ModelConfig, ProviderModel, ProviderName
 from app.llm_gateway.pricing import with_pricing
 from app.security.secrets import SecretStore, get_secret_store
@@ -362,15 +362,10 @@ class OpenAIProvider(BaseRemoteProvider):
                     "Vou consultar fontes externas e sintetizar a resposta "
                     f"(limite: {max_tool_calls} chamadas de ferramenta).\n\n"
                 )
-                # Teto configurável de polls (default 360 × 5s ≈ 30 min). O operador
-                # pode encurtar via TRUTHS_FORGE_DEEP_RESEARCH_MAX_POLLS para não segurar
-                # a request indefinidamente em aba abandonada.
-                try:
-                    max_polls = int(os.getenv("TRUTHS_FORGE_DEEP_RESEARCH_MAX_POLLS", "360"))
-                except ValueError:
-                    max_polls = 360
-                if max_polls < 1:
-                    max_polls = 1
+                # Teto configurável de polls (Settings.deep_research_max_polls,
+                # env TRUTHS_FORGE_DEEP_RESEARCH_MAX_POLLS, default 360 × 5s ≈
+                # 30 min). Piso 1 preservado para valores não-positivos.
+                max_polls = max(1, settings.deep_research_max_polls)
                 for attempt in range(max_polls):
                     await asyncio.sleep(5)
                     poll_response = await client.get(

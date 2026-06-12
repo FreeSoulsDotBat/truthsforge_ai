@@ -107,7 +107,8 @@ def test_derive_touches_ignores_side_by_side_bodies() -> None:
 
 
 def test_derive_touches_flags_interference() -> None:
-    # Corpo B penetra A (overlap de volume real) → interference=True.
+    # Corpo B penetra A (overlap de volume real, PARCIAL: 50% da menor bbox —
+    # abaixo do limiar de contenção) → interference=True continua acusada.
     state = ModelState(
         bodies=[
             ModelStateBody(name="A", bbox_min_mm=[0, 0, 0], bbox_max_mm=[10, 10, 10]),
@@ -116,6 +117,52 @@ def test_derive_touches_flags_interference() -> None:
     )
     derive_semantic_state(state)
     assert any(t.other == "B" and t.interference for t in state.bodies[0].touches)
+
+
+def test_derive_touches_containment_is_not_interference() -> None:
+    # Pino no furo: bbox do Pino 100% dentro da Caixa (≥80% da menor bbox) →
+    # CONTENÇÃO esperada (geometry_verifier._CONTAIN_KINDS), não "interfere com".
+    # A adjacência aparece com interference=False (o render mostra "encosta em")
+    # — o planner não é convidado a "consertar" um encaixe correto.
+    state = ModelState(
+        bodies=[
+            ModelStateBody(name="Caixa", bbox_min_mm=[0, 0, 0], bbox_max_mm=[60, 40, 20]),
+            ModelStateBody(name="Pino", bbox_min_mm=[25, 15, 5], bbox_max_mm=[35, 25, 15]),
+        ]
+    )
+    derive_semantic_state(state)
+    caixa, pino = state.bodies
+    assert any(t.other == "Pino" and not t.interference for t in caixa.touches)
+    assert any(t.other == "Caixa" and not t.interference for t in pino.touches)
+    assert all(not t.interference for t in caixa.touches + pino.touches)
+
+
+def test_contained_body_is_not_labeled_lid() -> None:
+    # Corpo CONTIDO (interference=False mas folga bem negativa) não vira "lid":
+    # tampa exige ENCOSTO real (folga ~0) no container.
+    state = ModelState(
+        bodies=[
+            ModelStateBody(
+                name="Caixa",
+                bbox_min_mm=[0, 0, 0],
+                bbox_max_mm=[60, 40, 20],
+                faces=[
+                    ModelStateFace(
+                        token="CX_TOP",
+                        type="planar",
+                        normal_axis="+z",
+                        center_mm=[30, 20, 20],
+                        area_mm2=2400.0,
+                        is_open_boundary=True,
+                    )
+                ],
+            ),
+            ModelStateBody(name="Pino", bbox_min_mm=[25, 15, 5], bbox_max_mm=[35, 25, 8]),
+        ]
+    )
+    derive_semantic_state(state)
+    assert state.bodies[0].body_label == "container"
+    assert state.bodies[1].body_label is None
 
 
 def test_derive_labels_container_and_lid() -> None:

@@ -102,6 +102,34 @@ def test_postgres_pool_open_does_not_retry_authentication_failure(monkeypatch) -
     assert sleeps == []
 
 
+def test_postgres_pool_open_passes_health_check_and_configurable_max_size(monkeypatch) -> None:
+    # Pós-restart do Postgres o pool pode reter conexões mortas; o ``check``
+    # de checkout as descarta em vez de entregá-las (OperationalError em série).
+    created, pools = _patch_pool_factory(monkeypatch, [None])
+    monkeypatch.setattr(postgres_store.settings, "postgres_pool_max_size", 7)
+
+    pool = make_store()._open_pool()
+
+    assert pool is pools[0]
+    kwargs = created[0]
+    # Referência capturada no import — sobrevive ao monkeypatch da factory
+    # (dentro do teste, psycopg_pool.ConnectionPool já é o fake, sem o método).
+    assert kwargs["check"] is postgres_store._POSTGRES_POOL_CHECK
+    assert kwargs["max_size"] == 7  # configurável via Settings/env
+    assert kwargs["min_size"] == postgres_store._POSTGRES_POOL_MIN_SIZE
+
+
+def test_postgres_pool_max_size_floor_protects_nested_checkouts(monkeypatch) -> None:
+    # max_size=1 deadlocka em checkouts aninhados na mesma thread (um método
+    # segura uma conexão e chama outro que faz novo checkout) — piso 2.
+    created, _ = _patch_pool_factory(monkeypatch, [None])
+    monkeypatch.setattr(postgres_store.settings, "postgres_pool_max_size", 1)
+
+    make_store()._open_pool()
+
+    assert created[0]["max_size"] == postgres_store._POSTGRES_POOL_MAX_SIZE_FLOOR
+
+
 def test_postgres_pool_open_retries_pool_timeout(monkeypatch) -> None:
     # PoolTimeout durante a janela de boot é sempre retryável (storage-002).
     created, pools = _patch_pool_factory(

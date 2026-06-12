@@ -255,6 +255,87 @@ def test_relate_bodies_released_after_gate() -> None:
     assert "fusion.relate_bodies" in PLANNER_TOOLSET  # liberado pós-gate
 
 
+# ---------------------------------------------------------------------------
+# Visibilidade RUNTIME ao planner (auditoria 2026-06-10, linha 768): com a flag
+# OFF as tools declarativas F7/F8 não podem aparecer no toolset do planner —
+# o LLM era ensinado (schema no prompt + enum) a escolher tools que falhariam
+# garantido no adapter. A executabilidade (executor/policy) NÃO muda.
+# ---------------------------------------------------------------------------
+
+
+def _set_planner_flags(monkeypatch: pytest.MonkeyPatch, *, spatial: bool, relation: bool) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "modeling_spatial_resolution_enabled", spatial, raising=False)
+    monkeypatch.setattr(settings, "modeling_relation_placement_enabled", relation, raising=False)
+
+
+def test_planner_toolset_runtime_hides_spatial_trio_when_flag_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modeling.tool_registry import SPATIAL_PLANNER_TOOLS, planner_toolset
+
+    assert SPATIAL_PLANNER_TOOLS == {
+        "fusion.place_body",
+        "fusion.align_axis",
+        "fusion.distribute_along",
+    }
+    _set_planner_flags(monkeypatch, spatial=False, relation=True)
+    visible = set(planner_toolset())
+    assert not visible & SPATIAL_PLANNER_TOOLS
+    assert "fusion.relate_bodies" in visible  # flag de relação segue ON
+
+    _set_planner_flags(monkeypatch, spatial=True, relation=True)
+    assert SPATIAL_PLANNER_TOOLS <= set(planner_toolset())
+
+
+def test_planner_toolset_runtime_hides_relate_bodies_when_flag_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modeling.tool_registry import RELATION_PLANNER_TOOLS, planner_toolset
+
+    assert RELATION_PLANNER_TOOLS == {"fusion.relate_bodies"}
+    _set_planner_flags(monkeypatch, spatial=True, relation=False)
+    visible = set(planner_toolset())
+    assert "fusion.relate_bodies" not in visible
+    assert "fusion.place_body" in visible  # flag espacial segue ON
+
+    _set_planner_flags(monkeypatch, spatial=True, relation=True)
+    assert "fusion.relate_bodies" in planner_toolset()
+
+
+def test_planner_toolset_runtime_equals_superset_with_flags_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flags ON ⇒ idêntico (inclusive ordem) ao superset estático PLANNER_TOOLSET."""
+
+    from app.modeling.tool_registry import planner_toolset
+
+    _set_planner_flags(monkeypatch, spatial=True, relation=True)
+    assert planner_toolset() == PLANNER_TOOLSET
+
+
+def test_planner_toolset_runtime_preserves_order_and_executability_with_flags_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flags OFF ⇒ some só o quarteto flag-gated (ordem preservada); a
+    EXECUTABILIDADE não muda — as tools seguem no registry e em FUSION_TOOLS."""
+
+    from app.modeling.tool_registry import (
+        RELATION_PLANNER_TOOLS,
+        SPATIAL_PLANNER_TOOLS,
+        planner_toolset,
+    )
+
+    _set_planner_flags(monkeypatch, spatial=False, relation=False)
+    gated = SPATIAL_PLANNER_TOOLS | RELATION_PLANNER_TOOLS
+    expected = tuple(name for name in PLANNER_TOOLSET if name not in gated)
+    assert planner_toolset() == expected
+    for name in gated:
+        assert is_known(name)  # registry/policy intactos
+        assert name in FUSION_TOOLS  # adapter/executor seguem conhecendo
+
+
 def test_read_only_set_matches_allowlist() -> None:
     expected = {
         "blender.measure_object",

@@ -102,9 +102,16 @@ def _pick_extreme(
     return top
 
 
-def _center_z(bf: tuple[ModelStateBody, ModelStateFace]) -> float:
+def _has_center(bf: tuple[ModelStateBody, ModelStateFace]) -> bool:
     c = bf[1].center_mm
-    return c[2] if c and len(c) >= 3 else 0.0
+    return bool(c) and len(c) >= 3
+
+
+def _center_z(bf: tuple[ModelStateBody, ModelStateFace]) -> float:
+    # Só é chamado após o filtro ``_has_center`` — um fallback 0.0 aqui faria a
+    # face SEM medição competir no ranking de extremos como se estivesse em z=0
+    # (AmbiguousRefError confuso / extremo errado).
+    return bf[1].center_mm[2]
 
 
 def _area(bf: tuple[ModelStateBody, ModelStateFace]) -> float:
@@ -124,8 +131,16 @@ def _resolve_face_by_role(
         horizontal = [bf for bf in cands if (bf[1].normal_axis or "").lower() in ("+z", "-z", "z")]
         if not horizontal:
             raise EntityRefError(f"role '{role}': nenhuma face planar horizontal (eixo z)")
+        # Só faces COM ``center_mm`` medido competem no ranking de extremos —
+        # face sem medição não pode ser comparada por z (nunca chuta z=0).
+        measured = [bf for bf in horizontal if _has_center(bf)]
+        if not measured:
+            raise EntityRefError(
+                f"role '{role}': nenhuma face horizontal tem center_mm medido — "
+                "rode query_geometry para medir o modelo antes de referenciar por extremo"
+            )
         top = role in ("top_planar", "top")
-        return _pick_extreme(horizontal, _center_z, maximize=top, tol=_POS_TOL, label=role)
+        return _pick_extreme(measured, _center_z, maximize=top, tol=_POS_TOL, label=role)
     if role == "largest":
         return _pick_extreme(cands, _area, maximize=True, tol=_AREA_TOL, label=role)
     if role in ("largest_planar", "largest_flat"):

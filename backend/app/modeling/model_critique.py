@@ -176,14 +176,22 @@ def build_model_verdict(
     state: ModelState | None,
     *,
     semantic_findings: list[Finding] | None = None,
-) -> ModelVerdict:
+) -> ModelVerdict | None:
     """Avalia o estado contra a intenção + histórico → veredito estruturado.
     SÓ REPORTA (não corrige).
+
+    **Sem read-back não há veredito**: ``state is None`` significa que a captura
+    best-effort do ``model_state`` FALHOU — não que o modelo tem 0 corpos. Medir
+    contra um estado ausente acusava "0 corpos / faltou N" FALSO; devolvemos
+    ``None`` (avaliador mudo) e o chamador registra o porquê em log/trace.
 
     ``semantic_findings`` (F8): achados de fonte NÃO-determinística (ex.: a crítica
     VISUAL como ``source='semantic'``) entram no MESMO veredito — um ponto de
     decisão, duas percepções. A geometria mede o quantificável; a visão informa o
     que ela não mede. Nenhuma das duas replaneja (invariante: reporta, não age)."""
+
+    if state is None:
+        return None
 
     findings: list[Finding] = []
     findings += _check_body_count(intent, state)

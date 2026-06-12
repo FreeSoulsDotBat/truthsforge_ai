@@ -47,18 +47,29 @@ def load_or_create_token() -> str:
         existing = path.read_text(encoding="utf-8").strip()
         if existing:
             return existing
-        # Arquivo existe mas está vazio (gravação parcial); sobrescreve.
-        path.write_text(token, encoding="utf-8")
-        return token
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(token)
-    finally:
+        # Arquivo existe mas está vazio (gravação parcial); sobrescreve pelo
+        # mesmo caminho restritivo: restringe a permissão ANTES de gravar o
+        # segredo (o arquivo ainda está vazio, então nada vaza), eliminando a
+        # janela world-readable que um write+chmod posterior abriria em POSIX.
         try:  # melhor-esforço (no-op/redundante em ACLs do Windows)
             path.chmod(0o600)
         except OSError:
             pass
+        fd = os.open(str(path), os.O_WRONLY | os.O_TRUNC)
+        _write_token_fd(fd, token)
+        return token
+    _write_token_fd(fd, token)
+    try:  # melhor-esforço (no-op/redundante em ACLs do Windows)
+        path.chmod(0o600)
+    except OSError:
+        pass
     return token
+
+
+def _write_token_fd(fd: int, token: str) -> None:
+    """Grava o token num descritor já aberto com permissões restritas."""
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(token)
 
 
 def verify_token(provided: str | None, expected: str) -> bool:

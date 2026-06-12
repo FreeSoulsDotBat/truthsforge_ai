@@ -140,6 +140,48 @@ def test_ambiguous_role_when_two_top_faces_tie() -> None:
         resolve_entity({"body": "Placa", "role": "top_planar"}, st)
 
 
+def test_extreme_ranking_excludes_faces_without_center() -> None:
+    # Face horizontal SEM center_mm não compete no ranking de extremos: antes o
+    # fallback z=0.0 a fazia "empatar" com a face medida em z≈0 → Ambiguous
+    # RefError confuso (ou extremo errado). Agora só faces medidas ranqueiam.
+    st = ModelState(
+        bodies=[
+            ModelStateBody(
+                name="Placa",
+                stable_id="P1",
+                faces=[
+                    ModelStateFace(
+                        token="P_BOT", type="planar", normal_axis="-z", center_mm=[10, 10, 0.05]
+                    ),
+                    ModelStateFace(token="P_RAW", type="planar", normal_axis="+z"),  # sem medição
+                ],
+            )
+        ]
+    )
+    assert resolve_entity({"body": "Placa", "role": "bottom_planar"}, st).handle == "P_BOT"
+    assert resolve_entity({"body": "Placa", "role": "top_planar"}, st).handle == "P_BOT"
+
+
+def test_extreme_ranking_all_unmeasured_raises_typed() -> None:
+    # TODAS as horizontais sem center_mm → erro tipado pedindo query_geometry
+    # (nunca ranqueia no escuro com z=0).
+    st = ModelState(
+        bodies=[
+            ModelStateBody(
+                name="Placa",
+                stable_id="P2",
+                faces=[
+                    ModelStateFace(token="A", type="planar", normal_axis="+z"),
+                    ModelStateFace(token="B", type="planar", normal_axis="-z"),
+                ],
+            )
+        ]
+    )
+    with pytest.raises(EntityRefError) as ei:
+        resolve_entity({"body": "Placa", "role": "top_planar"}, st)
+    assert "query_geometry" in str(ei.value)
+
+
 def test_unresolved_raises_typed() -> None:
     st = _state()
     with pytest.raises(EntityRefError):

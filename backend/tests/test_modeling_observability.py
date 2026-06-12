@@ -2172,3 +2172,62 @@ def test_unwrap_inner_fusion_result_captures_traceback() -> None:
     result = _unwrap_inner_fusion_result(output)
     assert result["ok"] is False
     assert "inner_traceback" in result["host_details"]
+
+
+def test_spatial_expansion_prescan_blocks_destructive_concrete() -> None:
+    """Fix (review/constituição, defense-in-depth): a pré-varredura da expansão
+    F7 bloqueava só high_risk/blocked — um concreto DESTRUTIVO escaparia e
+    auto-executaria "lavado" por um declarativo additive. Hoje nenhum resolver
+    emite destrutivo (não-explorável), mas o gate precisa cobrir a categoria."""
+
+    from app.core.contracts import (
+        ModelingPlan,
+        ModelingPlanStatus,
+        ModelingPlanStep,
+        ModelingRiskLevel,
+        ModelingSoftware,
+        ModelingStepStatus,
+    )
+    from app.modeling.executor import ModelingExecutorService
+    from app.modeling.tool_registry import is_blocked, is_destructive, is_high_risk
+
+    # Pré-condição: rollback_timeline é DESTRUTIVO e não é high_risk/blocked —
+    # ou seja, escapava da pré-varredura antiga (teste de regressão real).
+    assert is_destructive("fusion.rollback_timeline")
+    assert not is_high_risk("fusion.rollback_timeline")
+    assert not is_blocked("fusion.rollback_timeline")
+
+    class _BareStore:
+        """Sem add_modeling_tool_call/record_trace_events_bulk → no-ops."""
+
+    executor = ModelingExecutorService(
+        store=_BareStore(), mcp_client=None, snapshots=None, artifacts=None
+    )
+
+    def _mk(tool: str) -> ModelingPlanStep:
+        return ModelingPlanStep(
+            seq=1,
+            title=tool,
+            software=ModelingSoftware.fusion,
+            tool_name=tool,
+            risk_level=ModelingRiskLevel.low,
+            approval_required=False,
+            status=ModelingStepStatus.approved,
+            input_json={},
+        )
+
+    original = _mk("fusion.place_body")
+    destructive_concrete = _mk("fusion.rollback_timeline")
+    plan = ModelingPlan(
+        prompt="placement",
+        software_choice=ModelingSoftware.fusion,
+        status=ModelingPlanStatus.approved,
+        steps=[original],
+    )
+
+    outcome = executor._run_expanded_steps(original, [destructive_concrete], plan)
+
+    # Bloqueio fail-safe ANTES de executar qualquer concreto.
+    assert outcome.ok is False
+    assert outcome.output["error_code"] == "fusion.spatial_expansion_requires_approval"
+    assert outcome.step.status is ModelingStepStatus.failed

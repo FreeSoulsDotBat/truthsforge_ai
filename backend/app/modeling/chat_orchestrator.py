@@ -62,7 +62,10 @@ from app.core.contracts import (
     ModelVerdict,
     now_utc,
 )
-from app.modeling.agent_loop import run_plan_with_optional_loop
+from app.modeling.agent_loop import (
+    run_plan_with_optional_loop,
+    warn_self_critique_without_provenance,
+)
 from app.modeling.chat_state import (
     ChatModelingEvent,
     transition,
@@ -278,6 +281,7 @@ class ModelingChatOrchestrator:
 
         if not settings.modeling_self_critique_enabled:
             return None, None
+        warn_self_critique_without_provenance(primary.id)
         try:
             from app.modeling.intent_spec import intent_from_plan
             from app.modeling.model_critique import build_model_verdict, verdict_notice
@@ -302,6 +306,21 @@ class ModelingChatOrchestrator:
                     records.extend(hist.records)
             history = aggregate_history(records) if records else None
             verdict = build_model_verdict(intent, history, final_state)
+            if verdict is None:
+                # Sem read-back (final_state None) não há veredito — medir contra
+                # estado ausente acusava "0 corpos" falso. Mudo, com trace.
+                self._tracer.record(
+                    "orchestrator.turn_verdict_skipped",
+                    source=ModelingTraceSource.backend,
+                    level=ModelingTraceLevel.warn,
+                    message=(
+                        "Auto-crítica do turno pulada: read-back indisponível "
+                        "(model_state ausente) — sem medição não há veredito."
+                    ),
+                    payload={"plan_id": primary.id, "reason": "model_state_missing"},
+                    plan_id=primary.id,
+                )
+                return None, None
             self._tracer.record(
                 "orchestrator.turn_verdict",
                 source=ModelingTraceSource.backend,
@@ -618,20 +637,23 @@ class ModelingChatOrchestrator:
         plan = self._get_plan_or_raise(plan_id)
         # ADR-013 gate: never execute a plan the user hasn't approved. Guards
         # the split two-call flow against a direct ``execute`` that skips
-        # ``approve_plan_only``. ``completed`` is allowed so a retry in
-        # ``editing`` can re-run; ``failed`` is the explicit retry from the
-        # card and ``running`` the resume after a dropped connection. See
-        # AGENTS.md "Preserve human-in-the-loop".
-        if plan.status not in (
-            ModelingPlanStatus.approved,
-            ModelingPlanStatus.completed,
-            ModelingPlanStatus.failed,
-            ModelingPlanStatus.running,
-        ):
+        # ``approve_plan_only``. Fonte ÚNICA do conjunto de estados executáveis:
+        # ``ensure_plan_executable`` (service). ``allow_completed=True`` é a
+        # exceção DESTE fluxo de chat — um retry já em ``editing`` pode re-rodar
+        # um plano ``completed``, o que é um no-op idempotente (executor/loop
+        # pulam passos já ``completed``; nada re-cria geometria). O caminho do
+        # card (rota ``/plans/{id}/execute``) continua estrito: ``completed`` →
+        # 409 (anti-replay). See AGENTS.md "Preserve human-in-the-loop".
+        from app.modeling.service import ModelingPlanNotExecutable, ensure_plan_executable
+
+        try:
+            ensure_plan_executable(plan, allow_completed=True)
+        except ModelingPlanNotExecutable as exc:
+            # Preserva o contrato de erro deste fluxo (ValueError → 409 na rota).
             raise ValueError(
                 f"Plano {plan_id!r} não está aprovado (status={plan.status.value!r}); "
                 "aprove antes de executar."
-            )
+            ) from exc
         if (
             chat.modeling_stage is ChatModelingStage.planning
             and plan.status is ModelingPlanStatus.approved

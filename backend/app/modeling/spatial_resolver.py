@@ -96,8 +96,10 @@ _POINT_FIELDS = frozenset(
 )
 # Campos cujos valores são eixos (vetor unitário ou cardinal).
 _AXIS_FIELDS = frozenset({"axis", "direction", "axis_vector"})
-# Campos escalares em que uma @-expr faz sentido (offset/distância).
-_SCALAR_FIELDS = frozenset({"offset_mm", "distance_mm", "depth_mm", "clearance_mm", "spacing_mm"})
+# Campos escalares em que uma @-expr faz sentido (offset/distância/folga).
+_SCALAR_FIELDS = frozenset(
+    {"offset_mm", "distance_mm", "depth_mm", "clearance_mm", "spacing_mm", "gap_mm", "gap"}
+)
 
 
 @dataclass(frozen=True)
@@ -126,6 +128,10 @@ class ConcreteStep:
 def _has_at(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().startswith("@")
+    if isinstance(value, dict):
+        # Paridade com _has_leftover_ref: @-ref ANINHADA em dict (ex.: dentro de
+        # 'prototype') precisa disparar o resolver — senão vai crua ao adapter.
+        return any(_has_at(v) for v in value.values())
     if isinstance(value, (list, tuple)):
         return any(_has_at(v) for v in value)
     return False
@@ -169,22 +175,19 @@ def resolve_inline_refs(
     out = dict(args)
     actions: list[ResolveAction] = []
     for key, value in list(out.items()):
-        try:
-            if key in _POINT_FIELDS:
-                new, changed = _resolve_point_field(value, state)
-                if changed:
-                    out[key] = new
-                    actions.append(ResolveAction("resolve_inline_ref", key, f"{value!r} → {new!r}"))
-            elif key in _AXIS_FIELDS and is_spatial_ref(value):
-                new = list(resolve_axis(value, state))
+        if key in _POINT_FIELDS:
+            new, changed = _resolve_point_field(value, state)
+            if changed:
                 out[key] = new
                 actions.append(ResolveAction("resolve_inline_ref", key, f"{value!r} → {new!r}"))
-            elif key in _SCALAR_FIELDS and _has_at(value):
-                new = resolve_scalar(value, state)
-                out[key] = new
-                actions.append(ResolveAction("resolve_inline_ref", key, f"{value!r} → {new!r}"))
-        except SpatialRefError:
-            raise
+        elif key in _AXIS_FIELDS and is_spatial_ref(value):
+            new = list(resolve_axis(value, state))
+            out[key] = new
+            actions.append(ResolveAction("resolve_inline_ref", key, f"{value!r} → {new!r}"))
+        elif key in _SCALAR_FIELDS and _has_at(value):
+            new = resolve_scalar(value, state)
+            out[key] = new
+            actions.append(ResolveAction("resolve_inline_ref", key, f"{value!r} → {new!r}"))
     # Ref espacial sobrando em campo FORA do whitelist (ex.: corner1_mm,
     # points_mm) seria despachada CRUA ao Fusion → mis-place. Falha tipada em
     # vez de chute (invariante "NUNCA chuta").
@@ -395,9 +398,10 @@ def _gap_direction(
 ) -> int:
     """Sentido (+1/-1) em que a folga do align='gap' abre. A folga abre p/ o lado
     de FORA do alvo — a normal OUTWARD da face de DESTINO (gate teste 2: tampa
-    criada ABAIXO do topo deve subir, não enfiar na caixa). Cascata de fallback:
-    normal do alvo → normal INWARD da âncora (-outward) → posição pré-move (frágil)
-    → erro tipado. NUNCA chuta o lado."""
+    criada ABAIXO do topo deve subir, não enfiar na caixa). Cascata: normal do
+    alvo → normal INWARD da âncora (-outward) → erro tipado pedindo as normais
+    (o fallback POSICIONAL antigo era exatamente o vetor de bug do gate teste 2
+    — chutava o lado pela posição pré-move). NUNCA chuta o lado."""
 
     axis = "xyz"[na]
     s = _normal_sign_along(target_face, axis)
@@ -406,11 +410,10 @@ def _gap_direction(
     s = _normal_sign_along(anchor_face, axis)
     if s:
         return -s  # normal da âncora é OUTWARD do corpo móvel; o volume vai p/ o INWARD
-    if abs(ac[na] - tc[na]) > 1e-6:
-        return 1 if ac[na] > tc[na] else -1
     raise SpatialRefError(
-        "place_body align='gap': faces sem normal cardinal e coincidentes no eixo do "
-        "mate — lado da folga indeterminável. Use align='coplanar' ou reposicione antes.",
+        "place_body align='gap': nenhuma das faces tem normal cardinal medida — o "
+        "lado da folga viria de um chute posicional. Rode query_geometry (normais "
+        "das faces) ou use align='coplanar'.",
         code=ALIGN_GAP_SIDE_UNDETERMINABLE,
     )
 
@@ -528,8 +531,9 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
     (sem componente/junta — a junta é papel do align_axis, p/ cinemática).
 
     ``align`` (F9 Pilar 1, atrás de ``modeling_align_modes_enabled``): center
-    (default, snap concêntrico) | coplanar | gap | edge | corner. Flag OFF ⇒ align
-    IGNORADO, sempre center (regressão bit-a-bit)."""
+    (default, snap concêntrico) | coplanar | gap | edge | corner. Flag OFF: args
+    sem align/gap seguem center (regressão bit-a-bit); args que PEDEM um modo →
+    erro tipado (ADR-022 D4: nunca mis-place silencioso)."""
 
     from app.core.config import settings
 
@@ -552,12 +556,19 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
                 f"place_body: '{opt}' ainda não suportado (use align='gap' + gap_mm)."
             )
 
-    # F9 Pilar 1: modo de alinhamento (flag OFF ⇒ sempre center = regressão).
-    align = (
-        str(args.get("align") or "center").lower()
-        if settings.modeling_align_modes_enabled
-        else "center"
-    )
+    # F9 Pilar 1: modo de alinhamento. Flag OFF: args SEM align/gap seguem o
+    # comportamento histórico (center, zero-regressão); args que PEDEM um modo
+    # (align≠center ou gap) → erro CLARO em vez de virar center silencioso
+    # (ADR-022 D4 + auditoria 2026-06-10: flag OFF nunca mis-place calado).
+    align = str(args.get("align") or "center").lower()
+    gap_requested = any(args.get(k) not in (None, 0, 0.0) for k in ("gap_mm", "gap"))
+    if not settings.modeling_align_modes_enabled and (align != "center" or gap_requested):
+        raise SpatialRefError(
+            f"place_body: align='{align}'/gap_mm exigem os modos de alinhamento F9, "
+            "desligados nesta instalação. Habilite "
+            "TRUTHS_FORGE_MODELING_ALIGN_MODES_ENABLED=true ou remova align/gap_mm "
+            "(o placement seguiria 'center' e ignoraria a intenção declarada)."
+        )
     if align not in _PLACE_ALIGN_MODES:
         raise SpatialRefError(
             f"place_body: align='{align}' desconhecido. Use "
@@ -572,6 +583,22 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
             "referenciar FACES — role ({body, role:'bottom_planar'}), @token('<face>') ou "
             "{face:'<token>'}. O placement mede as faces, não usa coordenada."
         )
+    # Pertencimento: a âncora É a face do corpo móvel e o destino é a face de
+    # OUTRO corpo. Sem o guard, anchor/target trocados (ou ambos no mesmo corpo)
+    # emitiam um move_body com delta medido entre faces ALHEIAS — mis-place
+    # silencioso (o exato caso reproduzido: anchor e target ambos na 'Caixa').
+    anchor_owner = _owner_body(state, anchor_face.token)
+    if anchor_owner is not moving:
+        owner_name = anchor_owner.name if anchor_owner is not None else "?"
+        raise SpatialRefError(
+            f"place_body: 'anchor' pertence ao corpo '{owner_name}', não ao corpo "
+            f"móvel '{moving.name}' — a âncora é a face DO corpo que se move."
+        )
+    if _owner_body(state, target_face.token) is moving:
+        raise SpatialRefError(
+            f"place_body: 'target' pertence ao próprio corpo móvel '{moving.name}' — "
+            "o destino precisa ser a face de OUTRO corpo."
+        )
     ac, tc = anchor_face.center_mm, target_face.center_mm
     if not ac or not tc or len(ac) < 3 or len(tc) < 3:
         raise SpatialRefError(
@@ -581,7 +608,13 @@ def _expand_place_body(args: dict[str, Any], state: ModelState | None) -> list[C
 
     na = _mate_axis_index(target_face, ac, tc)
     reference = _owner_body(state, target_face.token) if align in ("edge", "corner") else None
-    gap_mm = _coerce_float(args.get("gap_mm") or args.get("gap"))
+    # gap presente-mas-não-numérico (@-ref, string) NUNCA vira 0.0 (flush)
+    # silencioso: resolve_scalar mede @-refs e levanta SpatialRefError tipado p/
+    # valor inválido (mesmo molde do 'count' do distribute). Ausente = 0.0.
+    raw_gap = args.get("gap_mm")
+    if raw_gap is None:
+        raw_gap = args.get("gap")
+    gap_mm = resolve_scalar(raw_gap, state) if raw_gap is not None else 0.0
     delta = _compute_place_delta(
         align,
         ac,
@@ -627,6 +660,15 @@ def _expand_align_axis(args: dict[str, Any], state: ModelState | None) -> list[C
             "(@token('<face do furo/pino>')). O eixo da junta do Fusion vem de faces; "
             "uma aresta sozinha não o alimenta."
         )
+    # Token cru de face NÃO-cilíndrica: o caminho por predicado já restringe o
+    # tipo, mas o @token passava direto e falhava TARDE no Fusion. Quando o
+    # metadado do token existe no read-back, valida aqui (erro tipado, cedo).
+    meta = _resolve_face({"face": target_face}, state)
+    if meta is not None and meta.type and meta.type != "cylindrical":
+        raise SpatialRefError(
+            f"align_axis: 'target' resolve uma face {meta.type!r}; o eixo da junta "
+            "exige face CILÍNDRICA (furo/pino)."
+        )
     jargs = {
         "joint_type": "revolute",
         "body_one": body,
@@ -643,7 +685,14 @@ def _distribute_fractions(
 ) -> list[float]:
     if count <= 1:
         return [0.5]
-    if spacing_mm and not fit and length and length > 0:
+    if spacing_mm and not fit:
+        if not length or length <= 0:
+            # spacing_mm era IGNORADO em silêncio (caía no uniforme) quando a
+            # aresta não tinha length_mm medido — erro tipado, como os vizinhos.
+            raise SpatialRefError(
+                "distribute_along: 'spacing_mm' exige o comprimento medido da aresta "
+                "(length_mm ausente) — rode query_geometry, ou use fit=True."
+            )
         step = float(spacing_mm)
         total = step * (count - 1)
         if total > length:
@@ -845,8 +894,11 @@ def _expand_distribute_along(args: dict[str, Any], state: ModelState | None) -> 
         point = resolve_point({"edge": edge_tok, "point": "along", "fraction": frac}, state)
         name = f"{base_name}_{i + 1}"
         steps.append(_prototype_step(proto, point, name, axis_vec))
-        if isinstance(alternate, (list, tuple)) and len(alternate) >= 2:
-            parent = str(alternate[i % 2])
+        if isinstance(alternate, (list, tuple)) and alternate:
+            # Round-robin por TODOS os pais (i % len): lista de 3 usa o 3º
+            # (i % 2 fixo o ignorava) e lista de 1 vira pai fixo (antes era
+            # ignorada → nós soltos sem combine).
+            parent = str(alternate[i % len(alternate)])
             groups.setdefault(parent, []).append(name)
 
     # combine-DENTRO: cada grupo alternado funde com seu corpo-pai (parte

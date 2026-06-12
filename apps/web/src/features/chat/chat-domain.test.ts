@@ -5,6 +5,8 @@ import {
   chatSessionNeedsTitle,
   initialAssistantStatus,
   isDefaultChatTitle,
+  messageMetadata,
+  modelingStageForPlanStatus,
   normalizeStreamExecutionModes,
   withModelingPlan
 } from "./chat-domain";
@@ -20,7 +22,7 @@ function buildMessage(): ChatMessage {
   };
 }
 
-function buildPlan(): ModelingPlan {
+function buildPlan(overrides: Partial<ModelingPlan> = {}): ModelingPlan {
   return {
     id: "plan_1",
     project_id: "project_1",
@@ -55,7 +57,8 @@ function buildPlan(): ModelingPlan {
     planner_source: "heuristic",
     fallback_reason: null,
     created_at: new Date("2026-05-14T00:00:00Z").toISOString(),
-    updated_at: new Date("2026-05-14T00:00:00Z").toISOString()
+    updated_at: new Date("2026-05-14T00:00:00Z").toISOString(),
+    ...overrides
   };
 }
 
@@ -71,6 +74,39 @@ describe("chat-domain modeling 3D helpers", () => {
       software_choice: "blender",
       status: "completed"
     });
+  });
+
+  it("preserves the known trace_id when a REST payload arrives without it (RF-024)", () => {
+    const withTrace = withModelingPlan(buildMessage(), buildPlan({ trace_id: "tr_sse_1" }));
+    const afterRestAction = withModelingPlan(withTrace, buildPlan({ status: "running" }));
+
+    expect(messageMetadata(afterRestAction).modeling_plan?.trace_id).toBe("tr_sse_1");
+    expect(messageMetadata(afterRestAction).modeling_plan?.status).toBe("running");
+  });
+
+  it("adopts the new trace_id when the payload provides one", () => {
+    const withTrace = withModelingPlan(buildMessage(), buildPlan({ trace_id: "tr_old" }));
+    const updated = withModelingPlan(withTrace, buildPlan({ trace_id: "tr_new" }));
+
+    expect(messageMetadata(updated).modeling_plan?.trace_id).toBe("tr_new");
+  });
+
+  it("does not carry a trace_id over to a different plan", () => {
+    const withTrace = withModelingPlan(buildMessage(), buildPlan({ trace_id: "tr_plan_1" }));
+    const otherPlan = withModelingPlan(withTrace, buildPlan({ id: "plan_2" }));
+
+    expect(messageMetadata(otherPlan).modeling_plan?.trace_id).toBeUndefined();
+    expect(messageMetadata(otherPlan).modeling_plan_id).toBe("plan_2");
+  });
+
+  it("maps every plan status to the chat stage shared by SSE and the post-409 reconcile", () => {
+    expect(modelingStageForPlanStatus("draft")).toBe("planning");
+    expect(modelingStageForPlanStatus("waiting_approval")).toBe("planning");
+    expect(modelingStageForPlanStatus("approved")).toBe("executing");
+    expect(modelingStageForPlanStatus("running")).toBe("executing");
+    expect(modelingStageForPlanStatus("completed")).toBe("editing");
+    expect(modelingStageForPlanStatus("failed")).toBe("failed");
+    expect(modelingStageForPlanStatus("rejected")).toBe("discovery");
   });
 
   it("uses a 3D-specific initial runtime status when MCP 3D is enabled", () => {

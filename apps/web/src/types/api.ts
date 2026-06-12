@@ -115,9 +115,10 @@ export interface ModelingPlan {
   steps: ModelingPlanStep[];
   planner_source?: ModelingPlannerSource | null;
   fallback_reason?: string | null;
-  // Presente apenas quando o plano é serializado via SSE (rota chat stream).
-  // Endpoints REST que devolvem ``ModelingPlan`` puro não populam — use
-  // ``GET /api/3d/plans/{id}/trace`` consultando pelo plan_id nesse caso.
+  // RF-024: serializado tanto via SSE (rota chat stream) quanto pelos
+  // endpoints REST (GET/POST /api/3d/plans). Como payloads antigos podem vir
+  // sem ele, `withModelingPlan` preserva o trace_id já conhecido (fallback
+  // defensivo) — sem isso o modal de diagnóstico vira no-op após ações do card.
   trace_id?: string | null;
   kind?: ModelingPlanKind;
   parent_plan_id?: string | null;

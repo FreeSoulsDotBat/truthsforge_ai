@@ -41,6 +41,25 @@ def test_duplicate_body_is_diverged_excess() -> None:
     assert any("Caixa_fixed" in f.detail for f in v.findings)
 
 
+def test_no_readback_means_no_verdict() -> None:
+    # Fix (review): state None = a captura best-effort do read-back FALHOU, não
+    # "modelo com 0 corpos". O veredito antigo acusava "0 corpos / faltou N"
+    # FALSO; agora o avaliador fica mudo (None) e o chamador loga o porquê.
+    intent = IntentSpec(expected_body_count=3, expected_bodies=[{"name": "Caixa"}])
+    rec = ChangeRecord(
+        tool_name="fusion.hole",
+        tool_category="mutative",
+        seq=1,
+        captured_before=True,
+        captured_after=True,
+    )
+    assert build_model_verdict(intent, OperationHistory(records=[rec]), None) is None
+    # Estado VAZIO (lista de corpos []) é diferente de ausente: aí a medição
+    # existiu e o "faltou N" é verdadeiro — o veredito continua saindo.
+    v = build_model_verdict(intent, None, _state())
+    assert v is not None and v.overall == "incomplete"
+
+
 def test_missing_body_is_incomplete() -> None:
     intent = IntentSpec(expected_body_count=2)
     v = build_model_verdict(intent, None, _state(_body("Caixa", "ID1")))

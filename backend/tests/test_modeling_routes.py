@@ -193,6 +193,130 @@ def test_chat_stream_3d_reject_returns_plan_to_discovery(monkeypatch) -> None:
     assert rejected.json()["status"] == "rejected"
 
 
+def test_plan_rest_payload_carries_trace_id(monkeypatch) -> None:
+    """RF-024: o ``trace_id`` da proposta não pode existir só no dump SSE — o
+    contrato REST ``ModelingPlan`` (GET/POST /api/3d/plans...) devolve o MESMO
+    trace persistido, senão o modal de diagnóstico perde o trace na primeira
+    re-busca do card."""
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "Crie um cubo simples no Blender.",
+            "title": "Cubo de teste — trace REST",
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "safe_auto",
+                "software_override": "blender",
+            },
+        },
+    )
+    assert response.status_code == 200
+    plan = _modeling_plan_from_sse(response.text)
+    assert plan is not None
+    assert plan["trace_id"], "o dump SSE deve carregar o trace_id da proposta"
+
+    persisted = client.get(f"/api/3d/plans/{plan['id']}").json()
+    assert persisted["trace_id"] == plan["trace_id"]
+
+    # A primeira ação do card (approve) devolve o plano SEM perder o trace.
+    approved = client.post(f"/api/3d/plans/{plan['id']}/approve", json={"decision": "approve"})
+    assert approved.status_code == 200
+    assert approved.json()["trace_id"] == plan["trace_id"]
+
+
+def test_chat_stream_3d_storage_error_does_not_leak_internals(monkeypatch) -> None:
+    """Exceção de infraestrutura (DSN/SQL) no propose NÃO pode virar mensagem
+    visível nem metadata persistida — só o nome do tipo + texto genérico; o
+    traceback completo vai para o log (``_safe_error_detail``)."""
+
+    from app.api.routes import chat_modeling
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+
+    secret = "postgresql://forge:senha-secreta@10.0.0.7:5432/truths_forge_ai"
+
+    class FakeStorageError(RuntimeError):
+        pass
+
+    class ExplodingOrchestrator:
+        def propose_plan(self, *args: Any, **kwargs: Any) -> Any:
+            raise FakeStorageError(f"connection failed for dsn {secret}")
+
+        def propose_edit_plan(self, *args: Any, **kwargs: Any) -> Any:
+            raise FakeStorageError(f"connection failed for dsn {secret}")
+
+    monkeypatch.setattr(
+        chat_modeling, "get_modeling_orchestrator", lambda store: ExplodingOrchestrator()
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "Crie um cubo simples no Blender.",
+            "title": "Cubo de teste — erro de storage",
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "safe_auto",
+                "software_override": "blender",
+            },
+        },
+    )
+    assert response.status_code == 200
+    raw = response.text
+    assert secret not in raw, "detalhe interno (DSN) vazou para o SSE"
+    assert "senha-secreta" not in raw
+    assert "erro interno (FakeStorageError)" in raw
+    assert "Não consegui criar o plano 3D via MCP" in raw
+
+
+def test_chat_stream_3d_domain_error_stays_readable(monkeypatch) -> None:
+    """Erros de domínio do modeling (mensagens PT-BR intencionais) continuam
+    legíveis no chat — a sanitização só esconde o que não é de domínio."""
+
+    from app.api.routes import chat_modeling
+    from app.core.contracts import ChatModelingStage
+    from app.modeling.chat_state import ChatModelingEvent, InvalidModelingStageTransition
+
+    monkeypatch.setattr(BlenderAdapter, "is_available", lambda self: False)
+
+    domain_error = InvalidModelingStageTransition(
+        ChatModelingStage.executing, ChatModelingEvent.PLAN_PROPOSED
+    )
+    domain_message = str(domain_error)
+
+    class DomainOrchestrator:
+        def propose_plan(self, *args: Any, **kwargs: Any) -> Any:
+            raise domain_error
+
+        def propose_edit_plan(self, *args: Any, **kwargs: Any) -> Any:
+            raise domain_error
+
+    monkeypatch.setattr(
+        chat_modeling, "get_modeling_orchestrator", lambda store: DomainOrchestrator()
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/api/chat/stream",
+        json={
+            "message": "Crie um cubo simples no Blender.",
+            "title": "Cubo de teste — erro de domínio",
+            "modeling_3d": {
+                "enabled": True,
+                "mode": "safe_auto",
+                "software_override": "blender",
+            },
+        },
+    )
+    assert response.status_code == 200
+    raw = response.text
+    assert domain_message in raw
+    assert "erro interno" not in raw
+
+
 def test_modeling_plan_executes_fluid_steps_without_plan_approval(monkeypatch) -> None:
     monkeypatch.setattr(FusionDesktopAdapter, "is_available", lambda self: False)
 

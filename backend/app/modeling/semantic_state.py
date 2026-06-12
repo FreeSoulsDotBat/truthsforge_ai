@@ -20,6 +20,13 @@ __all__ = ["derive_semantic_state"]
 _ROLE_CANDIDATES = ("top_planar", "bottom_planar", "largest_planar")
 _CONTACT_TOL = 0.2  # mm — |folga| abaixo disto = contato
 _INTERFERENCE_EPS = 1e-3  # mm³ — penetração acima disto = interferência real
+# Fração do volume da MENOR bbox coberta pela interseção a partir da qual a
+# sobreposição é CONTENÇÃO esperada (pino no furo, peça no bolso) — espelha o
+# ``geometry_verifier._CONTAIN_KINDS``, onde o overlap é o resultado CORRETO do
+# encaixe e nunca deve ser reportado como "interfere com" (senão o planner tenta
+# "consertar" o que está certo). Interferência parcial real cobre bem menos que
+# isso (ex.: 50% no caso típico de penetração acidental).
+_CONTAINMENT_BBOX_RATIO = 0.8
 
 
 def derive_semantic_state(state: ModelState | None) -> ModelState | None:
@@ -76,6 +83,16 @@ def _perp_overlap_area(a: ModelStateBody, b: ModelStateBody, axis: int) -> float
     return area
 
 
+def _bbox_volume(b: ModelStateBody) -> float:
+    vol = 1.0
+    for i in range(3):
+        d = b.bbox_max_mm[i] - b.bbox_min_mm[i]
+        if d <= 0:
+            return 0.0
+        vol *= d
+    return vol
+
+
 def _derive_touches(state: ModelState) -> None:
     from app.modeling.geometry_verifier import (
         _bbox_overlap_volume,
@@ -95,8 +112,20 @@ def _derive_touches(state: ModelState) -> None:
             # (exclui corpos lado-a-lado, alinhados mas sem contato real).
             if _perp_overlap_area(b, o, axis) <= 0:
                 continue
-            interfering = _bbox_overlap_volume(b, o) > _INTERFERENCE_EPS and gap < -_CONTACT_TOL
-            if abs(gap) <= _CONTACT_TOL or interfering:
+            overlap = _bbox_overlap_volume(b, o)
+            # CONTENÇÃO esperada (pino no furo): a interseção cobre ≥80% da menor
+            # bbox ⇒ um corpo está essencialmente DENTRO do outro — encaixe, não
+            # colisão. O render do <model-state> (model_state.py, fora deste
+            # grupo) só conhece interference=True→"interfere com" / False→
+            # "encosta em"; reportamos contenção como interference=False (contato
+            # esperado), o que o render já apresenta corretamente como "encosta
+            # em" — sem quebrar o contrato nem convidar o planner a "consertar".
+            contained = False
+            if overlap > _INTERFERENCE_EPS:
+                smaller = min(_bbox_volume(b), _bbox_volume(o))
+                contained = smaller > 0 and overlap >= _CONTAINMENT_BBOX_RATIO * smaller
+            interfering = overlap > _INTERFERENCE_EPS and gap < -_CONTACT_TOL and not contained
+            if abs(gap) <= _CONTACT_TOL or interfering or contained:
                 adj.append(
                     BodyAdjacency(
                         other=o.name or o.stable_id or "?",
@@ -127,10 +156,19 @@ def _derive_labels(state: ModelState) -> None:
     non_containers = [
         b for b in state.bodies if b not in containers and b.bbox_min_mm and b.bbox_max_mm
     ]
+    # Candidato a lid: ENCOSTA de verdade no container (folga ~0). Contenção
+    # (interference=False mas folga bem negativa — pino dentro da caixa) não
+    # qualifica: um corpo embutido não é tampa.
     touching = [
         b
         for b in non_containers
-        if any(t.other in container_names and not t.interference for t in b.touches)
+        if any(
+            t.other in container_names
+            and not t.interference
+            and t.gap_mm is not None
+            and abs(t.gap_mm) <= _CONTACT_TOL
+            for t in b.touches
+        )
     ]
     if not touching:
         return

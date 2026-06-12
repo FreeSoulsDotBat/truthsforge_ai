@@ -17,10 +17,14 @@
   Patch só funciona em plano draft/waiting_approval. Se já avançou (auto-exec/
   aprovado), crie um plano novo e não o aprove.
 #>
-param([Parameter(Mandatory = $true)][string]$PlanId)
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true, Position = 0)] [string] $PlanId,
+    [string] $ApiBase = "http://127.0.0.1:8000"
+)
 
 $ErrorActionPreference = "Stop"
-$api = "http://127.0.0.1:8000/api/3d"
+$api = "$ApiBase/api/3d"
 
 # Plano literal: 2 corpos na origem + a RELAÇÃO. A Tampa nasce dentro/sobreposta;
 # o relate_bodies a move pra cima do topo da Caixa MEDINDO as faces (a prova do F8.R1).
@@ -53,4 +57,4 @@ Write-Host "3) Executando no Fusion (pode levar alguns segundos) ..." -Foregroun
 Invoke-RestMethod "$api/plans/$PlanId/execute" -Method Post -ContentType 'application/json' | Out-Null
 
 Write-Host "4) Resultado:`n" -ForegroundColor Cyan
-& "$PSScriptRoot\inspect_plan.ps1" $PlanId
+& "$PSScriptRoot\inspect_plan.ps1" $PlanId -ApiBase $ApiBase

@@ -104,14 +104,47 @@ class ModelingAgentLoop:
                     # os passos seguintes ficam bloqueados (estado consistente).
                     blocked_step_ids.append(step.id)
                     continue
-                if step.error:
+                if step.status == ModelingStepStatus.completed:
+                    # Retry idempotente: passo já concluído numa execução anterior
+                    # NÃO re-executa — re-rodar add_box/extrude recriaria corpos no
+                    # design ativo (geometria duplicada). Preserva o resultado/
+                    # proveniência originais em ``settled`` e fica fora de
+                    # executed/blocked (sem duplicar histórico nem eventos).
+                    self._tracer.record(
+                        "agent_loop.step_skipped_completed",
+                        source=ModelingTraceSource.backend,
+                        level=ModelingTraceLevel.info,
+                        message=f"Step {step.seq} já concluído — pulado (retry idempotente)",
+                        payload={"step_id": step.id, "tool_name": step.tool_name},
+                        plan_id=plan.id,
+                    )
+                    continue
+                if step.error and step.status != ModelingStepStatus.failed:
+                    # Bloqueio ESTRUTURAL (policy/blocklist/rejeição), não desfecho
+                    # de execução: continua bloqueado. Passos ``failed`` passam
+                    # adiante — são exatamente o alvo do retry explícito.
                     blocked_step_ids.append(step.id)
                     continue
                 if step.approval_required and step.status != ModelingStepStatus.approved:
+                    # Cobre também o passo high-risk que FALHOU após aprovado: a
+                    # falha consumiu a aprovação (status=failed), então o retry
+                    # exige re-aprovação humana — fail-safe da constituição.
                     blocked_step_ids.append(step.id)
                     continue
 
                 current = step
+                if step.status == ModelingStepStatus.failed:
+                    # Retry explícito: o passo que FALHOU re-executa do zero com o
+                    # erro anterior limpo (o desfecho novo carimba status/output).
+                    # Passos ``running`` órfãos de queda não existem hoje (nenhum
+                    # caminho persiste step como ``running``; a queda acontece antes
+                    # do desfecho ser carimbado, então persistem como ``approved``/
+                    # ``pending`` e caem no caminho normal). Se um dia aparecerem
+                    # (dado legado), também caem no caminho normal e RE-EXECUTAM:
+                    # o desfecho da execução interrompida é desconhecido e congelar
+                    # bloquearia o plano; eventual duplicação é acusada pelo
+                    # read-back/auto-crítica (F8).
+                    current = step.model_copy(update={"error": None, "output_json": {}})
                 outcome = self.executor._execute_single_step(current, plan=plan)
                 settled[idx] = outcome.step
                 self._persist_progress(plan, settled)
@@ -719,6 +752,33 @@ def _maybe_visual_findings(
         return []
 
 
+# Dedup (por processo) do aviso "auto-crítica sem proveniência" — 1 por plano.
+_provenance_gap_warned: set[str] = set()
+
+
+def warn_self_critique_without_provenance(plan_id: str) -> None:
+    """F8: ``modeling_self_critique_enabled`` ON com ``modeling_provenance_enabled``
+    OFF deixa os checks de HISTÓRICO (``op_no_effect``) sem insumo — o
+    ``history_from_plan`` reconstrói vazio e a cobertura cai em silêncio. O
+    veredito ainda roda (contagem/órfão/interferência via read-back), mas o gap
+    precisa ser visível: warning ÚNICO por plano (por processo)."""
+
+    if settings.modeling_provenance_enabled:
+        return
+    if plan_id in _provenance_gap_warned:
+        return
+    if len(_provenance_gap_warned) > 1024:  # higiene p/ processo de vida longa
+        _provenance_gap_warned.clear()
+    _provenance_gap_warned.add(plan_id)
+    logger.warning(
+        "Auto-crítica (modeling_self_critique_enabled) ligada SEM proveniência "
+        "(modeling_provenance_enabled OFF): os checks de histórico (op_no_effect) "
+        "ficam sem cobertura para o plano %s — ligue a proveniência para o "
+        "veredito enxergar o efeito de cada passo.",
+        plan_id,
+    )
+
+
 def _maybe_evaluate_verdict(
     executor: ModelingExecutorService, planner: Any, plan: ModelingPlan
 ) -> None:
@@ -736,6 +796,7 @@ def _maybe_evaluate_verdict(
 
     if not settings.modeling_self_critique_enabled:
         return
+    warn_self_critique_without_provenance(plan.id)
     try:
         from app.modeling.intent_spec import intent_from_plan
         from app.modeling.model_critique import build_model_verdict
@@ -745,6 +806,22 @@ def _maybe_evaluate_verdict(
         history = history_from_plan(plan)
         semantic = _maybe_visual_findings(executor, planner, plan)
         verdict = build_model_verdict(intent, history, plan.model_state, semantic_findings=semantic)
+        if verdict is None:
+            # Sem read-back (model_state None: captura best-effort falhou) não há
+            # veredito — acusar "0 corpos / faltou N" seria falso-positivo. O
+            # avaliador fica MUDO e o trace explica o porquê.
+            executor._tracer.record(
+                "agent_loop.verdict_skipped",
+                source=ModelingTraceSource.backend,
+                level=ModelingTraceLevel.warn,
+                message=(
+                    "Auto-crítica pulada: read-back indisponível (model_state "
+                    "ausente) — sem medição não há veredito."
+                ),
+                payload={"plan_id": plan.id, "reason": "model_state_missing"},
+                plan_id=plan.id,
+            )
+            return
         plan.model_verdict = verdict
         store = getattr(executor, "store", None)
         if store is not None and hasattr(store, "upsert_modeling_plan"):
@@ -799,4 +876,5 @@ __all__ = [
     "build_timeline_rollback",
     "combine_verifiers",
     "run_plan_with_optional_loop",
+    "warn_self_critique_without_provenance",
 ]

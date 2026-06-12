@@ -20,19 +20,35 @@ _PERMISSIVE_INPUT_SCHEMA: dict = {"type": "object", "additionalProperties": True
 
 
 def executable_fusion_tools() -> tuple[str, ...]:
-    """Interseção registry × handlers do script (paridade list/call real).
+    """Interseção registry × handlers do script (paridade list/call real),
+    SEM tools destrutivas/high-risk.
 
     ``FUSION_TOOLS`` pode conter tools registradas sem handler executável
     (ex.: ``fusion.relate_bodies``, UNRELEASED — o resolver F7 a expande
     ANTES do dispatch). Expor essas tools no ``tools/list`` fazia clientes
     externos receberem ``fusion.autodesk_mcp_error`` ao invocá-las, além de
     penalizar a saúde do adapter.
+
+    A exclusão de destrutivas/high-risk é específica do servidor MCP
+    standalone (única superfície que consome esta função): ele NÃO tem
+    humano no circuito, e a constituição exige aprovação humana para ações
+    destrutivas — o gate vive na camada orchestrator/service do backend.
+    Anunciar ``fusion.delete_body``/``fusion.rollback_timeline`` aqui
+    permitiria a qualquer cliente com o Bearer token executar destrutivo
+    sem gate. ``execute_fusion_tool`` aplica a mesma recusa na execução
+    (defesa em profundidade).
     """
 
     from app.modeling.fusion_mcp_scripts import FUSION_SCRIPT_TOOLS
 
     script_tools = set(FUSION_SCRIPT_TOOLS)
-    return tuple(name for name in FUSION_TOOLS if name in script_tools)
+    return tuple(
+        name
+        for name in FUSION_TOOLS
+        if name in script_tools
+        and not tool_registry.is_destructive(name)
+        and not tool_registry.is_high_risk(name)
+    )
 
 
 def build_fusion_tools() -> list[mtypes.Tool]:

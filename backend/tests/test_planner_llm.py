@@ -460,6 +460,151 @@ def test_planner_f9_relative_nudge_is_flag_gated(monkeypatch: pytest.MonkeyPatch
     assert "RECUSA" in planner_mod._f9_relative_nudge()
 
 
+# ---------------------------------------------------------------------------
+# Visibilidade RUNTIME das tools declarativas F7/F8 (auditoria 2026-06-10,
+# linha 768): com a flag OFF, place_body/align_axis/distribute_along (F7) e
+# relate_bodies (F8) saem do ENUM do Structured Output E dos schemas
+# renderizados no system prompt — o LLM não pode escolher tool fadada a falhar.
+# ---------------------------------------------------------------------------
+
+_FLAG_GATED_TOOLS = (
+    "fusion.place_body",
+    "fusion.align_axis",
+    "fusion.distribute_along",
+    "fusion.relate_bodies",
+)
+
+
+def _set_visibility_flags(monkeypatch: pytest.MonkeyPatch, value: bool) -> None:
+    """Liga/desliga as flags F7/F8 (e as F9 que citam place_body no prompt)."""
+
+    from app.modeling import planner as planner_mod
+
+    for flag in (
+        "modeling_spatial_resolution_enabled",
+        "modeling_relation_placement_enabled",
+        "modeling_align_modes_enabled",
+        "modeling_semantic_state_enabled",
+        "modeling_relative_enforcement_enabled",
+    ):
+        monkeypatch.setattr(planner_mod.settings, flag, value, raising=False)
+
+
+def _single_step_response(tool_name: str = "fusion.add_box") -> dict[str, Any]:
+    return {
+        "software_choice": "fusion",
+        "confidence": 0.7,
+        "rationale": "ok",
+        "assumptions": [],
+        "risks": [],
+        "steps": [
+            {
+                "seq": 1,
+                "title": "Passo",
+                "tool_name": tool_name,
+                "risk_level": "low",
+                "approval_required": False,
+                "input_json": "{}",
+            }
+        ],
+    }
+
+
+def _schema_tool_enum(schema: dict[str, Any]) -> list[str]:
+    return schema["properties"]["steps"]["items"]["properties"]["tool_name"]["enum"]
+
+
+def test_llm_schema_and_prompt_hide_flag_gated_tools_when_flags_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_visibility_flags(monkeypatch, False)
+    gateway = _FakeGateway(response=_single_step_response())
+    create_llm_plan(
+        ModelingPlanCreate(prompt="caixa com tampa"), gateway=gateway, model=_planner_model()
+    )
+
+    assert gateway.received_schema is not None
+    enum = _schema_tool_enum(gateway.received_schema)
+    system = next(msg for msg in gateway.received_messages[-1] if msg["role"] == "system")
+    for tool in _FLAG_GATED_TOOLS:
+        assert tool not in enum, f"{tool} vazou no enum com a flag OFF"
+        assert tool not in system["content"], f"{tool} vazou no system prompt com a flag OFF"
+    # O resto do toolset segue visível (zero regressão fora do quarteto).
+    assert set(enum) == set(PLANNER_TOOLSET) - set(_FLAG_GATED_TOOLS)
+
+
+def test_llm_schema_and_prompt_show_flag_gated_tools_when_flags_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_visibility_flags(monkeypatch, True)
+    gateway = _FakeGateway(response=_single_step_response())
+    create_llm_plan(
+        ModelingPlanCreate(prompt="caixa com tampa"), gateway=gateway, model=_planner_model()
+    )
+
+    assert gateway.received_schema is not None
+    enum = _schema_tool_enum(gateway.received_schema)
+    system = next(msg for msg in gateway.received_messages[-1] if msg["role"] == "system")
+    assert set(enum) == set(PLANNER_TOOLSET)  # flags ON ⇒ superset estático
+    for tool in _FLAG_GATED_TOOLS:
+        assert tool in enum
+        # render_tool_schemas lista cada tool como "- fusion.<nome>: ...".
+        assert tool in system["content"]
+
+
+def test_create_llm_plan_rejects_flag_gated_tool_when_flag_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defesa-em-profundidade: mesmo que o provider ignore o enum, o passo com
+    tool flag-gated oculta é rejeitado na volta (cai no fallback heurístico)."""
+
+    _set_visibility_flags(monkeypatch, False)
+    gateway = _FakeGateway(response=_single_step_response("fusion.place_body"))
+    with pytest.raises(ValueError, match="fusion.place_body"):
+        create_llm_plan(
+            ModelingPlanCreate(prompt="encoste a tampa"), gateway=gateway, model=_planner_model()
+        )
+
+    # Com a flag ON o MESMO payload volta a ser aceito.
+    _set_visibility_flags(monkeypatch, True)
+    plan = create_llm_plan(
+        ModelingPlanCreate(prompt="encoste a tampa"), gateway=gateway, model=_planner_model()
+    )
+    assert plan.steps[0].tool_name == "fusion.place_body"
+
+
+def test_corrector_schema_and_validation_follow_runtime_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """O corretor de passo (Fase 2) usa o MESMO toolset runtime: com a flag OFF
+    o enum não oferece a tool flag-gated e uma 'correção' que a introduza é
+    rejeitada (o loop cai em 'sem correção' em vez de re-falhar no adapter)."""
+
+    from app.core.contracts import ModelingPlanStep
+    from app.modeling.planner import correct_step
+
+    step = ModelingPlanStep(
+        seq=1,
+        title="Mover tampa",
+        software=ModelingSoftware.fusion,
+        tool_name="fusion.move_body",
+        input_json={"body": "Tampa", "translation_mm": [0, 0, 5]},
+    )
+    output = {"status": "error", "error": "colisão"}
+
+    _set_visibility_flags(monkeypatch, False)
+    gateway = _FakeGateway(response={"tool_name": "fusion.place_body", "input_json": "{}"})
+    with pytest.raises(ValueError, match="fusion.place_body"):
+        correct_step(step, output, 1, gateway=gateway, model=_planner_model())
+    assert gateway.received_schema is not None
+    assert "fusion.place_body" not in gateway.received_schema["properties"]["tool_name"]["enum"]
+
+    _set_visibility_flags(monkeypatch, True)
+    corrected = correct_step(step, output, 1, gateway=gateway, model=_planner_model())
+    assert corrected.tool_name == "fusion.place_body"
+    assert "fusion.place_body" in gateway.received_schema["properties"]["tool_name"]["enum"]
+
+
 def test_create_llm_plan_rejects_tool_outside_allowlist() -> None:
     payload = ModelingPlanCreate(prompt="qualquer coisa")
     response = {

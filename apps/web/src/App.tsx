@@ -32,6 +32,7 @@ import {
 } from "./features/agents/agent-domain";
 import {
   initialAssistantStatus,
+  modelingStageForPlanStatus,
   normalizeRequiredChatTitle,
   localAssistantMessage,
   messageMetadata,
@@ -123,7 +124,6 @@ function App() {
     selectedKnowledgeProjectId,
     selectedKnowledgeFolderId,
     chatProjectId,
-    chatProjectScopeMode,
     reasoningOverride,
     deepResearch,
     deepResearchMaxToolCalls,
@@ -140,7 +140,6 @@ function App() {
     setSelectedKnowledgeProjectId,
     setSelectedKnowledgeFolderId,
     setChatProjectId,
-    setChatProjectScopeMode,
     setReasoningOverride,
     setDeepResearch,
     setDeepResearchMaxToolCalls,
@@ -162,7 +161,6 @@ function App() {
       selectedKnowledgeProjectId: state.selectedKnowledgeProjectId,
       selectedKnowledgeFolderId: state.selectedKnowledgeFolderId,
       chatProjectId: state.chatProjectId,
-      chatProjectScopeMode: state.chatProjectScopeMode,
       reasoningOverride: state.reasoningOverride,
       deepResearch: state.deepResearch,
       deepResearchMaxToolCalls: state.deepResearchMaxToolCalls,
@@ -179,7 +177,6 @@ function App() {
       setSelectedKnowledgeProjectId: state.setSelectedKnowledgeProjectId,
       setSelectedKnowledgeFolderId: state.setSelectedKnowledgeFolderId,
       setChatProjectId: state.setChatProjectId,
-      setChatProjectScopeMode: state.setChatProjectScopeMode,
       setReasoningOverride: state.setReasoningOverride,
       setDeepResearch: state.setDeepResearch,
       setDeepResearchMaxToolCalls: state.setDeepResearchMaxToolCalls,
@@ -441,8 +438,7 @@ function App() {
     setSupportAgentIds,
     setSelectedKnowledgeProjectId,
     setSelectedKnowledgeFolderId,
-    setChatProjectId,
-    setChatProjectScopeMode
+    setChatProjectId
   });
 
   useEffect(() => {
@@ -587,15 +583,10 @@ function App() {
     async (planId: string) => {
       try {
         const plan = await modeling3dApi.getPlan(planId);
-        const stage =
-          plan.status === "completed"
-            ? "editing"
-            : plan.status === "failed"
-              ? "failed"
-              : plan.status === "rejected"
-                ? "discovery"
-                : "planning";
-        applyPlanToSession(plan, stage);
+        // Mesmo mapeamento do handler SSE `modeling_plan`: um 409 com plano
+        // `running`/`approved` (segunda aba, card stale) NÃO pode regredir a
+        // UI para a etapa de aprovação durante a execução.
+        applyPlanToSession(plan, modelingStageForPlanStatus(plan.status));
       } catch {
         // Backend indisponível: mantém o card como está (o erro da ação já
         // aparece na superfície do hook).
@@ -928,10 +919,7 @@ function App() {
 
   useChatScopeSync({
     activeSessionProjectId: activeSession?.project_id ?? null,
-    chatProjectId,
-    chatProjectScopeMode,
-    setChatProjectId,
-    setChatProjectScopeMode
+    setChatProjectId
   });
 
   useKnowledgeScopeSync({
@@ -1352,14 +1340,8 @@ function App() {
                   modeling_software_preference: plan.software_choice,
                   // No fluxo P1 o plano chega em `waiting_approval` (gate de
                   // aprovação): o chat está PLANEJANDO, não executando.
-                  modeling_stage:
-                    plan.status === "completed"
-                      ? "editing"
-                      : plan.status === "failed"
-                        ? "failed"
-                        : plan.status === "waiting_approval" || plan.status === "draft"
-                          ? "planning"
-                          : "executing",
+                  // Mapeamento compartilhado com o reconcile pós-409.
+                  modeling_stage: modelingStageForPlanStatus(plan.status),
                   modeling_plan_id: plan.id,
                   messages
                 };
@@ -2055,7 +2037,6 @@ function App() {
       );
       setActiveSessionId(created.id);
       setChatProjectId(projectId);
-      setChatProjectScopeMode("project_only");
       setChatContextProjectIds([projectId]);
       setChatContextDocumentIds([]);
       const project = projects.find((item) => item.id === projectId);
@@ -2132,7 +2113,6 @@ function App() {
     setAttachedDocumentIds([]);
     setSupportAgentIds([]);
     setChatProjectId(generalProjectId);
-    setChatProjectScopeMode("project_only");
     setChatContextProjectIds([generalProjectId]);
     setChatContextDocumentIds([]);
     setChatContextKnowledgeBaseIds(generalProject?.context?.knowledge_base_ids ?? []);

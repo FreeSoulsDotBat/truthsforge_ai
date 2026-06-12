@@ -514,15 +514,72 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
             return ("+" if value > 0 else "-") + axis
 
 
+        # Razao face.area / area-delimitada-pelo-loop-externo abaixo da qual uma
+        # face com >1 loop e tratada como ARO de abertura. Calibracao: o aro de
+        # uma caixa shellada (parede 2mm em 60x40) tem razao ~0.16; uma placa
+        # cheia com furo de parafuso tem razao >0.9. 0.5 deixa margem dos dois
+        # lados, inclusive p/ o bbox superestimar a area externa em faces
+        # inclinadas (fator < ~1.9 nao inverte o veredito).
+        OPEN_BOUNDARY_AREA_RATIO = 0.5
+
+
+        def _outer_loop_hull_area(face):
+            # Area aproximada delimitada pelo loop EXTERNO da face: produto das
+            # duas maiores dimensoes do bounding box do loop (exata p/ faces
+            # alinhadas aos eixos; superestima em faces inclinadas). None quando
+            # a medida nao esta disponivel — o caller entao NAO marca.
+            outer = None
+            for _li in range(face.loops.count):
+                lp = face.loops.item(_li)
+                try:
+                    if lp.isOuter:
+                        outer = lp
+                        break
+                except Exception:
+                    continue
+            if outer is None:
+                return None
+            lo = None
+            hi = None
+            try:
+                bb = outer.boundingBox
+                lo = [bb.minPoint.x, bb.minPoint.y, bb.minPoint.z]
+                hi = [bb.maxPoint.x, bb.maxPoint.y, bb.maxPoint.z]
+            except Exception:
+                # Fallback: uniao dos bboxes das arestas do loop externo.
+                try:
+                    for _ei in range(outer.edges.count):
+                        ebb = outer.edges.item(_ei).boundingBox
+                        pmin, pmax = ebb.minPoint, ebb.maxPoint
+                        if lo is None:
+                            lo = [pmin.x, pmin.y, pmin.z]
+                            hi = [pmax.x, pmax.y, pmax.z]
+                        else:
+                            lo = [min(lo[0], pmin.x), min(lo[1], pmin.y), min(lo[2], pmin.z)]
+                            hi = [max(hi[0], pmax.x), max(hi[1], pmax.y), max(hi[2], pmax.z)]
+                except Exception:
+                    return None
+            if lo is None or hi is None:
+                return None
+            dims = sorted([hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]], reverse=True)
+            area = dims[0] * dims[1]
+            return area if area > 0 else None
+
+
         def _face_is_open_boundary(face):
             # F9 Pilar 2: a face esta na borda de uma ABERTURA? Dois sinais do B-Rep:
             # (1) SURFACE body / casca aberta: a face tem uma aresta OPEN (pertence a
             #     1 so face) — a borda padrao de superficie aberta.
             # (2) SOLIDO OCADO (shell, ex.: caixa com topo removido): o solido e
             #     manifold (toda aresta com 2 faces), entao a abertura nao e aresta
-            #     solta — e o BURACO na face do topo/labio: um quadro com loop
-            #     interno. face.loops.count > 1 (1 loop externo + o loop da abertura).
-            #     Solido cheio: toda face tem 1 loop -> nao marca (sem falso-positivo).
+            #     solta — e o ARO na face do topo/labio: um quadro com loop interno.
+            #     PREMISSA CORRIGIDA: loops.count > 1 sozinho NAO basta — uma placa
+            #     SOLIDA com furo passante (parafuso) tambem tem 2 loops e nao e
+            #     abertura. O que separa os casos e a PROPORCAO: o aro de shell e um
+            #     quadro FINO (face.area pequena vs. area delimitada pelo loop
+            #     externo), a placa com furo pequeno tem face.area ~= area externa.
+            #     So marca quando a razao fica abaixo de OPEN_BOUNDARY_AREA_RATIO.
+            #     Em duvida (medida indisponivel) NAO marca — sem falso-positivo.
             try:
                 for _i in range(face.edges.count):
                     try:
@@ -534,7 +591,10 @@ def build_autodesk_fusion_script(tool_name: str, arguments: dict[str, Any]) -> s
                 pass
             try:
                 if face.loops.count > 1:
-                    return True
+                    hull_area = _outer_loop_hull_area(face)
+                    if hull_area is None:
+                        return False
+                    return (face.area / hull_area) < OPEN_BOUNDARY_AREA_RATIO
             except Exception:
                 pass
             return False

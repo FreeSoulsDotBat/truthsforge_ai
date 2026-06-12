@@ -23,8 +23,6 @@ import type {
 } from "../../types/api";
 import type { AppDataSnapshot } from "../queries/app-data";
 
-type ChatProjectScopeMode = "project_only" | "project_plus_global" | "global_only";
-
 type AppDataBootstrapConfig = {
   /** The fetched snapshot (`appDataQuery.data`), or `undefined` while loading. */
   snapshot: AppDataSnapshot | undefined;
@@ -57,7 +55,6 @@ type AppDataBootstrapConfig = {
   setSelectedKnowledgeProjectId: Dispatch<SetStateAction<string | null>>;
   setSelectedKnowledgeFolderId: Dispatch<SetStateAction<string | null>>;
   setChatProjectId: Dispatch<SetStateAction<string | null>>;
-  setChatProjectScopeMode: Dispatch<SetStateAction<ChatProjectScopeMode>>;
 };
 
 /**
@@ -100,8 +97,7 @@ export function useAppDataBootstrap({
   setSupportAgentIds,
   setSelectedKnowledgeProjectId,
   setSelectedKnowledgeFolderId,
-  setChatProjectId,
-  setChatProjectScopeMode
+  setChatProjectId
 }: AppDataBootstrapConfig): void {
   const [syncedSnapshot, setSyncedSnapshot] = useState<AppDataSnapshot | null>(null);
   if (snapshot && snapshot !== syncedSnapshot) {
@@ -166,10 +162,6 @@ export function useAppDataBootstrap({
         current && folderList.some((folder) => folder.id === current) ? current : null
       );
       setChatProjectId(resolvedChatProjectId);
-      setChatProjectScopeMode((current) => {
-        if (!resolvedChatProjectId) return "global_only";
-        return current === "project_only" || current === "project_plus_global" ? current : "project_only";
-      });
     });
   }, [
     activeSessionId,
@@ -178,7 +170,6 @@ export function useAppDataBootstrap({
     setActiveAgentId,
     setActiveSessionId,
     setChatProjectId,
-    setChatProjectScopeMode,
     setSelectedKnowledgeFolderId,
     setSelectedKnowledgeProjectId,
     setSupportAgentIds

@@ -69,6 +69,13 @@ class Settings(BaseModel):
             "postgresql://forge:forge_dev_password@127.0.0.1:5432/truths_forge_ai",
         )
     )
+    # Teto do pool de conexões do Postgres (storage-002). Precisa acomodar
+    # checkouts ANINHADOS na mesma thread (um método segura uma conexão e
+    # chama outro método que faz novo checkout) — o store aplica piso 2 para
+    # nunca deadlockar; o default 10 cobre com folga.
+    postgres_pool_max_size: int = Field(
+        default_factory=lambda: _env_int("TRUTHS_FORGE_POSTGRES_POOL_MAX_SIZE", 10)
+    )
     qdrant_url: str = Field(
         default_factory=lambda: os.getenv("TRUTHS_FORGE_QDRANT_URL", "http://127.0.0.1:6333")
     )
@@ -108,6 +115,12 @@ class Settings(BaseModel):
     )
     monthly_budget_brl: float = Field(
         default_factory=lambda: _env_float("TRUTHS_FORGE_MONTHLY_BUDGET_BRL", 200)
+    )
+    # Teto de polls do Deep Research (5s por poll; 360 ≈ 30 min). O operador
+    # pode encurtar via env para não segurar a request indefinidamente em
+    # aba abandonada. O provider aplica piso 1.
+    deep_research_max_polls: int = Field(
+        default_factory=lambda: _env_int("TRUTHS_FORGE_DEEP_RESEARCH_MAX_POLLS", 360)
     )
     max_import_bytes: int = Field(
         default_factory=lambda: _env_int("TRUTHS_FORGE_MAX_IMPORT_BYTES", 5 * 1024 * 1024 * 1024)

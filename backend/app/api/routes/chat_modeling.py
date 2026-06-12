@@ -13,6 +13,7 @@ edição (P2/P3), modo fluido (P3) e o plano sempre PARA em ``waiting_approval``
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 
 from fastapi.responses import StreamingResponse
@@ -35,9 +36,52 @@ from app.core.contracts import (
 )
 from app.cost_governor.service import estimate_tokens
 from app.modeling.chat_orchestrator import get_modeling_orchestrator
+from app.modeling.chat_state import InvalidModelingStageTransition
+from app.modeling.fusion_adapter import FusionBridgeError
 from app.modeling.observability import current_trace_id, get_tracer
 from app.modeling.planner_service import build_attachments_context
-from app.modeling.service import get_modeling_service
+from app.modeling.service import (
+    ModelingInvalidEditTool,
+    ModelingPlanNotApprovable,
+    ModelingPlanNotEditable,
+    ModelingPlanNotExecutable,
+    ModelingRollbackUnavailable,
+    get_modeling_service,
+)
+from app.modeling.spatial_ref import SpatialRefError
+
+logger = logging.getLogger(__name__)
+
+# Classes de domínio cujas mensagens são INTENCIONAIS (PT-BR, escritas para o
+# usuário) e sabidamente livres de detalhe de infraestrutura. Qualquer outra
+# exceção (psycopg com DSN, SQL, stack de SDK...) NÃO pode virar mensagem de
+# chat nem ser persistida em metadata — vira texto genérico + nome do tipo,
+# com o traceback completo indo só para o log (ver ``_safe_error_detail``).
+_SAFE_MODELING_ERROR_TYPES: tuple[type[Exception], ...] = (
+    FusionBridgeError,
+    InvalidModelingStageTransition,
+    ModelingInvalidEditTool,
+    ModelingPlanNotApprovable,
+    ModelingPlanNotEditable,
+    ModelingPlanNotExecutable,
+    ModelingRollbackUnavailable,
+    # Cobre EntityRefError, AmbiguousRefError e RelationUnderivableError.
+    SpatialRefError,
+)
+
+
+def _safe_error_detail(exc: Exception) -> str:
+    """Detalhe de erro seguro para SSE/mensagem/metadata persistida.
+
+    Mensagem real apenas para as classes de domínio allowlistadas acima; o
+    resto é resumido como ``erro interno (<Tipo>)`` para não vazar DSN/SQL/
+    paths internos para o chat. O caller é responsável por logar o traceback
+    completo via ``logger.exception``.
+    """
+
+    if isinstance(exc, _SAFE_MODELING_ERROR_TYPES):
+        return str(exc)
+    return f"erro interno ({type(exc).__name__})"
 
 
 def _promote_modeling_session(
@@ -89,9 +133,11 @@ def _modeling_plan_metadata(plan: ModelingPlan) -> dict[str, object]:
         # ``trace_id`` permite que o frontend chame
         # ``GET /api/3d/plans/{id}/trace`` ou
         # ``GET /api/3d/traces/{trace_id}`` ao abrir o modal de
-        # diagnóstico. Lido do contextvar — None se observability
-        # estiver desligada ou se o handler não passou pelo orchestrator.
-        "trace_id": current_trace_id(),
+        # diagnóstico. Preferimos o valor persistido no plano (RF-024 —
+        # mesma fonte que o contrato REST devolve) com fallback no
+        # contextvar — None se observability estiver desligada ou se o
+        # handler não passou pelo orchestrator.
+        "trace_id": plan.trace_id or current_trace_id(),
         "created_at": plan.created_at.isoformat(),
         "updated_at": plan.updated_at.isoformat(),
         "steps": [
@@ -444,14 +490,20 @@ def build_modeling_3d_stream_response(
         except Exception as exc:  # noqa: BLE001 - stream must surface domain failures
             _modeling_tracer.flush(current_trace_id())
             _modeling_tracer.close_trace()
-            error_message = f"Não consegui processar o pedido 3D: {exc}"
+            # Traceback completo só no log; o chat/SSE/metadata recebem o
+            # detalhe SANITIZADO (mensagem real apenas para erros de domínio).
+            logger.exception(
+                "Falha na fase de descoberta do turno 3D (sessão %s).", session.id
+            )
+            detail = _safe_error_detail(exc)
+            error_message = f"Não consegui processar o pedido 3D: {detail}"
             assistant_message.content = error_message
-            assistant_message.metadata["provider_error"] = str(exc)
+            assistant_message.metadata["provider_error"] = detail
             try:
                 store.add_message(assistant_message)
             except Exception:  # noqa: BLE001 - best-effort persist on failure path
                 pass
-            yield _sse("error", {"message": error_message, "reason": str(exc)})
+            yield _sse("error", {"message": error_message, "reason": detail})
             yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
             return
 
@@ -527,13 +579,29 @@ def build_modeling_3d_stream_response(
         except Exception as exc:  # noqa: BLE001 - stream must surface domain failures
             _modeling_tracer.flush(current_trace_id())
             _modeling_tracer.close_trace()
-            error_message = f"Não consegui criar o plano 3D via MCP: {exc}"
+            # Mesmo tratamento do bloco de descoberta acima: traceback no log,
+            # detalhe sanitizado para o chat/SSE/metadata persistida.
+            logger.exception(
+                "Falha ao propor o plano 3D via orchestrator (sessão %s).", session.id
+            )
+            detail = _safe_error_detail(exc)
+            error_message = f"Não consegui criar o plano 3D via MCP: {detail}"
             assistant_message.content = error_message
-            assistant_message.metadata["provider_error"] = str(exc)
+            assistant_message.metadata["provider_error"] = detail
             store.add_message(assistant_message)
-            yield _sse("error", {"message": error_message, "reason": str(exc)})
+            yield _sse("error", {"message": error_message, "reason": detail})
             yield _sse("done", {"session_id": session.id, "message_id": assistant_message.id})
             return
+
+        # RF-024: persiste o trace_id da PROPOSTA no plano (mesma fonte que o
+        # dump SSE abaixo usa — o contextvar bindado em start_trace). Sem isto
+        # o contrato REST (GET/POST /api/3d/plans...) voltava sem trace e o
+        # modal de diagnóstico perdia o trace na primeira re-busca do card.
+        proposal_trace_id = current_trace_id()
+        if proposal_trace_id and plan.trace_id != proposal_trace_id:
+            plan = plan.model_copy(update={"trace_id": proposal_trace_id})
+            if hasattr(store, "upsert_modeling_plan"):
+                store.upsert_modeling_plan(plan)
 
         plan_metadata = _modeling_plan_metadata(plan)
         assistant_message.content = _modeling_plan_chat_summary(plan)

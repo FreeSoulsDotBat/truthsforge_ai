@@ -295,7 +295,26 @@ class ModelingExecutorService:
         next_steps: list[ModelingPlanStep] = []
 
         for step in plan.steps:
-            if step.error:
+            if step.status == ModelingStepStatus.completed:
+                # Retry idempotente: passo já concluído numa execução anterior NÃO
+                # re-executa — re-rodar add_box/extrude recriaria corpos no design
+                # ativo (geometria duplicada). Preserva resultado/proveniência
+                # originais e fica fora de executed/blocked (sem duplicar
+                # histórico nem eventos).
+                next_steps.append(step)
+                self._tracer.record(
+                    "executor.step_skipped",
+                    source=ModelingTraceSource.backend,
+                    level=ModelingTraceLevel.info,
+                    message=f"Step {step.seq} já concluído — pulado (retry idempotente)",
+                    payload={"step_id": step.id, "tool_name": step.tool_name},
+                    plan_id=plan.id,
+                )
+                continue
+            if step.error and step.status != ModelingStepStatus.failed:
+                # Bloqueio ESTRUTURAL (policy/blocklist/rejeição), não desfecho de
+                # execução: continua bloqueado. Passos ``failed`` passam adiante —
+                # são exatamente o alvo do retry explícito do card.
                 blocked_step_ids.append(step.id)
                 next_steps.append(step)
                 self._tracer.record(
@@ -324,7 +343,18 @@ class ModelingExecutorService:
                 )
                 continue
 
-            outcome = self._execute_single_step(step, plan=plan)
+            run_step = step
+            if step.status == ModelingStepStatus.failed:
+                # Retry explícito do card (plano ``failed``): o passo que falhou
+                # re-executa do zero com o erro anterior limpo (o desfecho novo
+                # carimba status/output). Passos ``running`` órfãos de queda não
+                # existem hoje (nenhum caminho persiste step como ``running``);
+                # se aparecerem (dado legado), caem no caminho normal e
+                # RE-EXECUTAM — desfecho da execução interrompida é desconhecido
+                # e congelar bloquearia o plano; eventual duplicação é acusada
+                # pelo read-back/auto-crítica (F8).
+                run_step = step.model_copy(update={"error": None, "output_json": {}})
+            outcome = self._execute_single_step(run_step, plan=plan)
             executed_step_ids.append(step.id)
             events.append(outcome.event)
             if outcome.tool_call_id is not None:
@@ -654,7 +684,7 @@ class ModelingExecutorService:
         # Gate pela CATEGORIA intrínseca do concreto — NÃO pelo risk_level herdado
         # do declarativo (esse já foi consumido pelo gate de aprovação no nível do
         # plano; re-checá-lo re-bloquearia um placement já aprovado pelo humano).
-        from app.modeling.tool_registry import is_blocked, is_high_risk
+        from app.modeling.tool_registry import is_blocked, is_destructive, is_high_risk
 
         # Combine-DENTRO (high_risk) só auto-executa quando o passo declarativo FOI
         # aprovado pelo dono no card do plano — apply_modeling_policy marca
@@ -664,7 +694,15 @@ class ModelingExecutorService:
         expansion_approved = (
             original.approval_required and original.status == ModelingStepStatus.approved
         )
-        blocked = [c for c in concrete if is_high_risk(c.tool_name) or is_blocked(c.tool_name)]
+        # Defense-in-depth (constituição): a pré-varredura cobre TAMBÉM os
+        # destrutivos — nenhum resolver atual emite concreto destrutivo, mas se
+        # um vier a emitir (ex.: delete/rollback), ele NÃO pode auto-executar
+        # lavado por um declarativo additive sem aprovação humana.
+        blocked = [
+            c
+            for c in concrete
+            if is_high_risk(c.tool_name) or is_blocked(c.tool_name) or is_destructive(c.tool_name)
+        ]
         if blocked and not expansion_approved:
             return self._spatial_expansion_blocked(original, blocked, plan)
 

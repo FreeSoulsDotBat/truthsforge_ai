@@ -155,15 +155,24 @@ def ensure_plan_approvable(plan: ModelingPlan, decision: ModelingApprovalDecisio
         raise ModelingPlanNotApprovable(plan.id, plan.status)
 
 
-def ensure_plan_executable(plan: ModelingPlan) -> None:
-    """Gate de execução compartilhado por service e rotas (fonte única).
+def ensure_plan_executable(plan: ModelingPlan, *, allow_completed: bool = False) -> None:
+    """Gate de execução compartilhado por service, rotas e orchestrator (fonte única).
 
     Plano ``waiting_approval``/``rejected`` não executa sem aprovação e plano
     ``completed`` não re-executa (anti-replay, C5 da varredura 2026-06-10).
+
+    ``allow_completed=True`` é a exceção do fluxo de CHAT
+    (``ModelingChatOrchestrator.execute_plan``): um retry já em ``editing`` pode
+    re-rodar um plano ``completed`` — no-op idempotente, pois executor e loop
+    agêntico pulam passos já ``completed`` (nada re-cria geometria). O caminho
+    do card mantém o default estrito (``completed`` → 409).
     """
 
-    if plan.status not in EXECUTABLE_PLAN_STATUSES:
-        raise ModelingPlanNotExecutable(plan.id, plan.status)
+    if plan.status in EXECUTABLE_PLAN_STATUSES:
+        return
+    if allow_completed and plan.status is ModelingPlanStatus.completed:
+        return
+    raise ModelingPlanNotExecutable(plan.id, plan.status)
 
 
 class ModelingRollbackUnavailable(Exception):

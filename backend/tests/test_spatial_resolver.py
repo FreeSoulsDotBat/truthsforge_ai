@@ -831,11 +831,17 @@ def test_compute_delta_coplanar_moves_only_normal_axis() -> None:
     assert _compute_place_delta("coplanar", [10, 5, 21.5], [30, 20, 20], 2) == [0.0, 0.0, -1.5]
 
 
-def test_compute_delta_gap_opens_on_anchor_side() -> None:
-    # anchor ACIMA do alvo → a folga abre p/ cima (sinal medido, não fixo).
-    assert _compute_place_delta("gap", [30, 20, 21.5], [30, 20, 20], 2, gap_mm=2) == [0.0, 0.0, 0.5]
-    # anchor ABAIXO → a folga abre p/ baixo (anchor já está 2 mm abaixo → fica).
-    assert _compute_place_delta("gap", [30, 20, 18], [30, 20, 20], 2, gap_mm=2) == [0.0, 0.0, 0.0]
+def test_compute_delta_gap_without_normals_is_typed_error() -> None:
+    """ANTES este teste validava o fallback POSICIONAL (lado da folga pela posição
+    pré-move) — o exato vetor do bug coberto por
+    ``test_compute_delta_gap_follows_target_normal_not_position``. O chute foi
+    removido: sem NENHUMA normal cardinal medida → erro tipado pedindo
+    query_geometry, NUNCA um lado adivinhado."""
+    for ac in ([30, 20, 21.5], [30, 20, 18]):
+        with pytest.raises(SpatialRefError) as exc:
+            _compute_place_delta("gap", ac, [30, 20, 20], 2, gap_mm=2)
+        assert exc.value.code == ALIGN_GAP_SIDE_UNDETERMINABLE
+        assert "query_geometry" in str(exc.value)
 
 
 def test_compute_delta_gap_follows_target_normal_not_position() -> None:
@@ -980,7 +986,179 @@ def test_place_body_align_honored_only_when_flag_on(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(settings, "modeling_align_modes_enabled", True, raising=False)
     on_steps, _ = expand_placement("fusion.place_body", args, st)
     assert on_steps[0].input_json["translation_mm"] == [0.0, 0.0, -1.5]
-    # Flag OFF: align IGNORADO → center recentraliza (delta_y = 20-60 = -40).
+    # Flag OFF + align explícito ≠ center: erro CLARO citando a flag (ADR-022 D4;
+    # antes virava center silencioso e recentralizava — o mis-place que a
+    # auditoria 2026-06-10 registrou).
     monkeypatch.setattr(settings, "modeling_align_modes_enabled", False, raising=False)
-    off_steps, _ = expand_placement("fusion.place_body", args, st)
+    with pytest.raises(SpatialRefError) as exc:
+        expand_placement("fusion.place_body", args, st)
+    assert "TRUTHS_FORGE_MODELING_ALIGN_MODES_ENABLED" in str(exc.value)
+    # Flag OFF + args SEM align/gap: comportamento histórico intacto (center
+    # recentraliza, delta_y = 20-60 = -40) — zero regressão.
+    plain = {k: v for k, v in args.items() if k != "align"}
+    off_steps, _ = expand_placement("fusion.place_body", plain, st)
     assert off_steps[0].input_json["translation_mm"] == [0.0, -40.0, -1.5]
+
+
+# --------------------------------------------------------------------------- #
+# 5) Correções da revisão 2026-06 (ownership, gap tipado, flag OFF, etc.)      #
+# --------------------------------------------------------------------------- #
+def test_place_body_anchor_must_belong_to_moving_body() -> None:
+    """Caso reproduzido na revisão: anchor E target ambos na 'Caixa' com
+    body='Tampa' → emitia move_body da Tampa com delta medido entre faces da
+    Caixa, sem erro. A âncora TEM de pertencer ao corpo móvel."""
+    with pytest.raises(SpatialRefError) as exc:
+        expand_placement(
+            "fusion.place_body",
+            {"body": "Tampa", "anchor": "@token('CAIXA_TOP')", "target": "@token('CAIXA_BORE')"},
+            _state(),
+        )
+    msg = str(exc.value)
+    assert "anchor" in msg and "Caixa" in msg and "Tampa" in msg
+
+
+def test_place_body_target_must_not_belong_to_moving_body() -> None:
+    # Simétrico: o destino não pode ser face do PRÓPRIO corpo móvel (delta seria
+    # medido contra si mesmo — mover em direção a si não posiciona nada).
+    with pytest.raises(SpatialRefError) as exc:
+        expand_placement(
+            "fusion.place_body",
+            {
+                "body": "Tampa",
+                "anchor": "@token('TAMPA_BOTTOM')",
+                "target": "@token('TAMPA_BOTTOM')",
+            },
+            _state(),
+        )
+    assert "target" in str(exc.value)
+
+
+def test_place_body_gap_ref_resolves_and_invalid_is_typed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """gap_mm como @-ref RESOLVE (mede) e valor presente-mas-não-numérico vira
+    SpatialRefError tipado — NUNCA 0.0 (flush) silencioso (o _coerce_float
+    antigo engolia o erro)."""
+    monkeypatch.setattr(settings, "modeling_align_modes_enabled", True, raising=False)
+    st = _state()
+    args = {
+        "body": "Tampa",
+        "anchor": "@token('TAMPA_BOTTOM')",
+        "target": "@token('CAIXA_TOP')",
+        "align": "gap",
+        "gap_mm": "@body('Caixa').bbox.max_z - 18",  # mede 20 → gap = 2.0
+    }
+    steps, _ = expand_placement("fusion.place_body", args, st)
+    # alvo topo +z: base = 20 - 21.5 = -1.5; folga 2 p/ FORA (+z) → 0.5.
+    assert steps[0].input_json["translation_mm"] == [0.0, 0.0, 0.5]
+    for bad in ("duas", "@nope", {"x": 1}):
+        with pytest.raises(SpatialRefError):
+            expand_placement("fusion.place_body", {**args, "gap_mm": bad}, st)
+    # gap_mm/gap também entram no whitelist escalar da resolução inline.
+    out, _ = resolve_inline_refs("fusion.add_box", {"gap_mm": "@body('Caixa').bbox.max_z - 18"}, st)
+    assert out["gap_mm"] == 2
+
+
+def test_place_body_align_or_gap_with_flag_off_is_typed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-022 D4 (auditoria 2026-06-10): flag OFF + args pedindo um modo →
+    erro claro citando a flag, nunca center silencioso. Sem align/gap o center
+    histórico segue intacto (coberto em
+    ``test_place_body_align_honored_only_when_flag_on``)."""
+    monkeypatch.setattr(settings, "modeling_align_modes_enabled", False, raising=False)
+    st = _state()
+    base = {"body": "Tampa", "anchor": "@token('TAMPA_BOTTOM')", "target": "@token('CAIXA_TOP')"}
+    for extra in ({"align": "gap"}, {"gap_mm": 2}, {"gap": 2}):
+        with pytest.raises(SpatialRefError) as exc:
+            expand_placement("fusion.place_body", {**base, **extra}, st)
+        assert "TRUTHS_FORGE_MODELING_ALIGN_MODES_ENABLED" in str(exc.value)
+
+
+def test_distribute_along_spacing_without_length_is_typed() -> None:
+    """spacing_mm com aresta SEM length_mm medido era ignorado em silêncio (caía
+    no ramo uniforme) → agora erro tipado pedindo query_geometry."""
+    st = ModelState(
+        bodies=[
+            ModelStateBody(
+                name="Caixa",
+                stable_id="C",
+                edges=[
+                    ModelStateEdge(
+                        token="E_NOLEN",
+                        is_circular=False,
+                        start_point_mm=[0, 0, 0],
+                        end_point_mm=[60, 0, 0],
+                    )
+                ],
+            )
+        ]
+    )
+    with pytest.raises(SpatialRefError) as exc:
+        expand_placement(
+            "fusion.distribute_along",
+            {"edge": "E_NOLEN", "count": 3, "spacing_mm": 10, "prototype": {}},
+            st,
+        )
+    assert "query_geometry" in str(exc.value)
+
+
+def test_distribute_alternate_three_parents_round_robin() -> None:
+    # alternate de 3: i % len(alternate) — o 3º pai RECEBE nós (i % 2 fixo nunca
+    # o usava: nós dele iam p/ os 2 primeiros).
+    steps, _ = expand_placement(
+        "fusion.distribute_along",
+        {
+            "edge": "E_HINGE",
+            "count": 5,
+            "fit": True,
+            "alternate": ["Caixa", "Tampa", "Meio"],
+            "prototype": {"primitive": "cylinder", "name": "Knuckle"},
+        },
+        _state(),
+    )
+    combines = [s for s in steps if s.tool_name == "fusion.combine_bodies"]
+    by_parent = {c.input_json["target_ref"]: c.input_json["tool_refs"] for c in combines}
+    assert by_parent["Caixa"] == ["Knuckle_1", "Knuckle_4"]
+    assert by_parent["Tampa"] == ["Knuckle_2", "Knuckle_5"]
+    assert by_parent["Meio"] == ["Knuckle_3"]
+
+
+def test_distribute_alternate_single_parent_combines_all() -> None:
+    # alternate de 1: antes o guard len>=2 o IGNORAVA → nós soltos sem combine.
+    # Agora é pai FIXO: todos os nós fundem nele.
+    steps, _ = expand_placement(
+        "fusion.distribute_along",
+        {
+            "edge": "E_HINGE",
+            "count": 3,
+            "fit": True,
+            "alternate": ["Caixa"],
+            "prototype": {"primitive": "cylinder", "name": "Knuckle"},
+        },
+        _state(),
+    )
+    combines = [s for s in steps if s.tool_name == "fusion.combine_bodies"]
+    assert len(combines) == 1
+    assert combines[0].input_json["target_ref"] == "Caixa"
+    assert combines[0].input_json["tool_refs"] == ["Knuckle_1", "Knuckle_2", "Knuckle_3"]
+
+
+def test_has_at_sees_nested_dict_ref_and_resolver_blocks_it() -> None:
+    """Paridade _has_at ↔ _has_leftover_ref: @-ref ANINHADA em dict dispara o
+    resolver (needs_resolution=True) e, por estar em campo fora do whitelist,
+    falha TIPADA — antes ia CRUA ao adapter (needs_resolution não a via)."""
+    args = {"prototype": {"diameter_mm": "@body('Caixa').bbox.max_z"}}
+    assert needs_resolution("fusion.add_box", args) is True
+    with pytest.raises(SpatialRefError):
+        resolve_step("fusion.add_box", args, _state())
+
+
+def test_align_axis_rejects_non_cylindrical_token() -> None:
+    """@token cru de face PLANAR: o caminho por predicado já restringe o tipo,
+    mas o token passava direto e falhava TARDE no Fusion → erro tipado cedo."""
+    with pytest.raises(SpatialRefError) as exc:
+        expand_placement(
+            "fusion.align_axis", {"body": "Tampa", "target": "@token('CAIXA_TOP')"}, _state()
+        )
+    assert "CILÍNDRICA" in str(exc.value)

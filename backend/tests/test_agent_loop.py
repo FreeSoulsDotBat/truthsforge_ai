@@ -749,6 +749,77 @@ def test_attach_verdict_notice_noop_when_ok_or_absent() -> None:
     assert _attach_verdict_notice(base, plan).events == ["1. ok"]
 
 
+def test_maybe_evaluate_verdict_is_mute_without_model_state(monkeypatch) -> None:
+    """Fix (review): plan.model_state None = read-back falhou (best-effort). O
+    avaliador NÃO pode acusar "0 corpos / faltou N" falso — fica mudo (sem
+    verdict persistido) e explica no trace (agent_loop.verdict_skipped)."""
+
+    from app.core.config import settings
+    from app.modeling.agent_loop import _maybe_evaluate_verdict
+
+    monkeypatch.setattr(settings, "modeling_self_critique_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "modeling_visual_verification_enabled", False, raising=False)
+
+    events: list[str] = []
+
+    class _SpyTracer(_FakeTracer):
+        def record(self, event_type, *args, **kwargs):
+            events.append(event_type)
+
+    store = _FakeStore()
+    executor = _ScriptedExecutor(store, decide=lambda step: True)
+    executor._tracer = _SpyTracer()
+    plan = _plan(_step(1, "fusion.add_box", name="Caixa"))
+    assert plan.model_state is None  # read-back nunca rodou/falhou
+
+    _maybe_evaluate_verdict(executor, object(), plan)
+
+    assert plan.model_verdict is None  # avaliador mudo (nada de "faltou N" falso)
+    assert "agent_loop.verdict_skipped" in events
+    assert store.plans == {}  # nada persistido
+
+
+def test_self_critique_without_provenance_warns_once_per_plan(monkeypatch) -> None:
+    """Fix (review): self_critique ON sem provenance ON deixa os checks de
+    histórico (op_no_effect) sem cobertura em silêncio. Warning ÚNICO por plano.
+
+    Captura com handler próprio no logger do módulo (o logging JSON da app não
+    propaga ao root — caplog ficaria cego)."""
+
+    import logging as _logging
+    from uuid import uuid4
+
+    from app.core.config import settings
+    from app.modeling.agent_loop import warn_self_critique_without_provenance
+
+    records: list[_logging.LogRecord] = []
+
+    class _ListHandler(_logging.Handler):
+        def emit(self, record: _logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _ListHandler(level=_logging.WARNING)
+    mod_logger = _logging.getLogger("app.modeling.agent_loop")
+    mod_logger.addHandler(handler)
+    try:
+        monkeypatch.setattr(settings, "modeling_provenance_enabled", False, raising=False)
+        plan_id = f"m3d_plan_warn_{uuid4().hex}"
+        warn_self_critique_without_provenance(plan_id)
+        warn_self_critique_without_provenance(plan_id)  # repetição: deduplicada
+
+        hits = [r for r in records if plan_id in r.getMessage()]
+        assert len(hits) == 1
+        assert "sem cobertura" in hits[0].getMessage()
+
+        # Com a proveniência LIGADA não há gap — nenhum warning.
+        records.clear()
+        monkeypatch.setattr(settings, "modeling_provenance_enabled", True, raising=False)
+        warn_self_critique_without_provenance(f"m3d_plan_warn_{uuid4().hex}")
+        assert records == []
+    finally:
+        mod_logger.removeHandler(handler)
+
+
 def _boom_visual(*a, **k):  # pragma: no cover - não deve ser chamado
     raise AssertionError("replan visual destrutivo não deveria rodar aqui")
 
